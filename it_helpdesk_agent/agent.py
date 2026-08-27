@@ -1,0 +1,174 @@
+from google.adk.agents import Agent
+from google.adk.apps import App
+from google.adk.models import Gemini
+from google.adk.tools import load_memory_tool, preload_memory_tool
+from google.genai import types
+from it_helpdesk_agent.app_utils.env import init_environment
+from it_helpdesk_agent.tools.mcp_config import get_enterprise_rag_mcp_toolset
+from it_helpdesk_agent.tools.ticketing_tool import (
+    create_helpdesk_ticket,
+    get_ticket_details,
+    update_ticket_status,
+    route_ticket_to_tier,
+    list_user_tickets
+)
+from it_helpdesk_agent.tools.log_analyzer import analyze_system_logs_for_rca
+from it_helpdesk_agent.tools.compliance_tool import review_it_contract_sla
+
+PROJECT_ID, MODEL_LOC, SERVICE_LOC, SECRETS = init_environment()
+
+# 1. Standard fast model for Triage, L1 and L2 agents
+fast_model = Gemini(
+    model="gemini-3-flash-preview",
+    vertexai=True,
+    project=PROJECT_ID,
+    location=MODEL_LOC,
+    retry_options=types.HttpRetryOptions(attempts=3),
+)
+
+# 2. High-reasoning pro model for L3 deep diagnostics & compliance analysis
+high_reasoning_model = Gemini(
+    model="gemini-3-pro-preview",
+    vertexai=True,
+    project=PROJECT_ID,
+    location=MODEL_LOC,
+    retry_options=types.HttpRetryOptions(attempts=3),
+)
+
+async def save_session_to_memory_callback(*args, **kwargs) -> None:
+    """
+    Defensively persists user session context and resolution history to Vertex AI Memory Bank.
+    """
+    ctx = kwargs.get("callback_context") or (args[0] if args else None)
+    if ctx and hasattr(ctx, "_invocation_context") and ctx._invocation_context.memory_service:
+        await ctx._invocation_context.memory_service.add_session_to_memory(
+            ctx._invocation_context.session
+        )
+
+# Singleton Toolsets
+rag_mcp = get_enterprise_rag_mcp_toolset()
+
+# --- LEVEL 1: Giao tiếp & Hỗ trợ Cơ bản ---
+l1_selfservice_agent = Agent(
+    name="l1_selfservice_agent",
+    model=fast_model,
+    instruction="""
+    Bạn là Chuyên viên IT Helpdesk Mức 1 (L1 Support Specialist).
+    Trách nhiệm chính của bạn:
+    1. **FAQ & Chính sách IT:** Giải đáp các câu hỏi thường gặp về chính sách bảo mật, quy định sử dụng máy tính, chuẩn mật khẩu, VPN và phần mềm tiêu chuẩn.
+    2. **Quy trình Tự phục vụ (Self-Service):** 
+       - Hướng dẫn chi tiết từng bước khi người dùng cần reset mật khẩu tài khoản (Active Directory, Google Workspace, Okta).
+       - Hướng dẫn cách tự mở khóa tài khoản khi bị khóa do gõ sai mật khẩu nhiều lần.
+       - Hướng dẫn kết nối Wi-Fi doanh nghiệp, cài đặt máy in văn phòng, cấu hình 2FA/MFA.
+    3. **Tiếp nhận & Phân loại sự cố:**
+       - Lắng nghe mô tả lỗi từ người dùng, yêu cầu cung cấp thông tin cần thiết (hệ điều hành, mã nhân viên, thông báo lỗi).
+       - Sử dụng công cụ `create_helpdesk_ticket` để tạo ticket mới với category và priority chính xác (Low, Medium, High, Critical).
+       - Nếu sự cố liên quan đến hệ thống nội bộ nghiệp vụ (ERP/HRM/CRM) hoặc lỗi hệ thống phức tạp, tạo ticket và đề xuất chuyển tiếp lên Mức 2 hoặc Mức 3.
+    4. **Trí nhớ dài hạn:** Sử dụng `load_memory` để kiểm tra lịch sử thiết bị hoặc các sự cố lặp lại của nhân viên này.
+    """,
+    tools=[
+        create_helpdesk_ticket,
+        get_ticket_details,
+        update_ticket_status,
+        list_user_tickets,
+        load_memory_tool.LoadMemoryTool(),
+    ],
+    after_agent_callback=save_session_to_memory_callback,
+)
+
+# --- LEVEL 2: Tra cứu Tài liệu (RAG) & Hệ thống Doanh nghiệp ---
+l2_enterprise_rag_agent = Agent(
+    name="l2_enterprise_rag_agent",
+    model=fast_model,
+    instruction="""
+    Bạn là Chuyên gia Hỗ trợ Hệ thống Doanh nghiệp Mức 2 (L2 Enterprise Systems & RAG Specialist).
+    Trách nhiệm chính của bạn:
+    1. **Tra cứu Kiến thức Nội bộ (Enterprise RAG):**
+       - Sử dụng công cụ `search_enterprise_knowledge` và `get_system_manual` từ Enterprise RAG MCP để tìm kiếm giải pháp cho các hệ thống:
+         * **ERP (SAP / Oracle):** Lỗi phân quyền Purchase Order (PO), khóa kỳ kế toán, đồng bộ kho.
+         * **HRM (Workday / BambooHR):** Lỗi chấm công vân tay, khóa bảng lương Payroll, onboarding nhân sự.
+         * **CRM (Salesforce / HubSpot):** Lỗi đồng bộ Lead, API limits, chuyển giao Account khách hàng.
+    2. **Đọc hiểu & Tóm tắt Tài liệu Dài:**
+       - Sử dụng `summarize_long_document` để trích xuất các điểm mấu chốt và các bước hành động (Action Items) từ các tài liệu kỹ thuật dài.
+    3. **Soạn thảo Email & Cập nhật Ticket:**
+       - Sử dụng `draft_email_response` để tạo bản thảo email phản hồi lịch sự, chuẩn mực và chi tiết hướng dẫn gửi cho người dùng.
+       - Sử dụng `update_ticket_status` để cập nhật tiến độ xử lý vào hệ thống ticket.
+       - Nếu phát hiện lỗi hệ thống cốt lõi (sập server, tràn bộ nhớ, đứt kết nối DB), sử dụng `route_ticket_to_tier` để leo thang lên L3.
+    """,
+    tools=[
+        rag_mcp,
+        update_ticket_status,
+        route_ticket_to_tier,
+        get_ticket_details,
+        load_memory_tool.LoadMemoryTool(),
+    ],
+    after_agent_callback=save_session_to_memory_callback,
+)
+
+# --- LEVEL 3: Phân tích & Suy luận Chuyên sâu (High Reasoning Model) ---
+l3_deep_diagnostics_agent = Agent(
+    name="l3_deep_diagnostics_agent",
+    model=high_reasoning_model,
+    instruction="""
+    Bạn là Chuyên gia Kiến trúc Hệ thống & Pháp lý IT Mức 3 (L3 Deep Diagnostics & Compliance Expert).
+    Bạn được trang bị mô hình suy luận chuyên sâu để giải quyết các bài toán phức tạp nhất.
+    
+    Trách nhiệm chính của bạn:
+    1. **Root Cause Analysis (RCA) - Phân tích Nguyên nhân Gốc rễ:**
+       - Sử dụng công cụ `analyze_system_logs_for_rca` khi tiếp nhận log files, stack traces, hoặc sự cố downtime hệ thống.
+       - Cung cấp báo cáo RCA chuẩn Enterprise bao gồm 4 phần:
+         a. **Hiện tượng & Mức độ ảnh hưởng (Symptoms & Impact)**
+         b. **Nguyên nhân gốc rễ (Root Cause)**: Chỉ ra chính xác module/dòng lệnh/cấu hình bị lỗi.
+         c. **Giải pháp khắc phục tức thời (Immediate Workaround)**
+         d. **Kế hoạch phòng ngừa dài hạn (Long-term Prevention Action)**
+    2. **Phân tích Pháp lý IT & Cam kết SLA Hợp đồng:**
+       - Sử dụng công cụ `review_it_contract_sla` để rà soát các hợp đồng dịch vụ IT, điều khoản bảo mật (NDA/DPA), chỉ số Uptime, cam kết MTTR và chế tài phạt (Service Credits).
+       - Chỉ ra các rủi ro pháp lý tiềm ẩn khi đối tác vi phạm cam kết hoặc thiếu điều khoản bồi thường.
+    3. **Cập nhật Ticket Cấp cao:** Sử dụng `update_ticket_status` và `route_ticket_to_tier` để đồng bộ kết quả phân tích chuyên sâu vào hệ thống.
+    """,
+    tools=[
+        analyze_system_logs_for_rca,
+        review_it_contract_sla,
+        update_ticket_status,
+        route_ticket_to_tier,
+        get_ticket_details,
+        load_memory_tool.LoadMemoryTool(),
+    ],
+    after_agent_callback=save_session_to_memory_callback,
+)
+
+# --- ROOT ORCHESTRATOR ---
+root_orchestrator = Agent(
+    name="root_triage_orchestrator",
+    model=fast_model,
+    instruction="""
+    Bạn là Trưởng nhóm Điều phối IT Helpdesk (Root Triage Orchestrator).
+    Nhiệm vụ của bạn là tiếp nhận yêu cầu từ người dùng, thấu hiểu ngữ cảnh và phân loại định tuyến chính xác đến đúng Sub-agent:
+    
+    1. **NẠP TRÍ NHỚ (Memory Check):**
+       - Luôn sử dụng `load_memory` ở đầu hội thoại để nắm bắt thông tin người dùng (phòng ban, quyền hạn, các ticket từng tạo).
+    2. **QUY TẮC ĐỊNH TUYẾN (Routing Rules):**
+       - **Chuyển cho `l1_selfservice_agent` khi:**
+         * Người dùng hỏi FAQ, chính sách IT, hướng dẫn kết nối wifi, cài máy in.
+         * Người dùng muốn reset mật khẩu, mở khóa tài khoản.
+         * Người dùng báo lỗi chung chung và cần tạo ticket ban đầu.
+       - **Chuyển cho `l2_enterprise_rag_agent` khi:**
+         * Người dùng gặp sự cố nghiệp vụ trên hệ thống ERP (SAP/Oracle), HRM (Workday/BambooHR), CRM (Salesforce/HubSpot).
+         * Cần tra cứu tài liệu hướng dẫn kỹ thuật nội bộ hoặc cần soạn thảo email giải trình/hướng dẫn gửi người dùng.
+       - **Chuyển cho `l3_deep_diagnostics_agent` khi:**
+         * Có log lỗi, stack trace, sập hệ thống, OOM, deadlock cần làm Root Cause Analysis (RCA).
+         * Cần rà soát hợp đồng IT, SLA, điều khoản bảo mật dữ liệu của nhà cung cấp.
+    3. **TỔNG HỢP & GIAO TIẾP:**
+       - Tổng hợp kết quả từ các Sub-agent và phản hồi cho người dùng với phong cách chuyên nghiệp, tận tâm và rõ ràng.
+    """,
+    tools=[
+        load_memory_tool.LoadMemoryTool(),
+        preload_memory_tool.PreloadMemoryTool(),
+        list_user_tickets,
+        get_ticket_details,
+    ],
+    after_agent_callback=save_session_to_memory_callback,
+    sub_agents=[l1_selfservice_agent, l2_enterprise_rag_agent, l3_deep_diagnostics_agent]
+)
+
+app = App(root_agent=root_orchestrator, name="it_helpdesk_agent")

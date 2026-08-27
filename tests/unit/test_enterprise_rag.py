@@ -1,0 +1,56 @@
+import pytest
+from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStore
+from it_helpdesk_agent.tools.enterprise_rag_mcp.main import (
+    search_enterprise_knowledge,
+    get_system_manual,
+    summarize_long_document,
+    draft_email_response
+)
+
+def test_knowledge_store_search_erp():
+    store = KnowledgeStore()
+    results = store.search(query="purchase order sap", system="ERP")
+    assert len(results) > 0
+    assert results[0].system == "ERP"
+    assert "M_BEST_EKO" in results[0].snippet or "Purchase Order" in results[0].title
+
+def test_knowledge_store_search_hrm():
+    store = KnowledgeStore()
+    results = store.search(query="chấm công vân tay", system="HRM")
+    assert len(results) > 0
+    assert results[0].system == "HRM"
+    assert "HRM-KB-101" in results[0].article_id
+
+def test_get_system_manual_success_and_not_found():
+    res = get_system_manual("ERP-KB-001")
+    assert res["status"] == "success"
+    assert res["article"]["id"] == "ERP-KB-001"
+
+    res_missing = get_system_manual("INVALID-ID-999")
+    assert res_missing["status"] == "error"
+
+def test_summarize_long_document():
+    long_doc = """
+    QUY TRÌNH XỬ LÝ SỰ CỐ TẠI CHI NHÁNH
+    1. Tiếp nhận phản ánh từ khách hàng và ghi nhận ticket.
+    2. Bước 1: Kiểm tra trạng thái nguồn điện và cáp mạng LAN.
+    3. Bước 2: Khởi động lại Router Cisco và Switch PoE.
+    4. Bước 3: Xác minh kết nối VPN tới Headquarter.
+    5. Đóng ticket sau khi chi nhánh hoạt động bình thường.
+    """
+    summary_res = summarize_long_document(long_doc, system_name="Network Infra")
+    assert summary_res["status"] == "success"
+    assert len(summary_res["summary"]["key_points"]) > 0
+    assert len(summary_res["summary"]["action_items"]) > 0
+
+def test_draft_email_response():
+    email = draft_email_response(
+        user_name="Nguyễn Văn A",
+        ticket_id="TICK-12345",
+        issue_summary="Lỗi phân quyền SAP PO",
+        solution_steps="1. Đã gán Role Z_PROC_PURCHASER.\n2. Vui lòng đăng xuất và đăng nhập lại SAP."
+    )
+    assert email["status"] == "success"
+    assert "TICK-12345" in email["subject"]
+    assert "Nguyễn Văn A" in email["body"]
+    assert "Z_PROC_PURCHASER" in email["body"]
