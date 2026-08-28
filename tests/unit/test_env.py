@@ -13,7 +13,14 @@ def test_fetch_secrets_from_local_environment(monkeypatch):
 
 @patch("google.cloud.secretmanager.SecretManagerServiceClient")
 def test_fetch_secrets_from_secret_manager_fallback(mock_sm_client_cls, monkeypatch):
-    for key in ["HELPDESK_ADMIN_API_KEY", "ERP_INTEGRATION_TOKEN", "HRM_INTEGRATION_TOKEN", "CRM_INTEGRATION_TOKEN"]:
+    for key in [
+        "HELPDESK_ADMIN_API_KEY",
+        "ERP_INTEGRATION_TOKEN",
+        "HRM_INTEGRATION_TOKEN",
+        "CRM_INTEGRATION_TOKEN",
+        "SSO_CLIENT_SECRET",
+        "SSO_JWT_SECRET",
+    ]:
         monkeypatch.delenv(key, raising=False)
 
     mock_client = MagicMock()
@@ -25,8 +32,9 @@ def test_fetch_secrets_from_secret_manager_fallback(mock_sm_client_cls, monkeypa
     mock_client.access_secret_version.return_value = mock_response
 
     secrets = _fetch_secrets("test-project-456")
-    assert mock_client.access_secret_version.call_count == 4
+    assert mock_client.access_secret_version.call_count == 6
     assert secrets["HELPDESK_ADMIN_API_KEY"] == "secret_from_sm"
+    assert secrets["SSO_JWT_SECRET"] == "secret_from_sm"
 
 @patch("vertexai.init")
 @patch("it_helpdesk_agent.app_utils.env._fetch_secrets")

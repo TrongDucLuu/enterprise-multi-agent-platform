@@ -51,8 +51,8 @@ def test_verify_invalid_signature():
         full_name="Attacker",
         department="Unknown"
     )
-    # Sign with a different secret key
-    token = create_sso_token(user, secret_key="wrong-secret-key-123")
+    # Sign with a different secret key (>= 32 bytes)
+    token = create_sso_token(user, secret_key="wrong-secret-key-123456789012345678901234")
 
     with pytest.raises(HTTPException) as exc_info:
         verify_sso_token(token, secret_key=DEFAULT_JWT_SECRET)
