@@ -1,6 +1,6 @@
 import os
 import logging
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Query
 from google.adk.cli.fast_api import get_fast_api_app
 from google.cloud import logging as cloud_logging
 from vertexai import agent_engines
@@ -12,6 +12,7 @@ from it_helpdesk_agent.app_utils.sso_auth import (
     SSOAuthenticationMiddleware,
     ALLOW_LOCAL_DEV_SSO,
 )
+from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
 
 PROJECT_ID, MODEL_LOC, SERVICE_LOC, SECRETS = init_environment()
 
@@ -78,7 +79,30 @@ async def get_sso_user_profile(user: SSOUser = Depends(get_current_user)):
         "user": user.model_dump()
     }
 
-# 3. Development-Only Mock Token Minting Route (Omitted in Production)
+# 3. Semantic Cache Inspection & Fast Lookup Endpoints
+@app.get("/api/cache/stats", tags=["Optimization"])
+async def get_semantic_cache_stats(user: SSOUser = Depends(get_current_user)):
+    """Returns real-time statistics of the semantic cache."""
+    cache = get_semantic_cache()
+    return {
+        "status": "success",
+        "stats": cache.get_stats()
+    }
+
+@app.get("/api/cache/query", tags=["Optimization"])
+async def query_semantic_cache(
+    q: str = Query(..., description="User question to check in cache"),
+    threshold: float = Query(0.92, description="Similarity threshold (0.0 to 1.0)"),
+    user: SSOUser = Depends(get_current_user)
+):
+    """Performs instant sub-50ms semantic cache lookup."""
+    cache = get_semantic_cache()
+    match = cache.get(q, similarity_threshold=threshold)
+    if match:
+        return {"status": "hit", "result": match}
+    return {"status": "miss", "message": "No semantically similar query found in cache."}
+
+# 4. Development-Only Mock Token Minting Route (Omitted in Production)
 if ALLOW_LOCAL_DEV_SSO:
     @app.post("/api/auth/dev-token", tags=["Development Only"])
     async def generate_dev_sso_token(

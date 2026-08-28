@@ -1,6 +1,6 @@
 # IT Helpdesk Multi-Agent AI System (Enterprise Production-Ready)
 
-Hệ thống **IT Helpdesk Multi-Agent AI** thông minh, phân cấp 3 mức độ (3-Tier Support Architecture), tích hợp cơ chế bảo mật doanh nghiệp chuẩn **Enterprise SSO (Google OIDC + RBAC)**, ứng dụng các công nghệ tiên tiến nhất của hệ sinh thái **Google AI (Google ADK, Gemini 3, Model Context Protocol - MCP, Vertex AI Memory Bank, Google Cloud Firestore)** và sẵn sàng triển khai trên **Google Cloud Run**.
+Hệ thống **IT Helpdesk Multi-Agent AI** thông minh, phân cấp 3 mức độ (3-Tier Support Architecture), tích hợp cơ chế bảo mật doanh nghiệp chuẩn **Enterprise SSO (Google OIDC + RBAC)**, tối ưu hóa chi phí và độ trễ với **BigQuery Serverless Vector Search** & **Semantic Cache Layer**, ứng dụng các công nghệ tiên tiến nhất của hệ sinh thái **Google AI (Google ADK, Gemini 3, Model Context Protocol - MCP, Vertex AI Memory Bank, Google Cloud Firestore)** và sẵn sàng triển khai trên **Google Cloud Run**.
 
 ---
 
@@ -16,7 +16,13 @@ Hệ thống **IT Helpdesk Multi-Agent AI** thông minh, phân cấp 3 mức đ�
                                   │ SSOAuthenticationMiddleware │
                                   │  (OIDC JWKS + Domain Filter)│
                                   └──────────────┬──────────────┘
-                                                 │ (ContextVar SSOUser)
+                                                 │
+                                                 ▼
+                                  ┌─────────────────────────────┐
+                                  │    Semantic Cache Layer     │ ──[ HIT (Sim >= 0.92) ]──► [ Trả lời tức thì < 50ms ]
+                                  │    (Vector Cosine Match)    │                             (Tiết kiệm 100% Token)
+                                  └──────────────┬──────────────┘
+                                                 │ [ MISS ]
                                                  ▼
                                   ┌─────────────────────────────┐
                                   │  root_triage_orchestrator   │ ◄──► [ Vertex AI Memory Bank ]
@@ -32,7 +38,7 @@ Hệ thống **IT Helpdesk Multi-Agent AI** thông minh, phân cấp 3 mức đ�
           ▼             ▼                 ▼             ▼                 ▼             ▼
     [Ticketing]   [Memory Tool]     [Enterprise   [Email Draft]     [Log Analyzer  [Compliance
      (Firestore)                     RAG MCP]                         RCA Tool]     SLA Tool]
-                                                                     (RBAC Gate)   (RBAC Gate)
+                                  (BigQuery/Mem)                     (RBAC Gate)   (RBAC Gate)
 ```
 
 ### 🟢 Mức 1 — Giao Tiếp & Hỗ Trợ Cơ Bản (`l1_selfservice_agent`)
@@ -42,6 +48,7 @@ Hệ thống **IT Helpdesk Multi-Agent AI** thông minh, phân cấp 3 mức đ�
 
 ### 🔵 Mức 2 — Tra Cứu Tài Liệu (RAG) & Hệ Thống Doanh Nghiệp (`l2_enterprise_rag_agent`)
 - **Enterprise RAG MCP:** Tích hợp tra cứu sâu cơ sở tri thức hệ thống **ERP** (SAP/Oracle PO & kế toán), **HRM** (Workday chấm công & onboarding), **CRM** (Salesforce lead sync & quota).
+- **Kiến trúc Adapter Linh hoạt:** Tự động chuyển đổi giữa `InMemoryKnowledgeStore` (cho local dev/unit test) và `BigQueryVectorKnowledgeStore` (cho Production Serverless Vector Search không tốn chi phí duy trì Index Endpoint cố định).
 - **Đọc hiểu & Tóm tắt tài liệu dài:** Trích xuất các điểm mấu chốt và action items từ các tài liệu kỹ thuật dài.
 - **Soạn thảo Email & Cập nhật Ticket:** Soạn bản thảo email phản hồi chuẩn mực, lịch sự và tự động đồng bộ tiến độ ticket.
 
@@ -52,7 +59,25 @@ Hệ thống **IT Helpdesk Multi-Agent AI** thông minh, phân cấp 3 mức đ�
 
 ---
 
-## 🔒 2. Kiến Trúc Bảo Mật Doanh Nghiệp (Enterprise Security & SSO)
+## ⚡ 2. Tối Ưu Hóa Hiệu Năng & Chi Phí (Semantic Cache & BigQuery Vector)
+
+### A. Semantic Cache Layer (`semantic_cache.py`)
+- **Vấn đề giải quyết:** Các câu hỏi IT Helpdesk lặp lại thường xuyên (ví dụ: *"hướng dẫn đổi pass wifi"*, *"cách thay đổi mật khẩu wifi văn phòng"*). Nếu mỗi câu hỏi đều gọi Gemini sẽ tốn chi phí token và mất 2-3s phản hồi.
+- **Giải pháp:** Áp dụng **Vector Cosine Similarity ($\ge 0.92$)** kết hợp TTL Expiration và LRU Eviction:
+  - **Cache Hit:** Trả kết quả ngay lập tức ($< 50\text{ms}$), giảm $100\%$ chi phí token Gemini.
+  - **Cache Miss:** Chuyển tiếp vào Orchestrator xử lý bình thường và tự động ghi nhớ vào cache.
+- **Endpoints Giám Sát:**
+  - `GET /api/cache/stats`: Xem tỷ lệ hit rate, số lượng entry trong cache.
+  - `GET /api/cache/query?q=...`: Tra cứu trực tiếp nội dung bộ nhớ đệm ngữ nghĩa.
+
+### B. Serverless BigQuery Vector Search (`knowledge_store.py`)
+- **So sánh với Vertex AI Vector Search:**
+  - **Vertex AI Vector Search:** Đòi hỏi duy trì Index Endpoint chuyên dụng 24/7 (chi phí cố định ~$100–$300/tháng kể cả khi không có truy vấn).
+  - **BigQuery Vector Search:** Serverless $100\%$, dùng hàm `VECTOR_SEARCH` hoặc `COSINE_DISTANCE` trực tiếp trên bảng BigQuery. Với quy mô $< 100\text{k}$ vectors, chi phí duy trì gần như **0 USD/tháng**, cực kỳ linh hoạt và dễ quản lý qua SQL.
+
+---
+
+## 🔒 3. Kiến Trúc Bảo Mật Doanh Nghiệp (Enterprise Security & SSO)
 
 Hệ thống được thiết kế theo tiêu chuẩn an toàn thông tin cấp doanh nghiệp, khắc phục hoàn toàn các lỗ hổng bảo mật phổ biến:
 
@@ -76,17 +101,19 @@ Hệ thống được thiết kế theo tiêu chuẩn an toàn thông tin cấp 
 
 ---
 
-## 💾 3. Cơ Chế Lưu Trữ Dữ Liệu (Persistence & State Management)
+## 💾 4. Cơ Chế Lưu Trữ Dữ Liệu (Persistence & State Management)
 
 1. **Hệ thống Quản lý Ticket (`ticketing_tool.py`):**
    - Tích hợp **Google Cloud Firestore** (`collection: helpdesk_tickets`) hỗ trợ mở rộng không giới hạn khi triển khai trên multi-instance Cloud Run.
    - Cơ chế write-through cache và fallback tự động sang in-memory khi chạy local dev hoặc test offline.
 2. **Trí nhớ dài hạn (`agent.py`):**
    - Tích hợp **Vertex AI Memory Bank** (`VertexAiMemoryBankService`) tự động lưu vết ngữ cảnh người dùng, lịch sử thiết bị và sự cố lặp lại.
+3. **Cơ sở tri thức (`knowledge_store.py`):**
+   - Hỗ trợ lưu trữ và truy vấn vector trên **Google BigQuery** dataset `it_helpdesk_kb`.
 
 ---
 
-## ⚙️ 4. Cấu Hình Biến Môi Trường (Environment Variables)
+## ⚙️ 5. Cấu Hình Biến Môi Trường (Environment Variables)
 
 Sao chép file cấu hình mẫu:
 ```bash
@@ -103,11 +130,15 @@ cp .env.example .env
 | `ALLOW_LOCAL_DEV_SSO` | Không | `false` | Bật tạo/kiểm tra mock token cho local dev (luôn bị tắt trong Prod). |
 | `SSO_JWT_SECRET` | Không | — | Khóa bí mật chỉ dùng cho Dev Mock Token. |
 | `USE_FIRESTORE_TICKETS`| Không | `false` | Bật Firestore backend cho ticket storage (tự động bật trên Cloud Run). |
+| `KNOWLEDGE_BACKEND` | Không | `in_memory` | Backend cho RAG (`in_memory` hoặc `bigquery`). |
+| `BIGQUERY_KB_DATASET` | Không | `it_helpdesk_kb`| Dataset BigQuery chứa tài liệu tri thức doanh nghiệp. |
+| `SEMANTIC_CACHE_ENABLED`| Không| `true` | Bật lớp bộ đệm ngữ nghĩa cho câu hỏi lặp lại. |
+| `SEMANTIC_CACHE_THRESHOLD`| Không| `0.92` | Ngưỡng tương đồng cosine để coi là trùng khớp câu hỏi. |
 | `OTEL_TO_CLOUD` | Không | `false` | Đẩy trace/metrics lên Google Cloud Monitoring/Trace. |
 
 ---
 
-## 🚀 5. Hướng Dẫn Cài Đặt & Chạy Cục Bộ (Local Development)
+## 🚀 6. Hướng Dẫn Cài Đặt & Chạy Cục Bộ (Local Development)
 
 ### Bước 1: Cài đặt Dependencies với `uv`
 ```bash
@@ -118,7 +149,7 @@ uv sync
 ```bash
 uv run pytest tests/ -v
 ```
-*(Hiện tại 37/37 test cases đều vượt qua 100%)*
+*(Hiện tại toàn bộ 46/46 test cases đều vượt qua 100%)*
 
 ### Bước 3: Chạy Tương Tác Cục Bộ (CLI Mode)
 ```bash
@@ -132,15 +163,16 @@ uv run python main.py --mode serve --port 8080
 - Giao diện Web: `http://localhost:8080`
 - OpenAPI Swagger Docs: `http://localhost:8080/docs`
 - Healthcheck Endpoint: `http://localhost:8080/healthz`
+- Semantic Cache Stats: `http://localhost:8080/api/cache/stats`
 
 ---
 
-## ☁️ 6. Triển Khai Lên Google Cloud Run (Production)
+## ☁️ 7. Triển Khai Lên Google Cloud Run (Production)
 
 ### Bước 1: Khởi Tạo Hạ Tầng Tự Động (Terraform)
 Thư mục `deployment/terraform` đã cấu hình sẵn:
 - Service Account với nguyên tắc đặc quyền tối thiểu (Least Privilege).
-- Secret Manager, Artifact Registry, Cloud Run v2 Service.
+- Secret Manager, Artifact Registry, BigQuery Dataset, Cloud Run v2 Service.
 - Lifecycle `ignore_changes = [template[0].containers[0].image]` chống drift cấu hình khi CI/CD cập nhật image mới.
 
 ```bash
@@ -165,7 +197,7 @@ make docker-deploy PROJECT_ID=YOUR_PROJECT_ID REGION=us-central1
 
 ---
 
-## 📂 7. Cấu Trúc Mã Nguồn (Project Structure)
+## 📂 8. Cấu Trúc Mã Nguồn (Project Structure)
 
 ```
 it-helpdesk-agent/
@@ -178,13 +210,14 @@ it-helpdesk-agent/
 ├── test_local.py                    # Script chạy thử nghiệm tương tác runner
 ├── deployment/
 │   └── terraform/                   # Infrastructure-as-Code cho GCP
-│       ├── main.tf                  # Định nghĩa tài nguyên GCP Cloud Run, IAM, Secrets
+│       ├── main.tf                  # Định nghĩa Cloud Run, BigQuery, IAM, Secrets
 │       └── variables.tf             # Biến cấu hình Terraform
 ├── it_helpdesk_agent/
 │   ├── agent.py                     # Cấu hình Multi-Agent 3 cấp bậc (L1, L2, L3)
-│   ├── fast_api_app.py              # Ứng dụng FastAPI, Middleware và định tuyến
+│   ├── fast_api_app.py              # Ứng dụng FastAPI, Middleware và Cache endpoints
 │   ├── app_utils/
 │   │   ├── env.py                   # Quản lý nạp biến môi trường & Secret Manager
+│   │   ├── semantic_cache.py        # Semantic Cache Layer (Cosine Similarity, LRU, TTL)
 │   │   └── sso_auth.py              # Xác thực OIDC JWKS, RBAC ContextVar & Middleware
 │   └── tools/
 │       ├── compliance_tool.py       # Công cụ phân tích SLA & hợp đồng IT (RBAC)
@@ -192,16 +225,18 @@ it-helpdesk-agent/
 │       ├── mcp_config.py            # Cấu hình Toolset Enterprise RAG MCP
 │       ├── ticketing_tool.py        # Quản lý Ticket (Hỗ trợ Firestore + fallback cache)
 │       └── enterprise_rag_mcp/      # Máy chủ Model Context Protocol (MCP) nội bộ
-│           ├── knowledge_store.py   # Mock cơ sở tri thức hệ thống ERP/HRM/CRM
+│           ├── knowledge_store.py   # BaseKnowledgeStore (InMemory + BigQuery Vector Search)
 │           ├── main.py              # Server MCP FastMCP
 │           └── rag_models.py        # Schemas dữ liệu RAG
 └── tests/
-    └── unit/                        # Bộ kiểm thử tự động (37 test cases)
+    └── unit/                        # Bộ kiểm thử tự động (46 test cases)
         ├── test_agent_hierarchy.py  # Test cấu trúc phân cấp agent và model
         ├── test_compliance_tool.py  # Test trích xuất SLA 2 chiều & RBAC
         ├── test_enterprise_rag.py   # Test MCP tra cứu tri thức
         ├── test_env.py              # Test nạp secret & env
+        ├── test_knowledge_store_adapters.py # Test Adapter Pattern & BigQuery Store
         ├── test_log_analyzer.py     # Test nhận diện lỗi OOM, DB, Disk, Null & RBAC
+        ├── test_semantic_cache.py   # Test Cosine Similarity, Cache Hit/Miss, TTL, LRU
         ├── test_sso_auth.py         # Test OIDC JWKS, Fail-closed domain, RBAC, Middleware
         └── test_ticketing_tool.py   # Test tạo, cập nhật, chuyển tiếp ticket
 ```

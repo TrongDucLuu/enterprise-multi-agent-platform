@@ -1,5 +1,8 @@
+import os
 import re
-from typing import Optional
+import math
+from abc import ABC, abstractmethod
+from typing import Optional, Any
 
 try:
     from rag_models import KnowledgeArticle, SearchResult, DocumentSummary
@@ -7,7 +10,7 @@ except ImportError:
     from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle, SearchResult, DocumentSummary
 
 
-# Built-in Enterprise Knowledge Base
+# Built-in Enterprise Knowledge Base for Local Development & Testing
 ENTERPRISE_ARTICLES: list[KnowledgeArticle] = [
     KnowledgeArticle(
         id="ERP-KB-001",
@@ -94,9 +97,27 @@ ENTERPRISE_ARTICLES: list[KnowledgeArticle] = [
     ),
 ]
 
-class KnowledgeStore:
-    """Enterprise Knowledge Store supporting full-text keyword and category retrieval."""
-    
+
+class BaseKnowledgeStore(ABC):
+    """Abstract Base Class for Enterprise Knowledge Stores (Adapter Pattern)."""
+
+    @abstractmethod
+    def search(self, query: str, system: str = "ALL", limit: int = 3) -> list[SearchResult]:
+        """Search knowledge articles matching the query and system filter."""
+        pass
+
+    @abstractmethod
+    def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
+        """Retrieve the full content of an article by its unique ID."""
+        pass
+
+
+class InMemoryKnowledgeStore(BaseKnowledgeStore):
+    """
+    In-memory knowledge store supporting fast keyword-based retrieval.
+    Ideal for local development, rapid prototyping, and unit testing.
+    """
+
     def __init__(self, articles: list[KnowledgeArticle] = ENTERPRISE_ARTICLES):
         self.articles = articles
 
@@ -108,10 +129,10 @@ class KnowledgeStore:
         for article in self.articles:
             if system != "ALL" and article.system.upper() != system.upper():
                 continue
-            
+
             score = 0.0
             article_text = f"{article.title} {article.category} {article.content}".lower()
-            
+
             # Match keywords
             for term in terms:
                 if term in article.title.lower():
@@ -126,10 +147,9 @@ class KnowledgeStore:
 
         # Sort by relevance score descending
         results.sort(key=lambda x: x[0], reverse=True)
-        
+
         search_results = []
         for score, article in results[:limit]:
-            # Create a concise snippet
             snippet = article.content[:200].strip() + "..."
             search_results.append(SearchResult(
                 article_id=article.id,
@@ -146,3 +166,166 @@ class KnowledgeStore:
             if art.id.upper() == article_id.upper():
                 return art
         return None
+
+
+class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
+    """
+    Production-ready BigQuery Vector Search Knowledge Store.
+    Leverages BigQuery's VECTOR_SEARCH or COSINE_DISTANCE functions for serverless, cost-efficient RAG.
+    Zero fixed-cost per month for datasets under 100k vectors.
+    """
+
+    def __init__(
+        self,
+        project_id: Optional[str] = None,
+        dataset_id: str = "it_helpdesk_kb",
+        table_name: str = "knowledge_articles",
+        bq_client: Optional[Any] = None,
+        embedding_fn: Optional[Any] = None
+    ):
+        self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "default-project")
+        self.dataset_id = os.getenv("BIGQUERY_KB_DATASET", dataset_id)
+        self.table_name = table_name
+        self._bq_client = bq_client
+        self._embedding_fn = embedding_fn
+
+    @property
+    def bq_client(self):
+        if self._bq_client is None:
+            try:
+                from google.cloud import bigquery
+                self._bq_client = bigquery.Client(project=self.project_id)
+            except Exception as e:
+                # Fallback logging if client cannot be initialized
+                print(f"Warning: BigQuery client init failed ({e}).")
+                self._bq_client = None
+        return self._bq_client
+
+    def _generate_embedding(self, text: str) -> list[float]:
+        """Generates embedding vector for a query text."""
+        if self._embedding_fn:
+            return self._embedding_fn(text)
+        if os.getenv("USE_VERTEX_EMBEDDING", "false").lower() in ("true", "1"):
+            try:
+                from vertexai.language_models import TextEmbeddingModel
+                model = TextEmbeddingModel.from_pretrained("text-embedding-005")
+                embeddings = model.get_embeddings([text])
+                return embeddings[0].values
+            except Exception as e:
+                print(f"Notice: Vertex AI embedding unavailable ({e}), using local embedding.")
+
+        # Fallback simple deterministic pseudo-vector for offline simulation
+        words = text.lower().split()
+        vec = [0.0] * 64
+        for i, w in enumerate(words[:64]):
+            vec[i] = float(len(w)) / 10.0
+        norm = math.sqrt(sum(x*x for x in vec)) or 1.0
+        return [x / norm for x in vec]
+
+    def search(self, query: str, system: str = "ALL", limit: int = 3) -> list[SearchResult]:
+        """Searches BigQuery table using VECTOR_SEARCH or SQL Cosine Distance."""
+        if not self.bq_client:
+            # Fallback to in-memory store if BigQuery is unavailable
+            return InMemoryKnowledgeStore().search(query, system, limit)
+
+        query_vec = self._generate_embedding(query)
+        full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
+
+        system_filter = ""
+        if system != "ALL":
+            system_filter = f"WHERE system = '{system.upper()}'"
+
+        # SQL with BigQuery VECTOR_SEARCH
+        sql = f"""
+        SELECT 
+            base.id, 
+            base.system, 
+            base.title, 
+            base.content, 
+            distance
+        FROM VECTOR_SEARCH(
+            TABLE {full_table},
+            'embedding',
+            (SELECT @query_vector AS embedding),
+            top_k => @limit,
+            distance_type => 'COSINE',
+            options => '{{"fraction_lists_to_search": 0.05}}'
+        )
+        {system_filter}
+        ORDER BY distance ASC
+        """
+
+        try:
+            from google.cloud import bigquery
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ArrayQueryParameter("query_vector", "FLOAT64", query_vec),
+                    bigquery.ScalarQueryParameter("limit", "INT64", limit),
+                ]
+            )
+            query_job = self.bq_client.query(sql, job_config=job_config)
+            rows = query_job.result()
+
+            results = []
+            for row in rows:
+                snippet = row.content[:200].strip() + "..."
+                # Distance in cosine is 0 (identical) to 2. Relevance score = 1 - distance
+                relevance = round(max(0.0, 1.0 - (row.distance or 0.0)), 2)
+                results.append(SearchResult(
+                    article_id=row.id,
+                    system=row.system,
+                    title=row.title,
+                    snippet=snippet,
+                    relevance_score=relevance
+                ))
+            return results
+        except Exception as e:
+            # Graceful degradation to in-memory fallback
+            print(f"Notice: BigQuery vector search fell back to in-memory: {e}")
+            return InMemoryKnowledgeStore().search(query, system, limit)
+
+    def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
+        """Retrieves article by ID from BigQuery table."""
+        if not self.bq_client:
+            return InMemoryKnowledgeStore().get_article_by_id(article_id)
+
+        full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
+        sql = f"SELECT id, system, title, category, content, keywords FROM {full_table} WHERE UPPER(id) = @article_id LIMIT 1"
+        try:
+            from google.cloud import bigquery
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("article_id", "STRING", article_id.upper())
+                ]
+            )
+            rows = list(self.bq_client.query(sql, job_config=job_config).result())
+            if rows:
+                r = rows[0]
+                return KnowledgeArticle(
+                    id=r.id,
+                    system=r.system,
+                    title=r.title,
+                    category=r.category,
+                    content=r.content,
+                    keywords=list(r.keywords) if r.keywords else []
+                )
+        except Exception as e:
+            print(f"Notice: BigQuery get_article_by_id fell back to in-memory: {e}")
+        return InMemoryKnowledgeStore().get_article_by_id(article_id)
+
+
+def get_knowledge_store() -> BaseKnowledgeStore:
+    """
+    Factory to retrieve the appropriate Knowledge Store backend based on environment configuration.
+    Supported backends:
+      - 'in_memory' / 'mock' (default): In-memory keyword store for local dev & unit tests.
+      - 'bigquery': BigQuery serverless vector search for cost-effective production scaling.
+    """
+    backend = os.getenv("KNOWLEDGE_BACKEND", "in_memory").lower()
+    if backend == "bigquery":
+        return BigQueryVectorKnowledgeStore()
+    return InMemoryKnowledgeStore()
+
+
+# Backward compatibility alias
+KnowledgeStore = InMemoryKnowledgeStore

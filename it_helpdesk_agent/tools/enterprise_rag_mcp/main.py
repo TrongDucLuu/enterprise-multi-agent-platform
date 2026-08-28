@@ -4,10 +4,10 @@ from fastmcp import FastMCP
 from dotenv import load_dotenv
 
 try:
-    from knowledge_store import KnowledgeStore
+    from knowledge_store import get_knowledge_store
     from rag_models import SearchResult, DocumentSummary
 except ImportError:
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStore
+    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import get_knowledge_store
     from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult, DocumentSummary
 
 def _initialize_console_logging(min_level: int = logging.INFO):
@@ -15,7 +15,7 @@ def _initialize_console_logging(min_level: int = logging.INFO):
     handler = logging.StreamHandler(sys.stderr)
     logging.basicConfig(level=min_level, handlers=[handler], force=True)
 
-store = KnowledgeStore()
+store = get_knowledge_store()
 mcp = FastMCP(name="EnterpriseKnowledgeRAG")
 
 @mcp.tool()

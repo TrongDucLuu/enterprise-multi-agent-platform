@@ -51,3 +51,15 @@ variable "allowed_domains" {
   type        = string
   default     = ""
 }
+
+variable "knowledge_backend" {
+  description = "Knowledge base backend ('in_memory', 'bigquery')"
+  type        = string
+  default     = "in_memory"
+}
+
+variable "bigquery_kb_dataset" {
+  description = "BigQuery dataset ID for storing knowledge articles and vector embeddings"
+  type        = string
+  default     = "it_helpdesk_kb"
+}

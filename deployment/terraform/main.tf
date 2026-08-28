@@ -7,7 +7,8 @@ resource "google_project_service" "services" {
     "cloudbuild.googleapis.com",
     "aiplatform.googleapis.com",
     "secretmanager.googleapis.com",
-    "logging.googleapis.com"
+    "logging.googleapis.com",
+    "bigquery.googleapis.com"
   ])
   service            = each.key
   disable_on_destroy = false
@@ -30,10 +31,22 @@ resource "google_service_account" "agent_sa" {
   display_name = "IT Helpdesk Agent Service Account"
 }
 
-# 4. IAM Permissions for Vertex AI, Logging, and Secret Access
+# 4. IAM Permissions for Vertex AI, BigQuery, Logging, and Secret Access
 resource "google_project_iam_member" "vertex_ai_user" {
   project = var.project_id
   role    = "roles/aiplatform.user"
+  member  = "serviceAccount:${google_service_account.agent_sa.email}"
+}
+
+resource "google_project_iam_member" "bigquery_data_editor" {
+  project = var.project_id
+  role    = "roles/bigquery.dataEditor"
+  member  = "serviceAccount:${google_service_account.agent_sa.email}"
+}
+
+resource "google_project_iam_member" "bigquery_job_user" {
+  project = var.project_id
+  role    = "roles/bigquery.jobUser"
   member  = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
@@ -49,7 +62,18 @@ resource "google_project_iam_member" "storage_user" {
   member  = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-# 5. Secret Manager Configuration
+# 5. BigQuery Dataset for Enterprise Knowledge Base (Serverless Vector Storage)
+resource "google_bigquery_dataset" "kb_dataset" {
+  project                    = var.project_id
+  dataset_id                 = var.bigquery_kb_dataset
+  friendly_name              = "IT Helpdesk Enterprise Knowledge Base"
+  description                = "Dataset storing IT Helpdesk articles and vector embeddings for BigQuery VECTOR_SEARCH"
+  location                   = var.region
+  delete_contents_on_destroy = false
+  depends_on                 = [google_project_service.services]
+}
+
+# 6. Secret Manager Configuration
 resource "google_secret_manager_secret" "agent_secrets" {
   project   = var.project_id
   for_each  = toset(keys(var.secrets))
@@ -74,7 +98,7 @@ resource "google_secret_manager_secret_iam_member" "secret_accessor" {
   member    = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-# 6. Cloud Run Service Deployment (Enterprise SSO Hardened)
+# 7. Cloud Run Service Deployment (Enterprise SSO Hardened)
 resource "google_cloud_run_v2_service" "default" {
   project  = var.project_id
   name     = var.service_name
@@ -126,6 +150,18 @@ resource "google_cloud_run_v2_service" "default" {
       env {
         name  = "ALLOWED_DOMAINS"
         value = var.allowed_domains
+      }
+      env {
+        name  = "KNOWLEDGE_BACKEND"
+        value = var.knowledge_backend
+      }
+      env {
+        name  = "BIGQUERY_KB_DATASET"
+        value = var.bigquery_kb_dataset
+      }
+      env {
+        name  = "SEMANTIC_CACHE_ENABLED"
+        value = "true"
       }
       env {
         name  = "OTEL_TO_CLOUD"
