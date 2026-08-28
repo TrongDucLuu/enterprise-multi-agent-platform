@@ -1,5 +1,6 @@
 import re
 from typing import Optional
+from it_helpdesk_agent.app_utils.sso_auth import require_role
 
 def review_it_contract_sla(
     contract_text: str,
@@ -9,18 +10,55 @@ def review_it_contract_sla(
     """
     Scans IT contracts, Vendor Service Level Agreements (SLA), and Data Protection Addendums (DPA).
     Extracts uptime commitments, MTTR guarantees, penalty/credit thresholds, and data security obligations.
+    Protected by RBAC: requires compliance_officer, it_admin, sys_admin, or legal_counsel.
     """
+    # 1. RBAC Authorization Gate
+    is_allowed, error_msg = require_role(["compliance_officer", "it_admin", "sys_admin", "legal_counsel"])
+    if not is_allowed:
+        return {
+            "status": "forbidden",
+            "error": "Access Denied",
+            "message": error_msg,
+            "vendor": vendor_name,
+        }
+
     text_lower = contract_text.lower()
 
-    # Extract SLA Uptime targets
-    uptime_matches = re.findall(r'(\d{2}(?:\.\d{1,4})?)\s*%\s*(?:uptime|availability|sẵn sàng)', text_lower)
-    uptime_commitments = [f"{m}% Uptime" for m in uptime_matches] or ["Không tìm thấy điều khoản uptime cụ thể"]
+    # 2. Extract SLA Uptime targets (handles prefix 'uptime: 99.9%', suffix '99.9% uptime', and inline 'cam kết 99.95% uptime')
+    uptime_matches = re.findall(
+        r'(?:(\d{2}(?:\.\d{1,4})?)\s*%\s*(?:uptime|availability|sẵn sàng)|(?:uptime|availability|mức độ sẵn sàng|tỉ lệ sẵn sàng)[^\n%]{0,40}?(\d{2}(?:\.\d{1,4})?)\s*%)',
+        text_lower
+    )
+    uptime_values = []
+    for m in uptime_matches:
+        val = m[0] or m[1]
+        if val and f"{val}% Uptime" not in uptime_values:
+            uptime_values.append(f"{val}% Uptime")
+    uptime_commitments = uptime_values or ["Không tìm thấy điều khoản uptime cụ thể"]
 
-    # Extract MTTR (Mean Time to Resolve) / Response Time
-    response_time_matches = re.findall(r'(\d+)\s*(?:giờ|hours|phút|minutes)\s*(?:response|phản hồi|giải quyết|resolve)', text_lower)
-    mttr_commitments = [f"{m} đơn vị thời gian" for m in response_time_matches] or ["Chưa rõ cam kết thời gian phản hồi"]
+    # 3. Extract MTTR / Response / Resolution Time
+    # Supports:
+    # - Suffix: "30 phút phản hồi", "2 hours response", "4 giờ giải quyết"
+    # - Prefix / Inline: "Thời gian phản hồi sự cố khẩn cấp (P1) trong vòng 30 phút", "Response Time: 2 hours", "giải quyết trong vòng 4 giờ"
+    mttr_patterns = [
+        # Suffix: (\d+) (unit) (action)
+        r'(\d+)\s*(giờ|hours?|phút|mins?|minutes?|ngày|days?)\s*(?:để|cho)?\s*(?:phản hồi|giải quyết|khắc phục|xử lý|response|resolve|resolution|mttr)',
+        # Prefix / Action: (action) ... (\d+) (unit)
+        r'(?:thời gian\s*(?:phản hồi|giải quyết|khắc phục|xử lý)|response time|resolution time|resolve time|mttr|phản hồi|giải quyết|khắc phục|xử lý|resolve|response)[^\n]{0,60}?(\d+)\s*(giờ|hours?|phút|mins?|minutes?|ngày|days?)',
+    ]
 
-    # Analyze Security & Privacy Terms
+    mttr_commitments = []
+    for pattern in mttr_patterns:
+        for match in re.finditer(pattern, text_lower):
+            num, unit = match.group(1), match.group(2)
+            formatted = f"{num} {unit}"
+            if formatted not in mttr_commitments:
+                mttr_commitments.append(formatted)
+
+    if not mttr_commitments:
+        mttr_commitments = ["Chưa rõ cam kết thời gian phản hồi"]
+
+    # 4. Analyze Security & Privacy Terms
     compliance_flags = {
         "NDA_CONFIDENTIALITY": bool(re.search(r'(bảo mật|confidentiality|non-disclosure|tiết lộ)', text_lower)),
         "DPA_DATA_PROTECTION": bool(re.search(r'(dpa|data protection|quyền riêng tư|gdpr|personal data|dữ liệu cá nhân)', text_lower)),
@@ -29,7 +67,7 @@ def review_it_contract_sla(
         "DATA_BREACH_NOTIFICATION": bool(re.search(r'(thông báo sự cố|breach notification|24h|48h|72h)', text_lower)),
     }
 
-    # Identify Potential Risks
+    # 5. Identify Potential Risks
     risk_assessment = []
     if not compliance_flags["SERVICE_CREDITS_PENALTY"]:
         risk_assessment.append("RỦI RO CAO: Hợp đồng thiếu cơ chế Service Credits hoặc bồi thường tài chính khi nhà cung cấp vi phạm SLA.")

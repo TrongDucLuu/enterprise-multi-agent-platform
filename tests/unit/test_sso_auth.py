@@ -13,6 +13,9 @@ from it_helpdesk_agent.app_utils.sso_auth import (
     verify_dev_mock_token,
     verify_sso_token,
     get_current_user,
+    get_current_sso_user,
+    require_role,
+    current_sso_user,
     SSOAuthenticationMiddleware,
     DEV_JWT_SECRET,
     SSO_CLIENT_ID,
@@ -50,6 +53,16 @@ def test_verify_google_oidc_token_valid():
         assert user.is_authenticated is True
 
 
+def test_verify_google_oidc_token_prod_fails_closed_if_no_domains(monkeypatch):
+    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.IS_PRODUCTION", True)
+    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOWED_DOMAINS", [])
+
+    with pytest.raises(HTTPException) as exc_info:
+        verify_google_oidc_token(token="dummy.token", allowed_domains=[])
+    assert exc_info.value.status_code == 500
+    assert "ALLOWED_DOMAINS" in exc_info.value.detail
+
+
 def test_verify_google_oidc_token_unverified_email():
     mock_payload = {
         "sub": "google-uid-12345",
@@ -61,7 +74,7 @@ def test_verify_google_oidc_token_unverified_email():
 
     with patch("google.oauth2.id_token.verify_oauth2_token", return_value=mock_payload):
         with pytest.raises(HTTPException) as exc_info:
-            verify_google_oidc_token(token="dummy.token")
+            verify_google_oidc_token(token="dummy.token", allowed_domains=["company.com"])
         assert exc_info.value.status_code == 401
         assert "not verified" in exc_info.value.detail.lower()
 
@@ -77,7 +90,7 @@ def test_verify_google_oidc_token_invalid_issuer():
 
     with patch("google.oauth2.id_token.verify_oauth2_token", return_value=mock_payload):
         with pytest.raises(HTTPException) as exc_info:
-            verify_google_oidc_token(token="dummy.token")
+            verify_google_oidc_token(token="dummy.token", allowed_domains=["company.com"])
         assert exc_info.value.status_code == 401
         assert "invalid oidc token issuer" in exc_info.value.detail.lower()
 
@@ -174,6 +187,25 @@ def test_verify_invalid_signature_dev_mock_token(monkeypatch):
     assert "invalid" in exc_info.value.detail.lower()
 
 
+def test_require_role_rbac():
+    user_admin = SSOUser(
+        user_id="admin-1",
+        email="admin@company.com",
+        roles=["employee", "it_admin"]
+    )
+    token_ctx = current_sso_user.set(user_admin)
+    try:
+        allowed, err = require_role(["it_admin"])
+        assert allowed is True
+        assert err is None
+
+        allowed, err = require_role(["finance_director"])
+        assert allowed is False
+        assert "không đủ" in err
+    finally:
+        current_sso_user.reset(token_ctx)
+
+
 def test_sso_authentication_middleware_protects_agent_endpoints(monkeypatch):
     monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
 
@@ -186,7 +218,8 @@ def test_sso_authentication_middleware_protects_agent_endpoints(monkeypatch):
 
     @test_app.post("/run")
     def run_agent():
-        return {"response": "agent output"}
+        user = get_current_sso_user()
+        return {"response": "agent output", "user_email": user.email if user else None}
 
     client = TestClient(test_app)
 
@@ -199,7 +232,7 @@ def test_sso_authentication_middleware_protects_agent_endpoints(monkeypatch):
     assert res_unauth.status_code == 401
     assert "Missing Authorization Bearer" in res_unauth.json()["detail"]
 
-    # 3. Protected agent endpoint succeeds with valid Bearer token
+    # 3. Protected agent endpoint succeeds with valid Bearer token and propagates ContextVar
     mock_payload = {
         "sub": "user-valid",
         "email": "user@company.com",
@@ -213,6 +246,7 @@ def test_sso_authentication_middleware_protects_agent_endpoints(monkeypatch):
         res_auth = client.post("/run", headers={"Authorization": f"Bearer {sample_rs256_token}"})
         assert res_auth.status_code == 200
         assert res_auth.json()["response"] == "agent output"
+        assert res_auth.json()["user_email"] == "user@company.com"
 
 
 @pytest.mark.asyncio

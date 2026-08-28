@@ -1,8 +1,10 @@
+import contextvars
 import datetime
-import os
 import logging
+import os
 from typing import Optional
 import jwt
+import requests
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from google.auth.transport import requests as google_requests
@@ -34,6 +36,10 @@ ALLOWED_DOMAINS = [d.strip().lower() for d in raw_allowed_domains.split(",") if 
 
 DEV_JWT_SECRET = os.getenv("SSO_JWT_SECRET", "dev-only-secret-key-change-in-production-2026-xyz")
 
+# Singleton Request Adapter with Session Connection Pool for fast JWKS lookups
+_SHARED_SESSION = requests.Session()
+_SHARED_GOOGLE_REQUEST_ADAPTER = google_requests.Request(session=_SHARED_SESSION)
+
 
 class SSOUser(BaseModel):
     user_id: str = Field(description="Unique User ID / Sub / Email")
@@ -44,6 +50,52 @@ class SSOUser(BaseModel):
     roles: list[str] = Field(default_factory=lambda: ["employee"], description="Assigned Roles")
     hosted_domain: Optional[str] = Field(default=None, description="Google Workspace Hosted Domain (hd)")
     is_authenticated: bool = True
+
+
+# ContextVar to maintain current authenticated user context across async tool calls
+current_sso_user: contextvars.ContextVar[Optional[SSOUser]] = contextvars.ContextVar(
+    "current_sso_user", default=None
+)
+
+
+def get_current_sso_user() -> Optional[SSOUser]:
+    """Retrieves the authenticated SSO user from the current async context."""
+    user = current_sso_user.get()
+    if user is None and ALLOW_LOCAL_DEV_SSO:
+        # Provide default mock user context in local dev mode
+        return SSOUser(
+            user_id="dev-user-001",
+            email="dev.employee@company.com",
+            email_verified=True,
+            full_name="Local Dev Employee",
+            department="Engineering",
+            roles=["employee", "it_admin"],
+            is_authenticated=True,
+        )
+    return user
+
+
+def require_role(required_roles: list[str]) -> tuple[bool, Optional[str]]:
+    """
+    Checks if the active authenticated SSO user possesses at least one of the required roles.
+    Returns (is_allowed, error_message).
+    """
+    user = get_current_sso_user()
+    if not user:
+        if ALLOW_LOCAL_DEV_SSO:
+            return True, None
+        return False, "Yêu cầu đăng nhập xác thực SSO trước khi sử dụng công cụ này."
+
+    user_roles = [r.lower() for r in user.roles]
+    needed = [r.lower() for r in required_roles]
+    if any(r in user_roles for r in needed):
+        return True, None
+
+    return (
+        False,
+        f"Truy cập bị từ chối: Quyền hạn hiện tại ({user.roles}) không đủ. "
+        f"Công cụ này yêu cầu một trong các vai trò: {required_roles}.",
+    )
 
 
 def create_dev_mock_token(
@@ -94,12 +146,21 @@ def verify_google_oidc_token(
     """
     Validates a Google ID Token (OIDC) against Google's public JWKS certificates.
     Strictly checks RS256 signature, expiry, audience (Client ID), and hosted domain (hd).
+    Fail-closed: In production, ALLOWED_DOMAINS is strictly required.
     """
     expected_client_id = client_id or SSO_CLIENT_ID
     domains_to_check = allowed_domains if allowed_domains is not None else ALLOWED_DOMAINS
 
+    # P1.1: Fail-closed verification in production if ALLOWED_DOMAINS is missing
+    if IS_PRODUCTION and not domains_to_check:
+        logger.error("Enterprise Security Violation: ALLOWED_DOMAINS is not configured in production.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Cấu hình bảo mật lỗi: ALLOWED_DOMAINS bắt buộc phải được thiết lập trong môi trường production.",
+        )
+
     try:
-        req = request_adapter or google_requests.Request()
+        req = request_adapter or _SHARED_GOOGLE_REQUEST_ADAPTER
         payload = id_token.verify_oauth2_token(
             token,
             req,
@@ -303,6 +364,7 @@ class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
     """
     Global Authentication Middleware protecting ALL endpoints (ADK Agent endpoints, APIs, Sessions)
     except explicit public whitelisted paths.
+    Propagates authenticated SSO user into ContextVar for RBAC checks in tools.
     """
     PUBLIC_PATHS = {
         "/healthz",
@@ -328,8 +390,7 @@ class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
         auth_header = request.headers.get("Authorization")
         if not auth_header or not auth_header.startswith("Bearer "):
             if ALLOW_LOCAL_DEV_SSO:
-                logger.debug("Local dev SSO bypass active for unauthenticated request.")
-                request.state.user = SSOUser(
+                dev_user = SSOUser(
                     user_id="dev-user-001",
                     email="dev.employee@company.com",
                     email_verified=True,
@@ -338,7 +399,12 @@ class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
                     roles=["employee", "it_admin"],
                     is_authenticated=True,
                 )
-                return await call_next(request)
+                request.state.user = dev_user
+                token_ctx = current_sso_user.set(dev_user)
+                try:
+                    return await call_next(request)
+                finally:
+                    current_sso_user.reset(token_ctx)
 
             return JSONResponse(
                 status_code=401,
@@ -350,6 +416,11 @@ class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
         try:
             user = verify_sso_token(token)
             request.state.user = user
+            token_ctx = current_sso_user.set(user)
+            try:
+                return await call_next(request)
+            finally:
+                current_sso_user.reset(token_ctx)
         except HTTPException as exc:
             return JSONResponse(
                 status_code=exc.status_code,
@@ -362,5 +433,3 @@ class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
                 content={"detail": f"Authentication failed: {exc}"},
                 headers={"WWW-Authenticate": "Bearer"},
             )
-
-        return await call_next(request)

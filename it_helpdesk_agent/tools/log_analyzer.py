@@ -1,5 +1,6 @@
 import re
 from typing import Optional
+from it_helpdesk_agent.app_utils.sso_auth import require_role
 
 def analyze_system_logs_for_rca(
     raw_logs: str,
@@ -9,7 +10,18 @@ def analyze_system_logs_for_rca(
     """
     Parses application logs, stack traces, and syslog lines to identify root cause indicators.
     Detects critical error patterns, affected components, and recommended mitigation steps.
+    Protected by RBAC: requires it_admin, sys_admin, devops_engineer, or lead_engineer.
     """
+    # 1. RBAC Authorization Gate
+    is_allowed, error_msg = require_role(["it_admin", "sys_admin", "devops_engineer", "lead_engineer"])
+    if not is_allowed:
+        return {
+            "status": "forbidden",
+            "error": "Access Denied",
+            "message": error_msg,
+            "system": system_name,
+        }
+
     lines = raw_logs.strip().split("\n")
     error_lines = []
     fatal_count = 0
@@ -42,7 +54,7 @@ def analyze_system_logs_for_rca(
             if re.search(regex, line, re.IGNORECASE) and pattern_name not in detected_anomalies:
                 detected_anomalies.append(pattern_name)
 
-    # Formulate Root Cause Hypotheses
+    # Formulate Root Cause Hypotheses for all anomaly types
     hypotheses = []
     if "OUT_OF_MEMORY" in detected_anomalies:
         hypotheses.append("Tiến trình bị hạ gục bởi Linux OOM-Killer hoặc tràn Heap memory do rò rỉ bộ nhớ (Memory Leak) hoặc tải đột biến.")
@@ -52,6 +64,10 @@ def analyze_system_logs_for_rca(
         hypotheses.append("Đứt gãy mạng hoặc service downstream phản hồi quá thời gian quy định (Timeout / Network Partition).")
     if "AUTH_SECURITY_FAILURE" in detected_anomalies:
         hypotheses.append("Chứng chỉ SSL/TLS hoặc Token xác thực dịch vụ nội bộ đã hết hạn hoặc secret key bị sai lệch.")
+    if "DISK_IO_FAILURE" in detected_anomalies:
+        hypotheses.append("Phân vùng ổ đĩa bị đầy (Disk Full / No space left) hoặc lỗi phần cứng I/O khiến hệ thống chuyển sang chế độ Read-Only.")
+    if "DATA_CORRUPTION_NULL" in detected_anomalies:
+        hypotheses.append("Lỗi logic ứng dụng do dữ liệu đầu vào bị null/corrupt hoặc payload vi phạm ràng buộc schema/kiểu dữ liệu.")
 
     if not hypotheses:
         hypotheses.append("Cần kiểm tra sâu hơn log tầng kernel hoặc APM traces do lỗi xuất phát từ logic application bất thường.")
