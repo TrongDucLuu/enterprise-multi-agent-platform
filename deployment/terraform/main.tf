@@ -74,7 +74,7 @@ resource "google_secret_manager_secret_iam_member" "secret_accessor" {
   member    = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-# 6. Cloud Run Service Deployment
+# 6. Cloud Run Service Deployment (Enterprise SSO Hardened)
 resource "google_cloud_run_v2_service" "default" {
   project  = var.project_id
   name     = var.service_name
@@ -87,6 +87,14 @@ resource "google_cloud_run_v2_service" "default" {
     containers {
       image = "us-docker.pkg.dev/cloudrun/container/hello"
 
+      env {
+        name  = "ENVIRONMENT"
+        value = var.environment
+      }
+      env {
+        name  = "ALLOW_LOCAL_DEV_SSO"
+        value = "false"
+      }
       env {
         name  = "GOOGLE_CLOUD_PROJECT"
         value = var.project_id
@@ -106,6 +114,22 @@ resource "google_cloud_run_v2_service" "default" {
       env {
         name  = "AI_ASSETS_BUCKET"
         value = var.ai_assets_bucket
+      }
+      env {
+        name  = "SSO_CLIENT_ID"
+        value = var.sso_client_id
+      }
+      env {
+        name  = "SSO_ISSUER"
+        value = var.sso_issuer
+      }
+      env {
+        name  = "ALLOWED_DOMAINS"
+        value = var.allowed_domains
+      }
+      env {
+        name  = "OTEL_TO_CLOUD"
+        value = "true"
       }
 
       resources {
