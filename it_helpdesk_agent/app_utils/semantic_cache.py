@@ -120,7 +120,8 @@ class SemanticCache:
         for entry in self._entries:
             # Multi-tenant user isolation check:
             # An entry can be returned if it is public OR belongs to the requesting user
-            if not entry.is_public and (not user_id or entry.user_id != user_id):
+            can_access = entry.is_public or (user_id is not None and entry.user_id == user_id)
+            if not can_access:
                 continue
 
             sim = cosine_similarity(query_emb, entry.embedding)

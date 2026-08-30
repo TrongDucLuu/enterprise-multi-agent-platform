@@ -230,7 +230,8 @@ def route_ticket_to_tier(
         return err_resp
     
     ticket.assigned_tier = target_tier
-    ticket.status = "Escalated" if target_tier in ["L2_Enterprise_RAG", "L3_Deep_Diagnostics", "Human_Ops"] else ticket.status
+    if target_tier in ["L2_Enterprise_RAG", "L3_Deep_Diagnostics", "Human_Ops"]:
+        ticket.status = "Escalated"
     ticket.updated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
     _persist_ticket_to_storage(ticket)
     

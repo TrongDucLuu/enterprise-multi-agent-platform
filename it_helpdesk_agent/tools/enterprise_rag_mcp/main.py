@@ -11,20 +11,16 @@ except ImportError:
     from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import get_knowledge_store
     from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult, DocumentSummary
 
+# Common administrative and IT support roles authorized across all enterprise domains
+ADMIN_SUPPORT_ROLES = [
+    "it_admin", "sys_admin", "admin", "support_agent", "helpdesk_operator", "lead_engineer"
+]
+
 # Domain-specific RBAC roles for Enterprise RAG systems
 SYSTEM_REQUIRED_ROLES = {
-    "HRM": [
-        "hr_specialist", "hr_manager", "payroll_admin", "hr_operations",
-        "it_admin", "sys_admin", "admin", "support_agent", "helpdesk_operator", "lead_engineer"
-    ],
-    "ERP": [
-        "erp_user", "finance_user", "accountant", "procurement_specialist", "procurement_manager",
-        "it_admin", "sys_admin", "admin", "support_agent", "helpdesk_operator", "lead_engineer"
-    ],
-    "CRM": [
-        "sales_rep", "sales_manager", "marketing", "crm_admin",
-        "it_admin", "sys_admin", "admin", "support_agent", "helpdesk_operator", "lead_engineer"
-    ],
+    "HRM": ["hr_specialist", "hr_manager", "payroll_admin", "hr_operations", *ADMIN_SUPPORT_ROLES],
+    "ERP": ["erp_user", "finance_user", "accountant", "procurement_specialist", "procurement_manager", *ADMIN_SUPPORT_ROLES],
+    "CRM": ["sales_rep", "sales_manager", "marketing", "crm_admin", *ADMIN_SUPPORT_ROLES],
 }
 
 
@@ -80,10 +76,12 @@ def search_enterprise_knowledge(
                 "system": system,
                 "score": 0.0,
             }]
+        results = store.search(query=query, system=system, limit=3)
+        return [r.model_dump() for r in results]
 
     results = store.search(query=query, system=system, limit=5)
     
-    # Security Trimming: filter out systems the caller lacks permissions for
+    # Security Trimming: filter out systems the caller lacks permissions for when system="ALL"
     allowed_results = []
     for r in results:
         allowed, _ = _check_system_access(r.system)
