@@ -23,6 +23,8 @@ class SemanticCacheEntry:
     embedding: list[float]
     response: str
     tier: str = "L1"
+    user_id: Optional[str] = None
+    is_public: bool = True
     created_at: float = field(default_factory=time.time)
     expires_at: float = 0.0
     hit_count: int = 0
@@ -38,6 +40,7 @@ class SemanticCache:
     """
     In-memory / Firestore-backed Semantic Cache for IT Helpdesk questions.
     Caches semantically similar questions using vector cosine similarity to reduce Gemini token costs & latency (<50ms).
+    Supports multi-tenant / user isolation to prevent cross-tenant data leakage.
     """
 
     def __init__(
@@ -91,11 +94,15 @@ class SemanticCache:
         return [x / norm for x in vec]
 
     def get(
-        self, query: str, similarity_threshold: Optional[float] = None
+        self,
+        query: str,
+        user_id: Optional[str] = None,
+        similarity_threshold: Optional[float] = None
     ) -> Optional[dict]:
         """
         Retrieves a cached response if a semantically similar query exists within the similarity threshold.
-        Returns None if cache miss or expired.
+        Enforces user isolation: private cache entries are only visible to the owner.
+        Returns None if cache miss, expired, or access denied.
         """
         if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
             return None
@@ -111,6 +118,11 @@ class SemanticCache:
         highest_sim = -1.0
 
         for entry in self._entries:
+            # Multi-tenant user isolation check:
+            # An entry can be returned if it is public OR belongs to the requesting user
+            if not entry.is_public and (not user_id or entry.user_id != user_id):
+                continue
+
             sim = cosine_similarity(query_emb, entry.embedding)
             if sim > highest_sim:
                 highest_sim = sim
@@ -126,6 +138,7 @@ class SemanticCache:
                 "similarity": round(highest_sim, 4),
                 "tier": best_match.tier,
                 "hits": best_match.hit_count,
+                "is_public": best_match.is_public,
                 "metadata": best_match.metadata,
             }
 
@@ -135,11 +148,13 @@ class SemanticCache:
         self,
         query: str,
         response: str,
+        user_id: Optional[str] = None,
+        is_public: bool = True,
         ttl_seconds: Optional[int] = None,
         tier: str = "L1",
         metadata: Optional[dict] = None,
     ) -> SemanticCacheEntry:
-        """Stores a new query-response pair in the semantic cache."""
+        """Stores a new query-response pair in the semantic cache with user scoping."""
         ttl = ttl_seconds if ttl_seconds is not None else self.default_ttl_seconds
         expires_at = time.time() + ttl if ttl > 0 else 0.0
 
@@ -155,6 +170,8 @@ class SemanticCache:
             embedding=query_emb,
             response=response,
             tier=tier,
+            user_id=user_id,
+            is_public=is_public,
             created_at=time.time(),
             expires_at=expires_at,
             hit_count=0,

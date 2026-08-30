@@ -95,9 +95,9 @@ async def query_semantic_cache(
     threshold: float = Query(0.92, description="Similarity threshold (0.0 to 1.0)"),
     user: SSOUser = Depends(get_current_user)
 ):
-    """Performs instant sub-50ms semantic cache lookup."""
+    """Performs instant sub-50ms semantic cache lookup with user isolation."""
     cache = get_semantic_cache()
-    match = cache.get(q, similarity_threshold=threshold)
+    match = cache.get(q, user_id=user.user_id, similarity_threshold=threshold)
     if match:
         return {"status": "hit", "result": match}
     return {"status": "miss", "message": "No semantically similar query found in cache."}

@@ -81,6 +81,43 @@ def _load_ticket_from_storage(ticket_id: str) -> Optional[HelpdeskTicket]:
     return None
 
 
+def _is_privileged_user(user: Optional[object]) -> bool:
+    if not user or not hasattr(user, "roles"):
+        return False
+    user_roles = {r.lower() for r in getattr(user, "roles", [])}
+    return bool(user_roles & {"it_admin", "sys_admin", "support_agent", "helpdesk_operator", "compliance_officer", "admin"})
+
+
+def _check_ticket_access(ticket_user_id: str) -> tuple[bool, Optional[str]]:
+    """
+    Checks if current authenticated caller is authorized to access ticket belonging to ticket_user_id.
+    Returns (is_allowed, error_message).
+    """
+    try:
+        from it_helpdesk_agent.app_utils.sso_auth import get_current_sso_user, ALLOW_LOCAL_DEV_SSO
+    except ImportError:
+        try:
+            from app_utils.sso_auth import get_current_sso_user, ALLOW_LOCAL_DEV_SSO
+        except ImportError:
+            return True, None
+
+    current_user = get_current_sso_user()
+    if not current_user:
+        if ALLOW_LOCAL_DEV_SSO:
+            return True, None
+        return False, "Yêu cầu đăng nhập xác thực SSO trước khi truy cập ticket."
+
+    # Admins and Support staff can access any ticket
+    if _is_privileged_user(current_user):
+        return True, None
+
+    # Normal employee can ONLY access their own ticket (matching user_id or email)
+    if current_user.user_id == ticket_user_id or current_user.email.lower() == str(ticket_user_id).lower():
+        return True, None
+
+    return False, f"Truy cập bị từ chối: Người dùng '{current_user.email}' không có quyền truy cập ticket của '{ticket_user_id}'."
+
+
 def create_helpdesk_ticket(
     user_id: str,
     title: str,
@@ -93,6 +130,15 @@ def create_helpdesk_ticket(
     Creates a new IT Helpdesk ticket with categorized priority and assigned tier.
     Persists to Firestore when available with local caching.
     """
+    # Enforce current user ID if logged in as standard employee to prevent identity spoofing
+    try:
+        from it_helpdesk_agent.app_utils.sso_auth import get_current_sso_user
+        current_user = get_current_sso_user()
+        if current_user and not _is_privileged_user(current_user):
+            user_id = current_user.user_id
+    except Exception:
+        pass
+
     ticket_id = f"TICK-{str(uuid.uuid4())[:8].upper()}"
     now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
     
@@ -119,10 +165,16 @@ def create_helpdesk_ticket(
 def get_ticket_details(ticket_id: str) -> dict:
     """
     Retrieves full details of a specific Helpdesk ticket from storage.
+    Enforces ownership and RBAC access control.
     """
     ticket = _load_ticket_from_storage(ticket_id)
     if not ticket:
         return {"status": "error", "message": f"Ticket '{ticket_id}' not found."}
+    
+    allowed, err = _check_ticket_access(ticket.user_id)
+    if not allowed:
+        return {"status": "error", "message": err}
+
     return {"status": "success", "ticket": ticket.model_dump()}
 
 
@@ -133,11 +185,16 @@ def update_ticket_status(
 ) -> dict:
     """
     Updates the resolution status and notes for a ticket.
+    Enforces ownership and role-based access control.
     """
     ticket = _load_ticket_from_storage(ticket_id)
     if not ticket:
         return {"status": "error", "message": f"Ticket '{ticket_id}' not found."}
     
+    allowed, err = _check_ticket_access(ticket.user_id)
+    if not allowed:
+        return {"status": "error", "message": err}
+
     ticket.status = status
     if resolution_notes:
         ticket.resolution_notes = resolution_notes
@@ -178,7 +235,12 @@ def route_ticket_to_tier(
 def list_user_tickets(user_id: str) -> dict:
     """
     Lists all tickets associated with a specific user ID.
+    Enforces ownership verification: employees can only list their own tickets.
     """
+    allowed, err = _check_ticket_access(user_id)
+    if not allowed:
+        return {"status": "error", "message": err}
+
     fs = _get_firestore()
     if fs:
         try:
@@ -197,9 +259,10 @@ def list_user_tickets(user_id: str) -> dict:
         except Exception as e:
             logger.warning(f"Firestore query failed, reading local cache: {e}")
 
-    user_tickets = [t.model_dump() for t in _TICKETS_DB.values() if t.user_id == user_id]
+    user_tickets = [t.model_dump() for t in _TICKETS_DB.values() if t.user_id == user_id or (t.user_id and str(t.user_id).lower() == str(user_id).lower())]
     return {
         "status": "success",
         "count": len(user_tickets),
         "tickets": user_tickets
     }
+

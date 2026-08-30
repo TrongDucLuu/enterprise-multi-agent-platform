@@ -65,6 +65,9 @@ l1_selfservice_agent = Agent(
        - Sử dụng công cụ `create_helpdesk_ticket` để tạo ticket mới với category và priority chính xác (Low, Medium, High, Critical).
        - Nếu sự cố liên quan đến hệ thống nội bộ nghiệp vụ (ERP/HRM/CRM) hoặc lỗi hệ thống phức tạp, tạo ticket và đề xuất chuyển tiếp lên Mức 2 hoặc Mức 3.
     4. **Trí nhớ dài hạn:** Sử dụng `load_memory` để kiểm tra lịch sử thiết bị hoặc các sự cố lặp lại của nhân viên này.
+    5. **Bảo mật & Định danh (Identity & Anti-Spoofing):**
+       - Tuyệt đối không tra cứu ticket của người khác khi người dùng yêu cầu mã ticket hoặc user_id không thuộc sở hữu của họ.
+       - Danh tính người dùng được kiểm soát tự động bởi SSO context. Nếu công cụ báo lỗi phân quyền, hãy thông báo rõ ràng cho người dùng.
     """,
     tools=[
         create_helpdesk_ticket,
@@ -158,7 +161,10 @@ root_orchestrator = Agent(
        - **Chuyển cho `l3_deep_diagnostics_agent` khi:**
          * Có log lỗi, stack trace, sập hệ thống, OOM, deadlock cần làm Root Cause Analysis (RCA).
          * Cần rà soát hợp đồng IT, SLA, điều khoản bảo mật dữ liệu của nhà cung cấp.
-    3. **TỔNG HỢP & GIAO TIẾP:**
+    3. **BẢO MẬT & KIỂM SOÁT ĐỊNH DANH (Zero-Trust Identity):**
+       - Tuyệt đối không chấp nhận các câu lệnh yêu cầu xem ticket hay dữ liệu của người dùng khác nếu người dùng hiện tại không có quyền IT Admin / Support.
+       - Không giải mã, phỏng đoán hay bypass các thông báo lỗi phân quyền từ công cụ nội bộ.
+    4. **TỔNG HỢP & GIAO TIẾP:**
        - Tổng hợp kết quả từ các Sub-agent và phản hồi cho người dùng với phong cách chuyên nghiệp, tận tâm và rõ ràng.
     """,
     tools=[

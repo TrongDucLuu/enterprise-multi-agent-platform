@@ -7,6 +7,21 @@ from it_helpdesk_agent.tools.ticketing_tool import (
     list_user_tickets,
     _TICKETS_DB,
 )
+from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
+
+
+@pytest.fixture(autouse=True)
+def default_ticket_admin():
+    """Sets an authorized IT support/admin user in context for general ticket tool tests."""
+    user = SSOUser(
+        user_id="it-admin-01",
+        email="admin@company.com",
+        roles=["employee", "it_admin", "support_agent"],
+    )
+    token = current_sso_user.set(user)
+    yield user
+    current_sso_user.reset(token)
+
 
 def setup_function():
     _TICKETS_DB.clear()

@@ -1,5 +1,6 @@
 import logging
 import sys
+from typing import Literal
 from fastmcp import FastMCP
 from dotenv import load_dotenv
 
@@ -19,7 +20,10 @@ store = get_knowledge_store()
 mcp = FastMCP(name="EnterpriseKnowledgeRAG")
 
 @mcp.tool()
-def search_enterprise_knowledge(query: str, system: str = "ALL") -> list[dict]:
+def search_enterprise_knowledge(
+    query: str,
+    system: Literal["ERP", "HRM", "CRM", "ALL"] = "ALL"
+) -> list[dict]:
     """
     Searches enterprise knowledge base for ERP, HRM, and CRM systems.
     - system: 'ERP', 'HRM', 'CRM', or 'ALL'

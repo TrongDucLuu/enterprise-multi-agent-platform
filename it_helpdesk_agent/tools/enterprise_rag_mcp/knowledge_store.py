@@ -98,6 +98,9 @@ ENTERPRISE_ARTICLES: list[KnowledgeArticle] = [
 ]
 
 
+ALLOWED_SYSTEMS = {"ERP", "HRM", "CRM", "ALL"}
+
+
 class BaseKnowledgeStore(ABC):
     """Abstract Base Class for Enterprise Knowledge Stores (Adapter Pattern)."""
 
@@ -123,11 +126,15 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
 
     def search(self, query: str, system: str = "ALL", limit: int = 3) -> list[SearchResult]:
         """Search knowledge articles by query keywords and system filter."""
+        clean_system = system.upper().strip() if system else "ALL"
+        if clean_system not in ALLOWED_SYSTEMS:
+            clean_system = "ALL"
+
         terms = re.findall(r'\w+', query.lower())
         results: list[tuple[float, KnowledgeArticle]] = []
 
         for article in self.articles:
-            if system != "ALL" and article.system.upper() != system.upper():
+            if clean_system != "ALL" and article.system.upper() != clean_system:
                 continue
 
             score = 0.0
@@ -223,46 +230,51 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
         return [x / norm for x in vec]
 
     def search(self, query: str, system: str = "ALL", limit: int = 3) -> list[SearchResult]:
-        """Searches BigQuery table using VECTOR_SEARCH or SQL Cosine Distance."""
+        """Searches BigQuery table using VECTOR_SEARCH or SQL Cosine Distance with parameterized queries."""
         if not self.bq_client:
             # Fallback to in-memory store if BigQuery is unavailable
             return InMemoryKnowledgeStore().search(query, system, limit)
 
+        clean_system = system.upper().strip() if system else "ALL"
+        if clean_system not in ALLOWED_SYSTEMS:
+            clean_system = "ALL"
+
         query_vec = self._generate_embedding(query)
         full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
 
-        system_filter = ""
-        if system != "ALL":
-            system_filter = f"WHERE system = '{system.upper()}'"
-
-        # SQL with BigQuery VECTOR_SEARCH
-        sql = f"""
-        SELECT 
-            base.id, 
-            base.system, 
-            base.title, 
-            base.content, 
-            distance
-        FROM VECTOR_SEARCH(
-            TABLE {full_table},
-            'embedding',
-            (SELECT @query_vector AS embedding),
-            top_k => @limit,
-            distance_type => 'COSINE',
-            options => '{{"fraction_lists_to_search": 0.05}}'
-        )
-        {system_filter}
-        ORDER BY distance ASC
-        """
-
         try:
             from google.cloud import bigquery
-            job_config = bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ArrayQueryParameter("query_vector", "FLOAT64", query_vec),
-                    bigquery.ScalarQueryParameter("limit", "INT64", limit),
-                ]
+            query_params = [
+                bigquery.ArrayQueryParameter("query_vector", "FLOAT64", query_vec),
+                bigquery.ScalarQueryParameter("limit", "INT64", limit),
+            ]
+
+            system_filter = ""
+            if clean_system != "ALL":
+                system_filter = "WHERE system = @system_param"
+                query_params.append(bigquery.ScalarQueryParameter("system_param", "STRING", clean_system))
+
+            # SQL with BigQuery VECTOR_SEARCH using Parameterized Query
+            sql = f"""
+            SELECT 
+                base.id, 
+                base.system, 
+                base.title, 
+                base.content, 
+                distance
+            FROM VECTOR_SEARCH(
+                TABLE {full_table},
+                'embedding',
+                (SELECT @query_vector AS embedding),
+                top_k => @limit,
+                distance_type => 'COSINE',
+                options => '{{"fraction_lists_to_search": 0.05}}'
             )
+            {system_filter}
+            ORDER BY distance ASC
+            """
+
+            job_config = bigquery.QueryJobConfig(query_parameters=query_params)
             query_job = self.bq_client.query(sql, job_config=job_config)
             rows = query_job.result()
 
