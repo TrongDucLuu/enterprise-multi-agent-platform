@@ -118,6 +118,22 @@ def _check_ticket_access(ticket_user_id: str) -> tuple[bool, Optional[str]]:
     return False, f"Truy cập bị từ chối: Người dùng '{current_user.email}' không có quyền truy cập ticket của '{ticket_user_id}'."
 
 
+def _load_and_authorize_ticket(ticket_id: str) -> tuple[Optional[HelpdeskTicket], Optional[dict]]:
+    """
+    Helper function to load a ticket and verify caller authorization.
+    Returns (ticket, None) if authorized, or (None, error_response_dict) if not found or denied.
+    """
+    ticket = _load_ticket_from_storage(ticket_id)
+    if not ticket:
+        return None, {"status": "error", "message": f"Ticket '{ticket_id}' not found."}
+    
+    allowed, err = _check_ticket_access(ticket.user_id)
+    if not allowed:
+        return None, {"status": "error", "message": err}
+
+    return ticket, None
+
+
 def create_helpdesk_ticket(
     user_id: str,
     title: str,
@@ -167,13 +183,9 @@ def get_ticket_details(ticket_id: str) -> dict:
     Retrieves full details of a specific Helpdesk ticket from storage.
     Enforces ownership and RBAC access control.
     """
-    ticket = _load_ticket_from_storage(ticket_id)
-    if not ticket:
-        return {"status": "error", "message": f"Ticket '{ticket_id}' not found."}
-    
-    allowed, err = _check_ticket_access(ticket.user_id)
-    if not allowed:
-        return {"status": "error", "message": err}
+    ticket, err_resp = _load_and_authorize_ticket(ticket_id)
+    if err_resp:
+        return err_resp
 
     return {"status": "success", "ticket": ticket.model_dump()}
 
@@ -187,13 +199,9 @@ def update_ticket_status(
     Updates the resolution status and notes for a ticket.
     Enforces ownership and role-based access control.
     """
-    ticket = _load_ticket_from_storage(ticket_id)
-    if not ticket:
-        return {"status": "error", "message": f"Ticket '{ticket_id}' not found."}
-    
-    allowed, err = _check_ticket_access(ticket.user_id)
-    if not allowed:
-        return {"status": "error", "message": err}
+    ticket, err_resp = _load_and_authorize_ticket(ticket_id)
+    if err_resp:
+        return err_resp
 
     ticket.status = status
     if resolution_notes:
@@ -217,13 +225,9 @@ def route_ticket_to_tier(
     Routes/escalates a ticket to a higher tier or specialist team.
     Enforces ownership and role-based access control.
     """
-    ticket = _load_ticket_from_storage(ticket_id)
-    if not ticket:
-        return {"status": "error", "message": f"Ticket '{ticket_id}' not found."}
-    
-    allowed, err = _check_ticket_access(ticket.user_id)
-    if not allowed:
-        return {"status": "error", "message": err}
+    ticket, err_resp = _load_and_authorize_ticket(ticket_id)
+    if err_resp:
+        return err_resp
     
     ticket.assigned_tier = target_tier
     ticket.status = "Escalated" if target_tier in ["L2_Enterprise_RAG", "L3_Deep_Diagnostics", "Human_Ops"] else ticket.status
