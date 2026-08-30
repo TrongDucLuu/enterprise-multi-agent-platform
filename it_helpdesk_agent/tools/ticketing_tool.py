@@ -99,7 +99,7 @@ def _check_ticket_access(ticket_user_id: str) -> tuple[bool, Optional[str]]:
         try:
             from app_utils.sso_auth import get_current_sso_user, ALLOW_LOCAL_DEV_SSO
         except ImportError:
-            return True, None
+            return False, "Hệ thống xác thực SSO không khả dụng (ImportError). Truy cập bị từ chối theo nguyên tắc Fail-Closed."
 
     current_user = get_current_sso_user()
     if not current_user:
@@ -215,10 +215,15 @@ def route_ticket_to_tier(
 ) -> dict:
     """
     Routes/escalates a ticket to a higher tier or specialist team.
+    Enforces ownership and role-based access control.
     """
     ticket = _load_ticket_from_storage(ticket_id)
     if not ticket:
         return {"status": "error", "message": f"Ticket '{ticket_id}' not found."}
+    
+    allowed, err = _check_ticket_access(ticket.user_id)
+    if not allowed:
+        return {"status": "error", "message": err}
     
     ticket.assigned_tier = target_tier
     ticket.status = "Escalated" if target_tier in ["L2_Enterprise_RAG", "L3_Deep_Diagnostics", "Human_Ops"] else ticket.status

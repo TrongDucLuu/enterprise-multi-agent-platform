@@ -24,7 +24,7 @@ class SemanticCacheEntry:
     response: str
     tier: str = "L1"
     user_id: Optional[str] = None
-    is_public: bool = True
+    is_public: bool = False
     created_at: float = field(default_factory=time.time)
     expires_at: float = 0.0
     hit_count: int = 0
@@ -149,7 +149,7 @@ class SemanticCache:
         query: str,
         response: str,
         user_id: Optional[str] = None,
-        is_public: bool = True,
+        is_public: bool = False,
         ttl_seconds: Optional[int] = None,
         tier: str = "L1",
         metadata: Optional[dict] = None,

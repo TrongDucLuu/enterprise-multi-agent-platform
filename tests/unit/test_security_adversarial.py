@@ -4,7 +4,9 @@ from it_helpdesk_agent.tools.ticketing_tool import (
     create_helpdesk_ticket,
     get_ticket_details,
     update_ticket_status,
+    route_ticket_to_tier,
     list_user_tickets,
+    _check_ticket_access,
     _TICKETS_DB,
 )
 from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import (
@@ -145,6 +147,49 @@ def test_idor_employee_cannot_update_other_user_ticket():
     assert "không có quyền truy cập" in update_res["message"] or "Truy cập bị từ chối" in update_res["message"]
 
 
+def test_idor_employee_cannot_route_other_user_ticket():
+    """Verify that employee cannot route or escalate another employee's ticket."""
+    res = create_helpdesk_ticket(
+        user_id="victim-user",
+        title="Lỗi cấp quyền SAP",
+        description="Mô tả sự cố ERP",
+        category="ERP"
+    )
+    ticket_id = res["ticket"]["id"]
+
+    # Attacker logs in as regular employee
+    attacker = SSOUser(
+        user_id="attacker-user",
+        email="attacker@company.com",
+        roles=["employee"]
+    )
+    current_sso_user.set(attacker)
+
+    # Attacker tries to escalate victim's ticket to L3
+    route_res = route_ticket_to_tier(
+        ticket_id=ticket_id,
+        target_tier="L3_Deep_Diagnostics",
+        reason="Attacker trying to escalate someone else's ticket"
+    )
+    assert route_res["status"] == "error"
+    assert "không có quyền truy cập" in route_res["message"] or "Truy cập bị từ chối" in route_res["message"]
+
+    # Admin CAN route victim's ticket
+    admin = SSOUser(
+        user_id="admin-01",
+        email="admin@company.com",
+        roles=["it_admin"]
+    )
+    current_sso_user.set(admin)
+    admin_route_res = route_ticket_to_tier(
+        ticket_id=ticket_id,
+        target_tier="L3_Deep_Diagnostics",
+        reason="Authorized escalation by IT Admin"
+    )
+    assert admin_route_res["status"] == "success"
+    assert admin_route_res["ticket"]["assigned_tier"] == "L3_Deep_Diagnostics"
+
+
 # -------------------------------------------------------------
 # 2. SQL Injection Defense Tests (Knowledge Store)
 # -------------------------------------------------------------
@@ -252,3 +297,41 @@ def test_semantic_cache_public_entry_accessible_to_all():
     match_b = cache.get(public_query, user_id="user-B")
     assert match_b is not None
     assert match_b["response"] == public_response
+
+
+def test_semantic_cache_unsafe_default_prevention():
+    """
+    Verify that SemanticCache.set() defaults to is_public=False (safe default).
+    If a developer calls cache.set() without explicitly specifying is_public=True,
+    the entry MUST NOT be leaked to other users.
+    """
+    cache = SemanticCache(similarity_threshold=0.90)
+    cache.clear()
+
+    secret_query = "Thông tin lương và thưởng dự án của tôi"
+    secret_response = "Thưởng dự án quý 3 là 50 triệu VND"
+
+    # Default call without specifying is_public or user_id
+    cache.set(query=secret_query, response=secret_response, user_id="user-secret")
+
+    # Another user queries -> MUST BE A MISS because default is_public=False
+    match_other = cache.get(secret_query, user_id="user-other")
+    assert match_other is None
+
+    # Anonymous queries -> MUST BE A MISS
+    match_anon = cache.get(secret_query, user_id=None)
+    assert match_anon is None
+
+    # Owner queries -> MUST BE A HIT
+    match_owner = cache.get(secret_query, user_id="user-secret")
+    assert match_owner is not None
+    assert match_owner["response"] == secret_response
+
+
+def test_check_ticket_access_fail_closed_unauthenticated():
+    """Verify that _check_ticket_access fails closed when user context is None and dev SSO is off."""
+    with patch("it_helpdesk_agent.app_utils.sso_auth.get_current_sso_user", return_value=None):
+        with patch("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False):
+            allowed, err = _check_ticket_access("any-user-id")
+            assert allowed is False
+            assert "xác thực" in err.lower() or "từ chối" in err.lower()

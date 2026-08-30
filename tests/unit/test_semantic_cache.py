@@ -27,7 +27,7 @@ def test_semantic_cache_exact_hit():
     query = "Hướng dẫn kết nối mạng Wi-Fi doanh nghiệp tầng 3"
     response = "Để kết nối Wi-Fi tầng 3, vui lòng chọn SSID 'Corp-Internal-5G' và nhập mật khẩu WPA2-Enterprise."
     
-    cache.set(query=query, response=response, tier="L1")
+    cache.set(query=query, response=response, tier="L1", is_public=True)
     
     match = cache.get(query)
     assert match is not None
@@ -43,7 +43,7 @@ def test_semantic_cache_similar_query_hit():
 
     q1 = "Làm sao để đổi mật khẩu Wi-Fi nội bộ"
     resp = "Truy cập cổng portal.company.com/wifi và đăng nhập tài khoản Okta."
-    cache.set(query=q1, response=resp)
+    cache.set(query=q1, response=resp, is_public=True)
 
     q2 = "Làm sao để đổi mật khẩu Wi-Fi nội bộ công ty"
     match = cache.get(q2)
@@ -59,7 +59,8 @@ def test_semantic_cache_miss_on_different_query():
 
     cache.set(
         query="Cách reset mật khẩu Windows Active Directory",
-        response="Truy cập https://account.company.com/reset"
+        response="Truy cập https://account.company.com/reset",
+        is_public=True,
     )
 
     unrelated_query = "Phân tích log Out of memory trên cụm Kubernetes"
@@ -74,7 +75,8 @@ def test_semantic_cache_ttl_expiration():
     cache.set(
         query="Sự cố VPN Cisco",
         response="Khởi động lại VPN client",
-        ttl_seconds=1
+        ttl_seconds=1,
+        is_public=True,
     )
 
     # Immediately should hit
@@ -89,14 +91,14 @@ def test_semantic_cache_lru_eviction():
     cache = SemanticCache(max_size=2)
     cache.clear()
 
-    cache.set("Q1", "Resp1")
-    cache.set("Q2", "Resp2")
+    cache.set("Q1", "Resp1", is_public=True)
+    cache.set("Q2", "Resp2", is_public=True)
 
     # Access Q2 so it gets hit count
     cache.get("Q2")
 
     # Add Q3 -> Should evict Q1
-    cache.set("Q3", "Resp3")
+    cache.set("Q3", "Resp3", is_public=True)
 
     stats = cache.get_stats()
     assert stats["total_entries"] == 2
