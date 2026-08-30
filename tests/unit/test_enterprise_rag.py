@@ -6,6 +6,21 @@ from it_helpdesk_agent.tools.enterprise_rag_mcp.main import (
     summarize_long_document,
     draft_email_response
 )
+from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
+
+
+@pytest.fixture(autouse=True)
+def default_rag_admin():
+    """Sets an authorized IT admin user in context for general RAG tool tests."""
+    user = SSOUser(
+        user_id="it-admin-01",
+        email="admin@company.com",
+        roles=["employee", "it_admin", "support_agent"],
+    )
+    token = current_sso_user.set(user)
+    yield user
+    current_sso_user.reset(token)
+
 
 def test_knowledge_store_search_erp():
     store = KnowledgeStore()
@@ -28,6 +43,54 @@ def test_get_system_manual_success_and_not_found():
 
     res_missing = get_system_manual("INVALID-ID-999")
     assert res_missing["status"] == "error"
+
+
+def test_enterprise_rag_rbac_denied_for_unauthorized_role():
+    from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
+    
+    # Regular employee without HR role
+    employee = SSOUser(
+        user_id="emp-001",
+        email="emp@company.com",
+        roles=["employee"]
+    )
+    token = current_sso_user.set(employee)
+    try:
+        # Search restricted HRM domain
+        res = search_enterprise_knowledge("chấm công", system="HRM")
+        assert len(res) == 1
+        assert "FORBIDDEN" in res[0]["article_id"] or "Access Denied" in res[0]["title"]
+
+        # Get system manual for HRM
+        manual_res = get_system_manual("HRM-KB-101")
+        assert manual_res["status"] == "forbidden"
+        assert manual_res["error"] == "Access Denied"
+    finally:
+        current_sso_user.reset(token)
+
+
+def test_enterprise_rag_rbac_allowed_for_hr_role():
+    from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
+    
+    # HR Specialist
+    hr_user = SSOUser(
+        user_id="hr-001",
+        email="hr@company.com",
+        roles=["hr_specialist"]
+    )
+    token = current_sso_user.set(hr_user)
+    try:
+        # Search HRM domain
+        res = search_enterprise_knowledge("chấm công", system="HRM")
+        assert len(res) > 0
+        assert res[0]["article_id"] == "HRM-KB-101"
+
+        # Get system manual for HRM
+        manual_res = get_system_manual("HRM-KB-101")
+        assert manual_res["status"] == "success"
+        assert manual_res["article"]["id"] == "HRM-KB-101"
+    finally:
+        current_sso_user.reset(token)
 
 def test_summarize_long_document():
     long_doc = """

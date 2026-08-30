@@ -14,6 +14,10 @@ from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import (
     BigQueryVectorKnowledgeStore,
     ALLOWED_SYSTEMS,
 )
+from it_helpdesk_agent.tools.enterprise_rag_mcp.main import (
+    search_enterprise_knowledge,
+    get_system_manual,
+)
 from it_helpdesk_agent.app_utils.semantic_cache import SemanticCache
 from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
 
@@ -335,3 +339,77 @@ def test_check_ticket_access_fail_closed_unauthenticated():
             allowed, err = _check_ticket_access("any-user-id")
             assert allowed is False
             assert "xác thực" in err.lower() or "từ chối" in err.lower()
+
+
+# -------------------------------------------------------------
+# 4. Enterprise RAG RBAC & Security Trimming Tests (L2)
+# -------------------------------------------------------------
+
+def test_enterprise_rag_idor_and_rbac_protection_by_domain():
+    """
+    Verify that domain-level RBAC protects sensitive ERP and HRM documentation.
+    - Sales rep CAN access CRM, but CANNOT access HRM or ERP manuals.
+    - IT Admin CAN access all domains.
+    """
+    sales_user = SSOUser(
+        user_id="sales-01",
+        email="sales@company.com",
+        roles=["sales_rep"]
+    )
+    current_sso_user.set(sales_user)
+
+    # 1. Sales rep tries to fetch sensitive HRM manual -> FORBIDDEN
+    hrm_manual = get_system_manual("HRM-KB-101")
+    assert hrm_manual["status"] == "forbidden"
+    assert "Access Denied" in hrm_manual["error"]
+
+    # 2. Sales rep tries to fetch sensitive ERP manual -> FORBIDDEN
+    erp_manual = get_system_manual("ERP-KB-001")
+    assert erp_manual["status"] == "forbidden"
+    assert "Access Denied" in erp_manual["error"]
+
+    # 3. Sales rep fetches CRM manual -> ALLOWED
+    crm_manual = get_system_manual("CRM-KB-201")
+    assert crm_manual["status"] == "success"
+    assert crm_manual["article"]["id"] == "CRM-KB-201"
+
+    # 4. IT Admin logs in -> CAN access HRM & ERP
+    admin_user = SSOUser(
+        user_id="admin-01",
+        email="admin@company.com",
+        roles=["it_admin"]
+    )
+    current_sso_user.set(admin_user)
+    assert get_system_manual("HRM-KB-101")["status"] == "success"
+    assert get_system_manual("ERP-KB-001")["status"] == "success"
+
+
+def test_enterprise_rag_security_trimming_system_all():
+    """
+    Verify that search_enterprise_knowledge with system='ALL' trims out
+    domains the user is not authorized to see.
+    """
+    # Sales Rep search
+    sales_user = SSOUser(
+        user_id="sales-01",
+        email="sales@company.com",
+        roles=["sales_rep"]
+    )
+    current_sso_user.set(sales_user)
+
+    results = search_enterprise_knowledge(query="đồng bộ", system="ALL")
+    # Must only contain CRM or authorized domains, NO HRM or ERP results
+    for r in results:
+        assert r["system"] == "CRM"
+
+    # HR Specialist search
+    hr_user = SSOUser(
+        user_id="hr-01",
+        email="hr@company.com",
+        roles=["hr_specialist"]
+    )
+    current_sso_user.set(hr_user)
+    hr_results = search_enterprise_knowledge(query="đồng bộ", system="ALL")
+    for r in hr_results:
+        assert r["system"] == "HRM"
+

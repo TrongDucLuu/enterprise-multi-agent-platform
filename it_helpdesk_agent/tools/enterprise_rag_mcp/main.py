@@ -1,6 +1,6 @@
 import logging
 import sys
-from typing import Literal
+from typing import Literal, Optional
 from fastmcp import FastMCP
 from dotenv import load_dotenv
 
@@ -10,6 +10,47 @@ try:
 except ImportError:
     from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import get_knowledge_store
     from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult, DocumentSummary
+
+# Domain-specific RBAC roles for Enterprise RAG systems
+SYSTEM_REQUIRED_ROLES = {
+    "HRM": [
+        "hr_specialist", "hr_manager", "payroll_admin", "hr_operations",
+        "it_admin", "sys_admin", "admin", "support_agent", "helpdesk_operator", "lead_engineer"
+    ],
+    "ERP": [
+        "erp_user", "finance_user", "accountant", "procurement_specialist", "procurement_manager",
+        "it_admin", "sys_admin", "admin", "support_agent", "helpdesk_operator", "lead_engineer"
+    ],
+    "CRM": [
+        "sales_rep", "sales_manager", "marketing", "crm_admin",
+        "it_admin", "sys_admin", "admin", "support_agent", "helpdesk_operator", "lead_engineer"
+    ],
+}
+
+
+def _check_system_access(system: str) -> tuple[bool, Optional[str]]:
+    """
+    Verifies if the current authenticated caller is authorized to access documentation for the specified system.
+    Fails closed if SSO authorization layer cannot be resolved.
+    """
+    sys_upper = system.upper()
+    if sys_upper == "ALL":
+        return True, None
+
+    needed_roles = SYSTEM_REQUIRED_ROLES.get(sys_upper)
+    if not needed_roles:
+        return True, None
+
+    try:
+        from it_helpdesk_agent.app_utils.sso_auth import require_role
+    except ImportError:
+        try:
+            from app_utils.sso_auth import require_role
+        except ImportError:
+            return False, "Hệ thống xác thực SSO không khả dụng (ImportError). Truy cập bị từ chối theo nguyên tắc Fail-Closed."
+
+    return require_role(needed_roles)
+
 
 def _initialize_console_logging(min_level: int = logging.INFO):
     # Logs MUST go to stderr to prevent breaking the stdio MCP protocol
@@ -27,18 +68,52 @@ def search_enterprise_knowledge(
     """
     Searches enterprise knowledge base for ERP, HRM, and CRM systems.
     - system: 'ERP', 'HRM', 'CRM', or 'ALL'
+    Enforces domain-level RBAC authorization and Security Trimming based on authenticated user roles.
     """
-    results = store.search(query=query, system=system, limit=3)
-    return [r.model_dump() for r in results]
+    if system != "ALL":
+        is_allowed, error_msg = _check_system_access(system)
+        if not is_allowed:
+            return [{
+                "article_id": f"{system}-FORBIDDEN",
+                "title": f"Access Denied: Restricted {system} System Documentation",
+                "snippet": error_msg or f"Truy cập tài liệu {system} bị từ chối do không đủ quyền hạn.",
+                "system": system,
+                "score": 0.0,
+            }]
+
+    results = store.search(query=query, system=system, limit=5)
+    
+    # Security Trimming: filter out systems the caller lacks permissions for
+    allowed_results = []
+    for r in results:
+        allowed, _ = _check_system_access(r.system)
+        if allowed:
+            allowed_results.append(r.model_dump())
+            if len(allowed_results) >= 3:
+                break
+                
+    return allowed_results
 
 @mcp.tool()
 def get_system_manual(article_id: str) -> dict:
     """
     Retrieves the complete technical manual or troubleshooting guide for a specific article ID.
+    Enforces domain-level RBAC for sensitive HRM, ERP, and CRM operational guides.
     """
     article = store.get_article_by_id(article_id)
     if not article:
         return {"status": "error", "message": f"Article '{article_id}' not found."}
+    
+    is_allowed, error_msg = _check_system_access(article.system)
+    if not is_allowed:
+        return {
+            "status": "forbidden",
+            "error": "Access Denied",
+            "message": error_msg,
+            "article_id": article_id,
+            "system": article.system,
+        }
+
     return {"status": "success", "article": article.model_dump()}
 
 @mcp.tool()
