@@ -5,10 +5,10 @@ from fastmcp import FastMCP
 from dotenv import load_dotenv
 
 try:
-    from knowledge_store import get_knowledge_store, KnowledgeStoreUnavailableError
+    from knowledge_store import get_knowledge_store, KnowledgeStoreUnavailableError, wrap_retrieved_document
     from rag_models import SearchResult, DocumentSummary
 except ImportError:
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import get_knowledge_store, KnowledgeStoreUnavailableError
+    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import get_knowledge_store, KnowledgeStoreUnavailableError, wrap_retrieved_document
     from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult, DocumentSummary
 
 try:
@@ -191,7 +191,12 @@ def get_system_manual(article_id: str) -> dict:
 
     art_dict = article.model_dump()
     raw_content = art_dict.get("content", "")
-    art_dict["content"] = f'<retrieved_document id="{article.id}" system="{article.system}" title="{article.title}">\n{raw_content}\n</retrieved_document>'
+    art_dict["content"] = wrap_retrieved_document(
+        content=raw_content,
+        doc_id=article.id,
+        system=article.system,
+        title=article.title,
+    )
     return {"status": "success", "article": art_dict}
 
 
