@@ -118,55 +118,83 @@ async def test_semantic_cache_callbacks_roundtrip_authenticated_isolation():
     cache = get_semantic_cache()
     cache.clear()
 
-    # 1. Set current authenticated SSO user (Alice)
+    # 1. Private / Account-sensitive query: "Cách reset mật khẩu Windows của tôi"
     alice = SSOUser(user_id="alice_123", email="alice@corp.com", full_name="Alice Nguyen", roles=["employee"])
     token_alice = current_sso_user.set(alice)
 
     try:
         mock_ctx = MagicMock()
         mock_ctx._invocation_context.agent.name = "l1_selfservice_agent"
-        
+
+        private_query = "Làm sao để reset mật khẩu Windows của tôi?"
         mock_user_event = MagicMock()
         mock_user_event.author = "user"
-        mock_user_event.content.parts = [types.Part.from_text(text="Hướng dẫn cài đặt VPN FortiClient trên macOS")]
+        mock_user_event.content.parts = [types.Part.from_text(text=private_query)]
         mock_ctx._invocation_context._get_events.return_value = [mock_user_event]
 
-        req = LlmRequest(
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text="Hướng dẫn cài đặt VPN FortiClient trên macOS")]
-                )
-            ]
+        req_private = LlmRequest(
+            contents=[types.Content(role="user", parts=[types.Part.from_text(text=private_query)])]
         )
 
-        # 2. Before callback should miss initially
-        res_before = await semantic_cache_before_model_callback(mock_ctx, req)
-        assert res_before is None
+        # Before callback should miss initially
+        assert await semantic_cache_before_model_callback(mock_ctx, req_private) is None
 
-        # 3. Simulate Gemini responding and calling after_model_callback
-        simulated_resp = LlmResponse(
+        # Simulate model response
+        sim_resp_private = LlmResponse(
             content=types.Content(
                 role="model",
-                parts=[types.Part.from_text(text="Để cài FortiClient trên macOS: 1. Tải DMG từ portal. 2. Cấp quyền System Extension.")]
+                parts=[types.Part.from_text(text="Để reset mật khẩu cá nhân, truy cập portal.company.com/selfservice/reset.")]
             )
         )
+        await semantic_cache_after_model_callback(mock_ctx, sim_resp_private)
 
-        await semantic_cache_after_model_callback(mock_ctx, simulated_resp)
+        # Alice gets cache hit for her private question
+        cached_alice = await semantic_cache_before_model_callback(mock_ctx, req_private)
+        assert cached_alice is not None
+        assert cached_alice.custom_metadata.get("cached") is True
 
-        # 4. For Alice: before callback MUST HIT
-        cached_res = await semantic_cache_before_model_callback(mock_ctx, req)
-        assert cached_res is not None
-        assert cached_res.custom_metadata.get("cached") is True
-        assert "Để cài FortiClient trên macOS" in cached_res.content.parts[0].text
-
-        # 5. Multi-Tenant Isolation Check: Switch context to Bob
+        # Bob asks the exact same private question -> MUST MISS (isolated per-user)
         bob = SSOUser(user_id="bob_456", email="bob@corp.com", full_name="Bob Tran", roles=["employee"])
         token_bob = current_sso_user.set(bob)
         try:
-            # For Bob: Same query MUST MISS because cache is strictly private to Alice!
-            res_bob = await semantic_cache_before_model_callback(mock_ctx, req)
-            assert res_bob is None
+            cached_bob = await semantic_cache_before_model_callback(mock_ctx, req_private)
+            assert cached_bob is None, "Private reset password query must NOT be cached publicly!"
+        finally:
+            current_sso_user.reset(token_bob)
+
+        # 2. Public General FAQ: "Hướng dẫn kết nối mạng Wi-Fi văn phòng"
+        public_query = "Hướng dẫn kết nối mạng Wi-Fi văn phòng"
+        mock_user_event_pub = MagicMock()
+        mock_user_event_pub.author = "user"
+        mock_user_event_pub.content.parts = [types.Part.from_text(text=public_query)]
+        mock_ctx._invocation_context._get_events.return_value = [mock_user_event_pub]
+
+        req_public = LlmRequest(
+            contents=[types.Content(role="user", parts=[types.Part.from_text(text=public_query)])]
+        )
+
+        # Before callback misses initially
+        assert await semantic_cache_before_model_callback(mock_ctx, req_public) is None
+
+        # Model response
+        sim_resp_public = LlmResponse(
+            content=types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Để kết nối Wi-Fi văn phòng: Chọn SSID 'Corp-Guest' hoặc 'Corp-Internal-5G'.")]
+            )
+        )
+        await semantic_cache_after_model_callback(mock_ctx, sim_resp_public)
+
+        # Alice gets cache hit
+        assert await semantic_cache_before_model_callback(mock_ctx, req_public) is not None
+
+        # Switch to Bob -> Bob MUST ALSO GET CACHE HIT because Wi-Fi FAQ is safe public knowledge!
+        token_bob = current_sso_user.set(bob)
+        try:
+            cached_bob_pub = await semantic_cache_before_model_callback(mock_ctx, req_public)
+            assert cached_bob_pub is not None, "Public Wi-Fi FAQ must be shared across all authenticated employees!"
+            assert cached_bob_pub.custom_metadata.get("cached") is True
+            assert "Corp-Internal-5G" in cached_bob_pub.content.parts[0].text
         finally:
             current_sso_user.reset(token_bob)
 

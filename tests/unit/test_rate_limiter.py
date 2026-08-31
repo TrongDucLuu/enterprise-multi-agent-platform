@@ -278,6 +278,161 @@ def test_rate_limiter_behind_load_balancer_ip_extraction(monkeypatch):
     assert r4.status_code == 200
 
 
+def test_rate_limiter_user_token_rotation_defense(monkeypatch):
+    """
+    P0.2: Validates that rotating Authorization tokens for the SAME authenticated user
+    does NOT bypass the rate limit threshold (key is derived from user_id, not raw token).
+    """
+    from unittest.mock import patch
+    from it_helpdesk_agent.app_utils.sso_auth import SSOUser, SSOAuthenticationMiddleware
+    import it_helpdesk_agent.app_utils.sso_auth as sso_mod
+
+    app = FastAPI()
+    limiter = InMemoryRateLimiter(requests_per_minute=3)
+    app.add_middleware(SSOAuthenticationMiddleware)
+    app.add_middleware(RateLimitMiddleware, limiter=limiter)
+
+    @app.get("/api/user-resource")
+    def user_resource():
+        return {"data": "confidential"}
+
+    # Mock verify_sso_token to return the same user_id for any token starting with 'token-alice-'
+    def mock_verify(token: str):
+        if token.startswith("token-alice-"):
+            return SSOUser(
+                user_id="user-alice-007",
+                email="alice@company.com",
+                email_verified=True,
+                full_name="Alice Security",
+                department="SecOps",
+                roles=["employee", "it_admin"]
+            )
+        raise Exception("Invalid token")
+
+    monkeypatch.setattr(sso_mod, "verify_sso_token", mock_verify)
+    client = TestClient(app)
+
+    # 3 requests with 3 DIFFERENT tokens for Alice should succeed
+    for i in range(1, 4):
+        headers = {"Authorization": f"Bearer token-alice-{i}"}
+        resp = client.get("/api/user-resource", headers=headers)
+        assert resp.status_code == 200, f"Request {i} failed: {resp.text}"
+
+    # 4th request with a brand new token for Alice MUST be blocked (429)
+    resp4 = client.get("/api/user-resource", headers={"Authorization": "Bearer token-alice-4"})
+    assert resp4.status_code == 429
+    assert resp4.json()["error_code"] == "RATE_LIMIT_EXCEEDED"
+
+
+def test_rate_limiter_multi_user_isolation(monkeypatch):
+    """
+    P0.2: Validates that two distinct authenticated users have completely independent buckets.
+    User A exhausting their quota has zero impact on User B.
+    """
+    from it_helpdesk_agent.app_utils.sso_auth import SSOUser, SSOAuthenticationMiddleware
+    import it_helpdesk_agent.app_utils.sso_auth as sso_mod
+
+    app = FastAPI()
+    limiter = InMemoryRateLimiter(requests_per_minute=2)
+    app.add_middleware(SSOAuthenticationMiddleware)
+    app.add_middleware(RateLimitMiddleware, limiter=limiter)
+
+    @app.get("/api/protected")
+    def protected_route():
+        return {"ok": True}
+
+    def mock_verify(token: str):
+        if token == "token-user-a":
+            return SSOUser(user_id="user-A", email="a@corp.com", email_verified=True, full_name="User A", department="Dev", roles=["employee"])
+        elif token == "token-user-b":
+            return SSOUser(user_id="user-B", email="b@corp.com", email_verified=True, full_name="User B", department="Sales", roles=["employee"])
+        raise Exception("Invalid token")
+
+    monkeypatch.setattr(sso_mod, "verify_sso_token", mock_verify)
+    client = TestClient(app)
+
+    # User A exhausts quota (2 requests)
+    r_a1 = client.get("/api/protected", headers={"Authorization": "Bearer token-user-a"})
+    r_a2 = client.get("/api/protected", headers={"Authorization": "Bearer token-user-a"})
+    assert r_a1.status_code == 200
+    assert r_a2.status_code == 200
+
+    r_a3 = client.get("/api/protected", headers={"Authorization": "Bearer token-user-a"})
+    assert r_a3.status_code == 429
+
+    # User B should still have full quota (2 requests)
+    r_b1 = client.get("/api/protected", headers={"Authorization": "Bearer token-user-b"})
+    assert r_b1.status_code == 200
+    assert r_b1.headers.get("X-RateLimit-Remaining") == "1"
+
+    r_b2 = client.get("/api/protected", headers={"Authorization": "Bearer token-user-b"})
+    assert r_b2.status_code == 200
+    assert r_b2.headers.get("X-RateLimit-Remaining") == "0"
+
+
+def test_rate_limiter_unauthenticated_ip_isolation():
+    """
+    P0.2: Validates that unauthenticated requests correctly fallback to IP-based rate limiting buckets.
+    """
+    app = FastAPI()
+    limiter = InMemoryRateLimiter(requests_per_minute=2)
+    app.add_middleware(RateLimitMiddleware, limiter=limiter)
+
+    @app.get("/api/public-unauth")
+    def unauth_route():
+        return {"public": True}
+
+    client = TestClient(app)
+
+    # IP 192.0.2.1 makes 2 requests
+    h1 = {"X-Forwarded-For": "192.0.2.1"}
+    assert client.get("/api/public-unauth", headers=h1).status_code == 200
+    assert client.get("/api/public-unauth", headers=h1).status_code == 200
+    assert client.get("/api/public-unauth", headers=h1).status_code == 429
+
+    # IP 198.51.100.2 has separate bucket
+    h2 = {"X-Forwarded-For": "198.51.100.2"}
+    assert client.get("/api/public-unauth", headers=h2).status_code == 200
+
+
+def test_single_jwt_verification_across_middlewares(monkeypatch):
+    """
+    P1.4: Spy test asserting that verify_sso_token is called EXACTLY ONCE
+    for a request passing through both RateLimitMiddleware and SSOAuthenticationMiddleware.
+    """
+    from unittest.mock import MagicMock
+    from it_helpdesk_agent.app_utils.sso_auth import SSOUser, SSOAuthenticationMiddleware
+    import it_helpdesk_agent.app_utils.sso_auth as sso_mod
+
+    app = FastAPI()
+    limiter = InMemoryRateLimiter(requests_per_minute=10)
+    app.add_middleware(SSOAuthenticationMiddleware)
+    app.add_middleware(RateLimitMiddleware, limiter=limiter)
+
+    @app.get("/api/memoized-check")
+    def memoized_route():
+        return {"status": "ok"}
+
+    mock_user = SSOUser(
+        user_id="user-memo-1",
+        email="memo@company.com",
+        email_verified=True,
+        full_name="Memo User",
+        department="IT",
+        roles=["employee"]
+    )
+
+    verify_spy = MagicMock(return_value=mock_user)
+    monkeypatch.setattr(sso_mod, "verify_sso_token", verify_spy)
+
+    client = TestClient(app)
+    resp = client.get("/api/memoized-check", headers={"Authorization": "Bearer sample-jwt-token"})
+
+    assert resp.status_code == 200
+    # Crucial assertion: verify_sso_token must be executed exactly 1 time!
+    assert verify_spy.call_count == 1, f"Expected verify_sso_token to be called 1 time, got {verify_spy.call_count}"
+
+
 def test_healthz_and_readyz_endpoints():
     """
     Validates that /healthz and /readyz endpoints return HTTP 200 without authentication
@@ -298,6 +453,3 @@ def test_healthz_and_readyz_endpoints():
     assert r_readyz.status_code == 200
     assert r_readyz.json()["status"] == "ready"
     assert "cache_entries" not in r_readyz.json()
-
-
-

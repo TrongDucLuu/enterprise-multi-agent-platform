@@ -53,19 +53,29 @@ Hệ thống **IT Helpdesk Multi-Agent AI** thông minh, phân cấp 3 mức đ�
 - **Soạn thảo Email & Cập nhật Ticket:** Soạn bản thảo email phản hồi chuẩn mực, lịch sự và tự động đồng bộ tiến độ ticket.
 
 ### 🟣 Mức 3 — Phân Tích & Suy Luận Chuyên Sâu (`l3_deep_diagnostics_agent`)
-- **Mô hình năng lực cao:** Sử dụng `gemini-3-pro-preview` chuyên trách suy luận logic và phân tích cấu trúc phức tạp.
-- **Root Cause Analysis (RCA):** Phân tích log files, stack traces, phát hiện các mã lỗi trọng yếu (`OUT_OF_MEMORY`, `DB_CONNECTION_EXHAUSTED`, `NETWORK_TIMEOUT`, `AUTH_SECURITY_FAILURE`, `DISK_IO_FAILURE`, `DATA_CORRUPTION_NULL`) và lập báo cáo nguyên nhân gốc rễ cùng giải pháp khắc phục.
-- **Pháp lý IT & Rà soát SLA Hợp đồng:** Trích xuất cam kết Uptime, thời gian phản hồi MTTR 2 chiều (prefix/suffix), điều khoản bồi thường (Service Credits), quyền kiểm toán an toàn thông tin và thông báo sự cố bảo mật (DPA/NDA/GDPR).
+- **Mô hình năng lực cao:** Mặc định sử dụng **`gemini-2.5-pro` (GA - 99.9% Vertex AI SLA)** trên môi trường Production hoặc `gemini-3-pro-preview` trên Development/Staging chuyên trách suy luận logic và phân tích cấu trúc phức tạp.
+- **Root Cause Analysis (RCA):** Phân tích log files, stack traces, phát hiện các mã lỗi trọng yếu (`OUT_OF_MEMORY`, `DB_CONNECTION_EXHAUSTED`, `NETWORK_TIMEOUT`, `AUTH_SECURITY_FAILURE`, `DISK_IO_FAILURE`, `DATA_CORRUPTION_NULL`) và lập báo cáo nguyên nhân gốc rễ cùng giải pháp khắc phục có kèm **Confidence Level** và **Disclaimer**.
+- **Pháp lý IT & Rà soát SLA Hợp đồng:** Trích xuất cam kết Uptime, thời gian phản hồi MTTR 2 chiều (prefix/suffix), điều khoản bồi thường (Service Credits), quyền kiểm toán an toàn thông tin và thông báo sự cố bảo mật (DPA/NDA/GDPR) có đính kèm **Legal Disclaimer**.
 
 ---
 
-## ⚡ 2. Tối Ưu Hóa Hiệu Năng & Chi Phí (Semantic Cache & BigQuery Vector)
+## ⚡ 2. Tối Ưu Hóa Hiệu Năng & Chi Phí (RediSearch Vector Search & BigQuery Vector)
 
-### A. Semantic Cache Layer (`semantic_cache.py`)
-- **Vấn đề giải quyết:** Các câu hỏi IT Helpdesk lặp lại thường xuyên (ví dụ: *"hướng dẫn đổi pass wifi"*, *"cách thay đổi mật khẩu wifi văn phòng"*). Nếu mỗi câu hỏi đều gọi Gemini sẽ tốn chi phí token và mất 2-3s phản hồi.
-- **Giải pháp:** Áp dụng **Vector Cosine Similarity ($\ge 0.92$)** kết hợp TTL Expiration và LRU Eviction:
-  - **Cache Hit:** Trả kết quả ngay lập tức ($< 50\text{ms}$), giảm $100\%$ chi phí token Gemini.
-  - **Cache Miss:** Chuyển tiếp vào Orchestrator xử lý bình thường và tự động ghi nhớ vào cache.
+### A. RediSearch Vector Search & Semantic Cache (`semantic_cache.py`)
+- **Vấn đề giải quyết:** Các câu hỏi IT Helpdesk lặp lại thường xuyên (ví dụ: *"hướng dẫn đổi pass wifi"*, *"cách thay đổi mật khẩu wifi văn phòng"*). Nếu mỗi câu hỏi đều gọi Gemini sẽ tốn chi phí token và mất 1.5–3s phản hồi.
+- **Giải pháp:** Sử dụng **RediSearch Server-Side Vector Search** (`idx:sem_cache` trên Redis Hash với `VECTOR FLAT FLOAT32 COSINE`) kết hợp multi-tenant tag filtering (`@is_public:{1} | @user_id:{uid}`):
+  - **Server-Side KNN Search**: Tìm kiếm vector tương đồng trực tiếp trong Redis engine mà không cần kéo toàn bộ candidate keys về client (`mget`), giúp giảm độ phức tạp từ $O(N \cdot D)$ client-side xuống $O(\log N)$ trên cụm Redis.
+  - **Bộ lọc An toàn Public FAQ (`_is_safe_public_faq`)**: Tự động chia sẻ cache công khai (`is_public=True`) cho các câu hỏi hướng dẫn chung (Wi-Fi, VPN, máy in) thuộc tầng L1 không gọi tool và không chứa PII. Các câu hỏi riêng tư (reset mật khẩu, mở khóa tài khoản cá nhân, mã ticket) được cô lập nghiêm ngặt theo `user_id`.
+  - **Graceful Fallback**: Tự động chuyển đổi giữa RediSearch và Candidate Scanning pipeline nếu Redis server không cài module RediSearch.
+
+#### 📊 Số Liệu Benchmark Thực Tế (1.000 Cached Entries):
+Thực hiện benchmark trên tập dữ liệu 1.000 entry embedding thực tế (`scripts/benchmark_semantic_cache.py`):
+
+| Backend | Tốc độ ghi (1.000 entries) | Hit Latency (p50) | Hit Latency (p95) | Hit Latency (p99) | Tăng tốc so với LLM |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **InMemorySemanticCache** | **0.015s** (68,365 writes/s) | **7.19ms** | **7.27ms** | **7.29ms** | **~167x** |
+| **Redis / RediSearch Cache** | **0.200s** (5,005 writes/s) | **21.19ms** | **21.55ms** | **28.45ms** | **~57x** |
+
 - **Endpoints Giám Sát:**
   - `GET /api/cache/stats`: Xem tỷ lệ hit rate, số lượng entry trong cache.
   - `GET /api/cache/query?q=...`: Tra cứu trực tiếp nội dung bộ nhớ đệm ngữ nghĩa.
@@ -84,10 +94,14 @@ Hệ thống được thiết kế theo tiêu chuẩn an toàn thông tin cấp 
 | Cơ chế bảo mật | Chi tiết kỹ thuật | Trạng thái bảo vệ |
 | :--- | :--- | :--- |
 | **Xác thực Google OIDC Chuẩn** | Sử dụng `google.oauth2.id_token.verify_oauth2_token` kiểm tra chữ ký số qua JWKS public certs của Google (`accounts.google.com`). | ✅ **Strict OIDC** |
+| **JWT Single Verification Memoization** | Kết quả verify token được cache vào `request.state.verified_sso_user`, loại bỏ hoàn toàn việc giải mã chữ ký trùng lặp giữa `RateLimiterMiddleware` và `SSOAuthenticationMiddleware` (1 request = đúng 1 lần verify). | ✅ **Zero Overhead** |
 | **Fail-Closed Domain Filtering** | Bắt buộc cấu hình `ALLOWED_DOMAINS` trên Production. Ngăn chặn triệt để tài khoản cá nhân `@gmail.com` truy cập hệ thống. | ✅ **Fail-Closed** |
 | **Cô Lập Thuật Toán (No Confusion)** | RS256 chỉ dành cho token Google OIDC; HS256 chỉ dùng cho Dev Mock Token. Tuyệt đối không cho phép dùng chung secret key. | ✅ **Algorithm Isolation** |
 | **Connection Pooling & Cache JWKS** | Singleton `Request` adapter kết hợp `requests.Session()` tái sử dụng connection pool HTTPS, giảm thiểu latency xác thực. | ✅ **High Performance** |
 | **Bảo Vệ Toàn Diện Middleware** | `SSOAuthenticationMiddleware` bảo vệ mọi endpoint (ADK agent, API, session) ngoại trừ các public endpoint (`/healthz`, `/docs`). | ✅ **Zero Trust Per-Route** |
+| **Phân Quyền RBAC 4 Tầng Ưu Tiên** | Cơ chế `resolve_user_roles` phân cấp: YAML Mapping $\rightarrow$ Biến môi trường $\rightarrow$ Firestore $\rightarrow$ Fallback `employee`. Keying cache bảo vệ bằng SHA-256 xác định. | ✅ **Multi-Tier RBAC** |
+| **Terraform Edge Security & SLA Guard** | `check "production_edge_security"` chặn triển khai Cloud Run `allow_unauthenticated=true` trên Production nếu không có Cloud Armor WAF; `check "production_model_sla"` cảnh báo model preview trên Prod. | ✅ **IaC Enforcement** |
+
 | **Phân Quyền RBAC (Role-Based)** | Sử dụng `ContextVar` truyền context người dùng vào các tool nhạy cảm (L3 RCA, Compliance SLA), chặn truy cập trái phép từ user thường. | ✅ **Granular RBAC** |
 
 ### Ma Trận Phân Quyền (RBAC Matrix)
@@ -184,7 +198,7 @@ uv sync
 ```bash
 uv run pytest tests/ -v
 ```
-*(Hiện tại toàn bộ **141/141 test cases** đều vượt qua $100\%$)*
+*(Hiện tại toàn bộ **157/157 test cases** đều vượt qua $100\%$)*
 
 ### Bước 3: Chạy Bộ Đo Đánh Giá Chất Lượng Tri Thức & Câu Hỏi Bẫy (Eval Harness)
 ```bash
@@ -192,17 +206,23 @@ uv run python scripts/eval_harness.py
 ```
 *(Đo lường tự động: Intent Accuracy 100%, L2 Groundedness Faithfulness 100%, và Trap Question Refusal Rate 100%)*
 
-### Bước 4: Chạy Tải Giả Lập CCU (Locust Benchmark)
+### Bước 4: Chạy Benchmark RediSearch Vector Search & Semantic Cache
+```bash
+uv run python scripts/benchmark_semantic_cache.py
+```
+*(Đo lường trên 1.000 entry vector: InMemory p50=7.19ms, RediSearch p50=21.19ms — nhanh gấp 57x–167x so với LLM)*
+
+### Bước 5: Chạy Tải Giả Lập CCU (Locust Benchmark)
 ```bash
 uv run locust -f scripts/load_test/locustfile.py --headless -u 100 -r 10 -t 1m --host http://localhost:8080
 ```
 
-### Bước 5: Chạy Tương Tác Cục Bộ (CLI Mode)
+### Bước 6: Chạy Tương Tác Cục Bộ (CLI Mode)
 ```bash
 uv run python main.py --mode cli
 ```
 
-### Bước 6: Khởi Chạy Web Server (FastAPI + ADK Web UI)
+### Bước 7: Khởi Chạy Web Server (FastAPI + ADK Web UI)
 ```bash
 uv run python main.py --mode serve --port 8080
 ```
@@ -220,6 +240,7 @@ uv run python main.py --mode serve --port 8080
 Thư mục `deployment/terraform` đã cấu hình sẵn:
 - Service Account với nguyên tắc đặc quyền tối thiểu (Least Privilege).
 - Secret Manager, Artifact Registry, BigQuery Dataset, Cloud Run v2 Service.
+- Terraform Check blocks: `check "production_edge_security"` (bảo vệ Cloud Armor WAF) & `check "production_model_sla"` (bảo đảm SLA model GA).
 - Lifecycle `ignore_changes = [template[0].containers[0].image]` chống drift cấu hình khi CI/CD cập nhật image mới.
 
 ```bash
@@ -258,6 +279,7 @@ it-helpdesk-agent/
 ├── config/                          # Cấu hình hệ thống, RBAC & chunking đa tầng
 │   └── systems.yaml                 # Định nghĩa ERP/HRM/CRM, user role mappings, domain keywords & DocAI
 ├── scripts/
+│   ├── benchmark_semantic_cache.py  # Benchmark RediSearch vs In-Memory trên 1.000 entry vector pool
 │   ├── eval_harness.py              # Eval benchmark đo Groundedness & Trap Refusal
 │   ├── ingest_knowledge_base.py     # CLI Driver nạp dữ liệu CDC + BigQuery STORING vector
 │   ├── ingest/                      # Package module hóa xử lý dữ liệu nạp
@@ -271,17 +293,17 @@ it-helpdesk-agent/
 │       └── eval_set.csv             # Bộ câu hỏi kiểm thử tải
 ├── deployment/
 │   └── terraform/                   # Infrastructure-as-Code cho GCP
-│       ├── main.tf                  # Định nghĩa Cloud Run, BigQuery, IAM, Secrets
-│       └── variables.tf             # Biến cấu hình Terraform
+│       ├── main.tf                  # Định nghĩa Cloud Run, BigQuery, IAM, Secrets & Check blocks
+│       └── variables.tf             # Biến cấu hình Terraform (GA default models & Cloud Armor)
 ├── it_helpdesk_agent/
 │   ├── agent.py                     # Cấu hình Multi-Agent 3 cấp bậc (L1, L2, L3) + Latency tracking
 │   ├── fast_api_app.py              # Ứng dụng FastAPI, Middleware và Cache endpoints (Tắt docs trên Prod)
 │   ├── app_utils/
-│   │   ├── env.py                   # Quản lý nạp biến môi trường & Secret Manager
+│   │   ├── env.py                   # Quản lý nạp biến môi trường, Secret Manager & Model Selection SLA
 │   │   ├── embedding_utils.py       # Embedding abstraction (Vertex AI + Fail-Closed)
 │   │   ├── rate_limiter.py          # Token-hash & IP Sliding Window Limiter + Soft Warning
-│   │   ├── semantic_cache.py        # InMemory, Redis & RediSearch Semantic Cache (Cosine, Circuit Breaker)
-│   │   ├── sso_auth.py              # Xác thực OIDC JWKS, Role Resolution, RBAC ContextVar & Middleware
+│   │   ├── semantic_cache.py        # InMemory, Redis & RediSearch Vector Search (KNN, Tag filter)
+│   │   ├── sso_auth.py              # Xác thực OIDC JWKS, Role Resolution, RBAC ContextVar & Memoization
 │   │   ├── system_config.py         # Dynamic loader cho systems.yaml & Domain Keyword Patterns
 │   │   └── telemetry.py             # OpenTelemetry tracking, Fail-Closed Privacy & PII redaction
 │   └── tools/
@@ -295,7 +317,7 @@ it-helpdesk-agent/
 │           └── rag_models.py        # Schemas dữ liệu RAG
 └── tests/
     ├── test_redis_backends.py       # Test Redis cluster rate limiter & semantic cache
-    └── unit/                        # Bộ kiểm thử tự động (141 test cases)
+    └── unit/                        # Bộ kiểm thử tự động (157 test cases)
         ├── test_agent_hierarchy.py  # Test cấu trúc phân cấp agent và model
         ├── test_compliance_tool.py  # Test trích xuất SLA 2 chiều & RBAC
         ├── test_container_packaging.py # Test Dockerfile & Fail-closed container env
@@ -304,12 +326,14 @@ it-helpdesk-agent/
         ├── test_ingestion_pipeline.py # Test chunking pipeline, Document AI & CDC dedup
         ├── test_knowledge_store_adapters.py # Test Adapter Pattern & BigQuery Store
         ├── test_log_analyzer.py     # Test nhận diện lỗi OOM, DB, Disk, Null & RBAC
-        ├── test_production_guardrails.py # Test Fail-closed cache, L3 disclaimer, Circuit breaker
+        ├── test_production_guardrails.py # Test Fail-closed cache, L3 disclaimer, Circuit breaker, SLA
         ├── test_rate_limiter.py     # Test rate limiter sliding window, token hash & soft warnings
+        ├── test_rbac_provisioning.py # Test cấp role 4 tầng ưu tiên & SHA-256 process invariance
         ├── test_security_adversarial.py # Test IDOR, SQLi injection, Cache isolation
-        ├── test_semantic_cache.py   # Test Cosine Similarity, Cache Hit/Miss, TTL, LRU
+        ├── test_semantic_cache.py   # Test Cosine Similarity, Cache Hit/Miss, TTL, LRU, Public FAQ
         ├── test_sso_auth.py         # Test OIDC JWKS, Fail-closed domain, Role Resolution, Middleware
         ├── test_system_config.py    # Test dynamic systems.yaml loading, role mappings & fail-closed
         ├── test_telemetry.py        # Test Telemetry privacy, PII masking & regex system classification
         └── test_ticketing_tool.py   # Test tạo, cập nhật, chuyển tiếp ticket & bounded LRU cache
 ```
+

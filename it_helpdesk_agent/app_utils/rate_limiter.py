@@ -320,8 +320,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 user = verify_sso_token(token)
                 if user and getattr(user, "is_authenticated", False):
                     user_id = user.user_id
-            except Exception:
+                    request.state.verified_sso_user = user
+            except Exception as e:
                 user_id = None
+                request.state.sso_auth_error = e
 
         if user_id:
             user_hash = hashlib.sha256(str(user_id).encode("utf-8")).hexdigest()[:32]

@@ -360,6 +360,61 @@ class TestL3RateLimitSoftWarning:
 
         assert final_resp is not None
         final_text = final_resp.content.parts[0].text
-        assert "⚠️ [L3 Quota Soft Warning]" in final_text
+        assert final_text.startswith("⚠️ [L3 Quota Soft Warning]") or "⚠️ [L3 Quota Soft Warning]" in final_text
         assert "Đây là kết quả phân tích Root Cause OOM." in final_text
         assert final_resp.custom_metadata.get("soft_warning") is not None
+
+
+# ==============================================================================
+# 5. P2.6 & P2.8 — TERRAFORM EDGE SECURITY & PRODUCTION MODEL SLA SELECTION
+# ==============================================================================
+
+class TestProductionTerraformAndModelSLA:
+
+    def test_terraform_variables_ga_models_default(self):
+        """Validates that default model variables in variables.tf are GA models with enterprise SLA."""
+        tf_vars_path = os.path.join(
+            os.path.dirname(__file__), "../../deployment/terraform/variables.tf"
+        )
+        assert os.path.exists(tf_vars_path)
+        with open(tf_vars_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Ensure GA models are defaults
+        assert 'default     = "gemini-2.5-flash"' in content
+        assert 'default     = "gemini-2.5-pro"' in content
+        assert "enable_cloud_armor" in content
+
+    def test_terraform_check_blocks_exist_in_main_tf(self):
+        """Validates that Terraform check blocks guard against unauthenticated edge exposure and non-GA models."""
+        tf_main_path = os.path.join(
+            os.path.dirname(__file__), "../../deployment/terraform/main.tf"
+        )
+        assert os.path.exists(tf_main_path)
+        with open(tf_main_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        assert 'check "production_edge_security"' in content
+        assert 'check "production_model_sla"' in content
+        assert "CRITICAL SECURITY WARNING" in content
+
+    def test_agent_model_selection_switches_to_ga_in_production(self, monkeypatch):
+        """Validates that agent automatically selects GA models in production environment."""
+        from it_helpdesk_agent.app_utils.env import get_model_names_for_environment
+
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.delenv("USE_GA_MODELS", raising=False)
+        monkeypatch.delenv("FAST_MODEL_NAME", raising=False)
+        monkeypatch.delenv("REASONING_MODEL_NAME", raising=False)
+
+        # In production mode without explicit overrides, agent should choose GA models
+        fast_model, reasoning_model = get_model_names_for_environment()
+        assert fast_model == "gemini-2.5-flash"
+        assert reasoning_model == "gemini-2.5-pro"
+
+        # In dev mode without overrides, should return preview models
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        fast_dev, reasoning_dev = get_model_names_for_environment()
+        assert fast_dev == "gemini-3-flash-preview"
+        assert reasoning_dev == "gemini-3-pro-preview"
+

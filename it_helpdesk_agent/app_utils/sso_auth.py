@@ -419,7 +419,15 @@ class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
 
         token = auth_header[7:].strip()
         try:
-            user = verify_sso_token(token)
+            cached_user = getattr(request.state, "verified_sso_user", None)
+            cached_err = getattr(request.state, "sso_auth_error", None)
+            if cached_user is not None:
+                user = cached_user
+            elif cached_err is not None:
+                raise cached_err
+            else:
+                user = verify_sso_token(token)
+
             request.state.user = user
             token_ctx = current_sso_user.set(user)
             try:

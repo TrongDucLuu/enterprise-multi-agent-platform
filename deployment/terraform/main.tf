@@ -441,3 +441,19 @@ resource "google_cloud_run_v2_service_iam_member" "invoker" {
   member   = "allUsers"
 }
 
+# 10. Enterprise Production Guardrails & SLA Checks
+check "production_edge_security" {
+  assert {
+    condition = !(var.environment == "production" && var.allow_unauthenticated && !var.enable_cloud_armor)
+    error_message = "CRITICAL SECURITY WARNING: In 'production' environment, setting allow_unauthenticated=true exposes Cloud Run directly without WAF / DDoS protection. Enable Google Cloud Armor (enable_cloud_armor=true) or set allow_unauthenticated=false."
+  }
+}
+
+check "production_model_sla" {
+  assert {
+    condition = !(var.environment == "production" && (can(regex("preview", var.fast_model_name)) || can(regex("preview", var.reasoning_model_name))))
+    error_message = "PRODUCTION SLA WARNING: Preview models (e.g. gemini-3-flash-preview) do not have Google Cloud Vertex AI 99.9% uptime enterprise SLA commitments. For production deployments, ensure GA models (gemini-2.5-flash and gemini-2.5-pro) are selected."
+  }
+}
+
+

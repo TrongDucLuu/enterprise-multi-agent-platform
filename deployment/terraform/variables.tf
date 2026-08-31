@@ -160,16 +160,22 @@ variable "systems_config_path" {
   default     = "/code/config/systems.yaml"
 }
 
+variable "enable_cloud_armor" {
+  description = "Enable Google Cloud Armor WAF and HTTPS Load Balancer in front of Cloud Run for DDoS and OWASP protection"
+  type        = bool
+  default     = false
+}
+
 variable "fast_model_name" {
-  description = "Gemini model name for standard triage, L1 and L2 agents (e.g. gemini-2.5-flash or gemini-3-flash-preview)"
+  description = "Gemini model name for standard triage, L1 and L2 agents. GA default: 'gemini-2.5-flash' (guaranteed 99.9% Vertex AI SLA). For experimental preview, override with 'gemini-3-flash-preview'."
   type        = string
-  default     = "gemini-3-flash-preview"
+  default     = "gemini-2.5-flash"
 }
 
 variable "reasoning_model_name" {
-  description = "Gemini model name for L3 reasoning diagnostics & compliance (e.g. gemini-2.5-pro or gemini-3-pro-preview)"
+  description = "Gemini model name for L3 reasoning diagnostics & compliance. GA default: 'gemini-2.5-pro' (guaranteed 99.9% Vertex AI SLA). For experimental preview, override with 'gemini-3-pro-preview'."
   type        = string
-  default     = "gemini-3-pro-preview"
+  default     = "gemini-2.5-pro"
 }
 
 variable "telemetry_anonymize_users" {
@@ -183,5 +189,6 @@ variable "telemetry_include_query" {
   type        = bool
   default     = false
 }
+
 
 

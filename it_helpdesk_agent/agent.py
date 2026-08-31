@@ -24,14 +24,9 @@ from it_helpdesk_agent.tools.log_analyzer import analyze_system_logs_for_rca
 from it_helpdesk_agent.tools.compliance_tool import review_it_contract_sla
 
 PROJECT_ID, MODEL_LOC, SERVICE_LOC, SECRETS = init_environment()
+from it_helpdesk_agent.app_utils.env import is_production_mode, get_model_names_for_environment
 
-# Dynamic model selection for Enterprise SLAs (supports GA models like gemini-2.5-flash/pro or preview)
-USE_GA_MODELS = os.getenv("USE_GA_MODELS", "false").lower() in ("true", "1", "yes")
-FAST_MODEL_DEFAULT = "gemini-2.5-flash" if USE_GA_MODELS else "gemini-3-flash-preview"
-REASONING_MODEL_DEFAULT = "gemini-2.5-pro" if USE_GA_MODELS else "gemini-3-pro-preview"
-
-FAST_MODEL_NAME = os.getenv("FAST_MODEL_NAME", FAST_MODEL_DEFAULT)
-REASONING_MODEL_NAME = os.getenv("REASONING_MODEL_NAME", REASONING_MODEL_DEFAULT)
+FAST_MODEL_NAME, REASONING_MODEL_NAME = get_model_names_for_environment()
 
 # 1. Standard fast model for Triage, L1 and L2 agents
 fast_model = Gemini(
@@ -157,6 +152,45 @@ async def semantic_cache_before_model_callback(
     return None
 
 
+def _is_safe_public_faq(query: str, agent_name: str, tools_called: list) -> bool:
+    """
+    Determines if a query and response are completely safe to cache with is_public=True.
+    Criteria:
+    1. Executed by L1 Self-Service agent (agent_name == "l1_selfservice_agent").
+    2. Zero business tools called (pure informational FAQ/guidance).
+    3. No personal keywords or private state (password reset, account unlock, personal ticket IDs, payroll, salary, PII).
+    4. Matches general enterprise IT FAQ topics (Wi-Fi, printer setup, VPN guides, standard software, office policies).
+    """
+    if agent_name != "l1_selfservice_agent":
+        return False
+    if tools_called and len(tools_called) > 0:
+        return False
+
+    q_lower = query.lower()
+
+    # Strictly forbid caching personal or account-sensitive actions
+    private_triggers = [
+        "mật khẩu", "password", "reset", "đổi pass", "quên pass",
+        "mở khóa", "unlock", "tài khoản của tôi", "my account",
+        "ticket", "lương", "payroll", "bảng lương", "bhxh",
+        "sđt", "phone", "email cá nhân", "token", "otp", "2fa", "mfa",
+        "cccd", "cmnd", "hóa đơn", "po", "purchase order"
+    ]
+    if any(k in q_lower for k in private_triggers):
+        return False
+
+    # Safe general corporate IT topics
+    safe_faq_patterns = [
+        "wifi", "wi-fi", "mạng", "internet",
+        "máy in", "printer", "in ấn",
+        "cài đặt vpn", "hướng dẫn vpn", "vpn văn phòng",
+        "phần mềm tiêu chuẩn", "quy định it", "chính sách bảo mật",
+        "giờ làm việc", "hotline it", "thời gian hỗ trợ",
+        "office 365", "chrome", "slack", "zoom"
+    ]
+    return any(p in q_lower for p in safe_faq_patterns)
+
+
 async def semantic_cache_after_model_callback(
     callback_context: CallbackContext,
     llm_response: LlmResponse
@@ -278,13 +312,14 @@ async def semantic_cache_after_model_callback(
         if not user or not user.user_id:
             return modified_response
 
-        # Multi-tenant isolation: always store with is_public=False scoped strictly to user.user_id
+        # Classify if public FAQ or user-specific private query
+        is_safe_public = _is_safe_public_faq(user_query, agent_name, tools_called)
         cache = get_semantic_cache()
         cache.set(
             query=user_query,
             response=response_text,
-            user_id=user.user_id,
-            is_public=False,
+            user_id=None if is_safe_public else user.user_id,
+            is_public=is_safe_public,
             tier=agent_name
         )
 

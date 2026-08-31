@@ -56,10 +56,39 @@ def init_environment() -> tuple[str | None, str, str, dict[str, str]]:
 
     secrets: dict[str, str] = {}
     if project_id:
+        secrets = _fetch_secrets(project_id)
         try:
             vertexai.init(project=project_id, location=service_location)
         except Exception as e:
             logger.warning(f"Vertex AI initialization warning: {e}")
-        secrets = _fetch_secrets(project_id)
-
     return project_id, model_location, service_location, secrets
+
+
+def is_production_mode() -> bool:
+    """Returns True if running in production environment."""
+    env = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
+    return env in ("production", "prod") or bool(os.getenv("K_SERVICE"))
+
+
+def get_model_names_for_environment() -> tuple[str, str]:
+    """
+    Returns (fast_model_name, reasoning_model_name) adhering to Enterprise SLA vs Preview policies:
+    - In production (or when USE_GA_MODELS=true): returns GA models ('gemini-2.5-flash', 'gemini-2.5-pro')
+      which carry Google Cloud Vertex AI 99.9% uptime enterprise SLA commitments.
+    - In development/staging (or when USE_GA_MODELS=false): returns ('gemini-3-flash-preview', 'gemini-3-pro-preview').
+    - Can be explicitly overridden via FAST_MODEL_NAME and REASONING_MODEL_NAME.
+    """
+    use_ga_env = os.getenv("USE_GA_MODELS")
+    if use_ga_env is not None:
+        use_ga = use_ga_env.lower() in ("true", "1", "yes")
+    else:
+        use_ga = is_production_mode()
+
+    fast_default = "gemini-2.5-flash" if use_ga else "gemini-3-flash-preview"
+    reasoning_default = "gemini-2.5-pro" if use_ga else "gemini-3-pro-preview"
+
+    fast_model = os.getenv("FAST_MODEL_NAME", fast_default)
+    reasoning_model = os.getenv("REASONING_MODEL_NAME", reasoning_default)
+    return fast_model, reasoning_model
+
+
