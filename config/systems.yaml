@@ -52,3 +52,22 @@ systems:
       - "sales_manager"
       - "marketing"
       - "crm_admin"
+
+# Tiered Chunking Pipeline Strategy Configuration
+chunking:
+  default_strategy: "auto"                    # "auto" (section-aware with fallback), "fixed", "semantic"
+  max_chunk_size: 1200                        # Maximum characters per chunk
+  overlap: 150                                # Overlap characters between chunks
+  well_structured_max_section_ratio: 0.65     # Section must not exceed 65% of total document length
+  well_structured_min_avg_section_length: 100 # Average section length must be >= 100 characters
+  systems:
+    HRM:
+      strategy: "semantic"                    # Example manual override flag for complex policy documents
+
+# Document Processing & PDF Parsing Configuration
+document_processing:
+  pdf_parser: "pypdf_flat"                    # "pypdf_flat" (default, lightweight) or "document_ai"
+  document_ai_processor_id: ""                # Mandatory if pdf_parser is "document_ai"
+  document_ai_timeout_seconds: 60             # API timeout per call
+  document_ai_max_retries: 2                  # Retry attempts with exponential backoff
+

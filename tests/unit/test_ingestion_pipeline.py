@@ -364,3 +364,210 @@ def test_ingest_articles_deduplicates_duplicate_ids_and_uses_sql_qualify(monkeyp
     assert len(merge_queries) == 1
     assert "QUALIFY ROW_NUMBER() OVER (PARTITION BY id ORDER BY updated_at DESC) = 1" in merge_queries[0]
 
+
+def test_parse_markdown_extracts_sections(tmp_path):
+    doc_path = tmp_path / "sap_guide.md"
+    content = (
+        "# Hướng Dẫn SAP Mua Hàng\n\n"
+        "Tổng quan về quy trình mua hàng doanh nghiệp.\n\n"
+        "## Bước 1: Tạo Purchase Requisition (PR)\n\n"
+        "Sử dụng giao dịch ME51N để tạo yêu cầu mua sắm. Cần điền mã vật tư và số lượng.\n\n"
+        "## Bước 2: Phê duyệt Purchase Order (PO)\n\n"
+        "Sử dụng giao dịch ME29N để phê duyệt đơn đặt hàng bởi cấp quản lý."
+    )
+    doc_path.write_text(content, encoding="utf-8")
+
+    parsed = DocumentParser.parse_markdown_or_text(doc_path)
+    assert len(parsed) == 1
+    doc = parsed[0]
+    assert doc["title"] == "Hướng Dẫn SAP Mua Hàng"
+    assert len(doc["sections"]) == 3
+    assert doc["sections"][0]["heading"] == "Hướng Dẫn SAP Mua Hàng"
+    assert doc["sections"][1]["heading"] == "Bước 1: Tạo Purchase Requisition (PR)"
+    assert "ME51N" in doc["sections"][1]["content"]
+    assert doc["sections"][2]["heading"] == "Bước 2: Phê duyệt Purchase Order (PO)"
+    assert "ME29N" in doc["sections"][2]["content"]
+
+
+def test_parse_docx_extracts_sections(monkeypatch, tmp_path):
+    docx_path = tmp_path / "policy.docx"
+    docx_path.write_bytes(b"dummy docx binary")
+
+    mock_docx = MagicMock()
+    mock_doc = MagicMock()
+
+    p1 = MagicMock()
+    p1.text = "Chính Sách Nhân Sự"
+    p1.style.name = "Heading 1"
+
+    p2 = MagicMock()
+    p2.text = "Quy định làm việc từ xa và chấm công linh hoạt trong doanh nghiệp."
+    p2.style.name = "Normal"
+
+    p3 = MagicMock()
+    p3.text = "Chế Độ Phúc Lợi"
+    p3.style.name = "Heading 2"
+
+    p4 = MagicMock()
+    p4.text = "Chi tiết về bảo hiểm sức khỏe và trợ cấp đi lại hàng tháng."
+    p4.style.name = "Normal"
+
+    mock_doc.paragraphs = [p1, p2, p3, p4]
+    mock_docx.Document.return_value = mock_doc
+    monkeypatch.setitem(sys.modules, "docx", mock_docx)
+
+    parsed = DocumentParser.parse_docx(docx_path)
+    assert len(parsed) == 1
+    doc = parsed[0]
+    assert doc["title"] == "Chính Sách Nhân Sự"
+    assert len(doc["sections"]) == 2
+    assert doc["sections"][0]["heading"] == "Chính Sách Nhân Sự"
+    assert "làm việc từ xa" in doc["sections"][0]["content"]
+    assert doc["sections"][1]["heading"] == "Chế Độ Phúc Lợi"
+    assert "bảo hiểm sức khỏe" in doc["sections"][1]["content"]
+
+
+def test_is_well_structured():
+    from scripts.ingest_knowledge_base import is_well_structured
+
+    # Case 1: Less than 2 sections -> False
+    assert not is_well_structured([])
+    assert not is_well_structured([{"heading": "Intro", "content": "A" * 300}])
+
+    # Case 2: One section dominates > 65% of document -> False
+    unbalanced_sections = [
+        {"heading": "Short Intro", "content": "A" * 50},
+        {"heading": "Giant Section", "content": "B" * 1000},  # 1000 / 1050 = 95% > 65%
+    ]
+    assert not is_well_structured(unbalanced_sections, max_section_ratio=0.65)
+
+    # Case 3: Avg section length < 100 -> False
+    tiny_sections = [
+        {"heading": "Sec 1", "content": "Short text."},
+        {"heading": "Sec 2", "content": "Tiny part."},
+        {"heading": "Sec 3", "content": "Another short."},
+    ]
+    assert not is_well_structured(tiny_sections, min_avg_length=100)
+
+    # Case 4: Balanced well-structured document -> True
+    balanced_sections = [
+        {"heading": "Sec 1", "content": "Nội dung phần 1 đầy đủ thông tin chi tiết kỹ thuật. " * 5},
+        {"heading": "Sec 2", "content": "Nội dung phần 2 hướng dẫn từng bước cấu hình. " * 5},
+        {"heading": "Sec 3", "content": "Nội dung phần 3 danh mục lỗi thường gặp khi thao tác. " * 5},
+    ]
+    assert is_well_structured(balanced_sections, max_section_ratio=0.65, min_avg_length=100)
+
+
+def test_chunk_by_sections_heading_attachment_and_large_section_split():
+    from scripts.ingest_knowledge_base import chunk_by_sections
+
+    sections = [
+        {
+            "heading": "Cấu hình Kết Nối",
+            "content": "Hướng dẫn cấu hình kết nối database ERP qua cổng 3306 an toàn."
+        },
+        {
+            "heading": "Khắc phục Sự Cố Lớn",
+            "content": ("Chi tiết các bước chẩn đoán deadlock và phân quyền người dùng. " * 20)
+        }
+    ]
+
+    chunks = chunk_by_sections(sections, max_chunk_size=400, overlap=50)
+    assert len(chunks) >= 2
+    # Section 1 fits in max_chunk_size with header attached
+    assert chunks[0].startswith("## Cấu hình Kết Nối")
+    assert "3306" in chunks[0]
+
+    # Section 2 is split recursively, each sub-chunk retains the heading
+    for c in chunks[1:]:
+        assert c.startswith("## Khắc phục Sự Cố Lớn")
+
+
+def test_recursive_chunk_text():
+    # Test paragraph separator priority
+    multi_p = "Đoạn 1.\n\nĐoạn 2.\n\nĐoạn 3."
+    chunks = chunk_text(multi_p, max_chunk_size=12, overlap=0)
+    assert len(chunks) == 3
+    assert chunks[0] == "Đoạn 1."
+    assert chunks[1] == "Đoạn 2."
+    assert chunks[2] == "Đoạn 3."
+
+    # Test sentence separator fallback
+    long_single_p = "Câu số 1 rất quan trọng. Câu số 2 cũng rất quan trọng. Câu số 3 cần lưu ý."
+    chunks_s = chunk_text(long_single_p, max_chunk_size=35, overlap=5)
+    assert len(chunks_s) >= 2
+
+    # Test hard char split fallback when no delimiters exist
+    no_delim = "A" * 100
+    chunks_hard = chunk_text(no_delim, max_chunk_size=30, overlap=10)
+    assert len(chunks_hard) == 5
+    for ch in chunks_hard:
+        assert len(ch) <= 30
+
+
+
+def test_document_ai_parser_mapping_and_fail_closed(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "test_doc_ai.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 sample content")
+
+    # Mock Document AI client response
+    mock_docai_module = MagicMock()
+    mock_client = MagicMock()
+    
+    mock_document = {
+        "text": "TIÊU ĐỀ TÀI LIỆU\n\nNội dung mở đầu.\n\nQUY TRÌNH XỬ LÝ\n\nChi tiết quy trình bước 1.",
+        "pages": [
+            {
+                "blocks": [
+                    {
+                        "type_": "heading-1",
+                        "text": "TIÊU ĐỀ TÀI LIỆU",
+                    },
+                    {
+                        "type_": "paragraph",
+                        "text": "Nội dung mở đầu.",
+                    },
+                    {
+                        "type_": "heading-2",
+                        "text": "QUY TRÌNH XỬ LÝ",
+                    },
+                    {
+                        "type_": "paragraph",
+                        "text": "Chi tiết quy trình bước 1.",
+                    }
+                ]
+            }
+        ]
+    }
+
+    mock_process_result = MagicMock()
+    mock_process_result.document = mock_document
+    mock_client.process_document.return_value = mock_process_result
+    mock_docai_module.DocumentProcessorServiceClient.return_value = mock_client
+    mock_docai_module.RawDocument = MagicMock()
+    mock_docai_module.ProcessRequest = MagicMock()
+
+    monkeypatch.setitem(sys.modules, "google.cloud.documentai", mock_docai_module)
+
+    config = {
+        "pdf_parser": "document_ai",
+        "document_ai_processor_id": "projects/123/locations/us/processors/abc",
+        "document_ai_timeout_seconds": 10.0,
+        "document_ai_max_retries": 1,
+    }
+
+    parsed = DocumentParser.parse_pdf_document_ai(pdf_path, config)
+    assert len(parsed) == 1
+    assert parsed[0]["title"] == "TIÊU ĐỀ TÀI LIỆU"
+    assert len(parsed[0]["sections"]) == 2
+    assert parsed[0]["sections"][0]["heading"] == "TIÊU ĐỀ TÀI LIỆU"
+    assert "Nội dung mở đầu." in parsed[0]["sections"][0]["content"]
+    assert parsed[0]["sections"][1]["heading"] == "QUY TRÌNH XỬ LÝ"
+    assert "Chi tiết quy trình" in parsed[0]["sections"][1]["content"]
+
+    # Test Fail-Closed on recurring API errors
+    mock_client.process_document.side_effect = RuntimeError("Service Unavailable")
+    with pytest.raises(RuntimeError, match="Document AI parsing failed"):
+        DocumentParser.parse_pdf_document_ai(pdf_path, config)
+
+

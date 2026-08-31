@@ -166,3 +166,108 @@ def test_system_config_rejects_invalid_system_characters(monkeypatch):
         if os.path.exists(temp_path):
             os.remove(temp_path)
         reload_system_config()
+
+
+def test_chunking_and_document_processing_config():
+    from it_helpdesk_agent.app_utils.system_config import (
+        get_chunking_config,
+        get_document_processing_config,
+    )
+    reload_system_config()
+    
+    # Global default
+    erp_chunk = get_chunking_config("ERP")
+    assert erp_chunk["strategy"] == "auto"
+    assert erp_chunk["max_chunk_size"] == 1200
+    assert erp_chunk["overlap"] == 150
+    assert erp_chunk["well_structured_max_section_ratio"] == 0.65
+    assert erp_chunk["well_structured_min_avg_section_length"] == 100
+
+    # System override (HRM configured as semantic in systems.yaml)
+    hrm_chunk = get_chunking_config("HRM")
+    assert hrm_chunk["strategy"] == "semantic"
+
+    # Document processing default
+    doc_proc = get_document_processing_config()
+    assert doc_proc["pdf_parser"] == "pypdf_flat"
+    assert doc_proc["document_ai_timeout_seconds"] == 60.0
+    assert doc_proc["document_ai_max_retries"] == 2
+
+
+def test_document_ai_missing_processor_id_fails_closed(monkeypatch):
+    from it_helpdesk_agent.app_utils.system_config import get_document_processing_config
+    bad_yaml = {
+        "shared_admin_roles": ["admin"],
+        "systems": {
+            "ERP": {"roles": ["erp_user"]}
+        },
+        "document_processing": {
+            "pdf_parser": "document_ai",
+            "document_ai_processor_id": "",  # Empty -> Must Fail-Closed
+        }
+    }
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.dump(bad_yaml, f)
+        temp_path = f.name
+
+    try:
+        monkeypatch.setenv("SYSTEMS_CONFIG_PATH", temp_path)
+        with pytest.raises(SystemConfigurationError, match="thiếu 'document_ai_processor_id'"):
+            reload_system_config(temp_path)
+    finally:
+        monkeypatch.delenv("SYSTEMS_CONFIG_PATH", raising=False)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        reload_system_config()
+
+
+def test_invalid_chunking_strategy_fails_closed(monkeypatch):
+    bad_yaml = {
+        "shared_admin_roles": ["admin"],
+        "systems": {
+            "ERP": {"roles": ["erp_user"]}
+        },
+        "chunking": {
+            "default_strategy": "invalid_strategy",
+        }
+    }
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.dump(bad_yaml, f)
+        temp_path = f.name
+
+    try:
+        monkeypatch.setenv("SYSTEMS_CONFIG_PATH", temp_path)
+        with pytest.raises(SystemConfigurationError, match="Chiến lược chunking mặc định 'invalid_strategy' không hợp lệ"):
+            reload_system_config(temp_path)
+    finally:
+        monkeypatch.delenv("SYSTEMS_CONFIG_PATH", raising=False)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        reload_system_config()
+
+
+def test_invalid_overlap_exceeding_max_chunk_size_fails_closed(monkeypatch):
+    bad_yaml = {
+        "shared_admin_roles": ["admin"],
+        "systems": {
+            "ERP": {"roles": ["erp_user"]}
+        },
+        "chunking": {
+            "max_chunk_size": 500,
+            "overlap": 600,  # Invalid: overlap >= max_chunk_size
+        }
+    }
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.dump(bad_yaml, f)
+        temp_path = f.name
+
+    try:
+        monkeypatch.setenv("SYSTEMS_CONFIG_PATH", temp_path)
+        with pytest.raises(SystemConfigurationError, match="nhỏ hơn max_chunk_size"):
+            reload_system_config(temp_path)
+    finally:
+        monkeypatch.delenv("SYSTEMS_CONFIG_PATH", raising=False)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        reload_system_config()
+

@@ -20,6 +20,8 @@ Usage:
 
 import os
 import sys
+import re
+import time
 import json
 import uuid
 import hashlib
@@ -38,6 +40,8 @@ from it_helpdesk_agent.app_utils.system_config import (
     get_configured_systems,
     get_valid_system_filters,
     get_system_metadata,
+    get_chunking_config,
+    get_document_processing_config,
 )
 from it_helpdesk_agent.app_utils.embedding_utils import (
     DEFAULT_EMBEDDING_MODEL,
@@ -54,25 +58,55 @@ logger = logging.getLogger("ingest_knowledge_base")
 
 
 class DocumentParser:
-    """Extracts raw text and metadata from various enterprise document formats."""
+    """Extracts raw text, structured sections, and metadata from various enterprise document formats."""
 
     @staticmethod
     def parse_markdown_or_text(file_path: Path) -> list[dict[str, Any]]:
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        # Extract title from first markdown H1 if available
         title = file_path.stem.replace("_", " ").title()
+        heading_pattern = re.compile(r"^(#{1,3})\s+(.+)$")
+        
+        sections: list[dict[str, Any]] = []
+        current_heading = title
+        current_level = 1
+        current_lines: list[str] = []
+
         for line in content.splitlines():
-            if line.startswith("# "):
-                title = line[2:].strip()
-                break
+            m = heading_pattern.match(line)
+            if m:
+                if current_lines:
+                    sec_text = "\n".join(current_lines).strip()
+                    if sec_text:
+                        sections.append({
+                            "level": current_level,
+                            "heading": current_heading,
+                            "content": sec_text,
+                        })
+                    current_lines = []
+                current_level = len(m.group(1))
+                current_heading = m.group(2).strip()
+                if current_level == 1 and not sections:
+                    title = current_heading
+            else:
+                current_lines.append(line)
+
+        if current_lines:
+            sec_text = "\n".join(current_lines).strip()
+            if sec_text:
+                sections.append({
+                    "level": current_level,
+                    "heading": current_heading,
+                    "content": sec_text,
+                })
 
         return [{
             "title": title,
             "content": content,
             "source_uri": str(file_path),
             "file_type": file_path.suffix.lower(),
+            "sections": sections,
         }]
 
     @staticmethod
@@ -83,11 +117,50 @@ class DocumentParser:
             paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
             content = "\n\n".join(paragraphs)
             title = paragraphs[0] if paragraphs else file_path.stem.replace("_", " ").title()
+            
+            sections: list[dict[str, Any]] = []
+            current_heading = title
+            current_level = 1
+            current_paras: list[str] = []
+
+            for p in doc.paragraphs:
+                p_text = p.text.strip()
+                if not p_text:
+                    continue
+                style_name = getattr(p.style, "name", "") or ""
+                if "heading" in style_name.lower():
+                    if current_paras:
+                        sec_text = "\n\n".join(current_paras).strip()
+                        if sec_text:
+                            sections.append({
+                                "level": current_level,
+                                "heading": current_heading,
+                                "content": sec_text,
+                            })
+                        current_paras = []
+                    m = re.search(r"\d+", style_name)
+                    current_level = int(m.group(0)) if m else 1
+                    current_heading = p_text
+                    if not sections:
+                        title = current_heading
+                else:
+                    current_paras.append(p_text)
+
+            if current_paras:
+                sec_text = "\n\n".join(current_paras).strip()
+                if sec_text:
+                    sections.append({
+                        "level": current_level,
+                        "heading": current_heading,
+                        "content": sec_text,
+                    })
+
             return [{
                 "title": title,
                 "content": content,
                 "source_uri": str(file_path),
                 "file_type": ".docx",
+                "sections": sections,
             }]
         except ImportError:
             logger.warning("python-docx is not installed. To parse DOCX files, install python-docx (`pip install python-docx`).")
@@ -97,7 +170,144 @@ class DocumentParser:
             return []
 
     @staticmethod
-    def parse_pdf(file_path: Path) -> list[dict[str, Any]]:
+    def parse_pdf_document_ai(file_path: Path, config: dict[str, Any]) -> list[dict[str, Any]]:
+        """
+        Parses a PDF using Google Cloud Document AI Layout Parser.
+        Extracts structured sections (heading-1, heading-2, paragraphs, tables).
+        Retries up to max_retries with exponential backoff and timeout.
+        Fails closed on unrecoverable errors.
+        """
+        processor_id = config.get("document_ai_processor_id")
+        if not processor_id:
+            raise RuntimeError("Missing 'document_ai_processor_id' for Document AI PDF parsing. (Fail-Closed)")
+
+        timeout_seconds = config.get("document_ai_timeout_seconds", 60.0)
+        max_retries = config.get("document_ai_max_retries", 2)
+
+        try:
+            from google.cloud import documentai
+        except ImportError:
+            logger.error("google-cloud-documentai is not installed. Run `pip install google-cloud-documentai`.")
+            raise
+
+        with open(file_path, "rb") as f:
+            pdf_bytes = f.read()
+
+        raw_document = documentai.RawDocument(content=pdf_bytes, mime_type="application/pdf")
+        request = documentai.ProcessRequest(name=processor_id, raw_document=raw_document)
+
+        client = documentai.DocumentProcessorServiceClient()
+
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                logger.info(
+                    "Calling Document AI Layout Parser for %s (attempt %d/%d, timeout=%.1fs)...",
+                    file_path.name, attempt + 1, max_retries + 1, timeout_seconds
+                )
+                result = client.process_document(request=request, timeout=timeout_seconds)
+                doc = result.document
+                return DocumentParser._map_document_ai_to_document_info(doc, file_path)
+            except Exception as e:
+                last_error = e
+                logger.warning("Document AI attempt %d failed for %s: %s", attempt + 1, file_path.name, e)
+                if attempt < max_retries:
+                    backoff = 2 ** attempt
+                    time.sleep(backoff)
+
+        raise RuntimeError(
+            f"Document AI parsing failed for '{file_path}' after {max_retries + 1} attempts: {last_error}. (Fail-Closed)"
+        )
+
+    @staticmethod
+    def _map_document_ai_to_document_info(doc: Any, file_path: Path) -> list[dict[str, Any]]:
+        full_text = getattr(doc, "text", None) if not isinstance(doc, dict) else doc.get("text", "")
+        if full_text is None:
+            full_text = ""
+
+        blocks = []
+        pages = getattr(doc, "pages", []) if not isinstance(doc, dict) else doc.get("pages", [])
+        for page in pages:
+            page_blocks = getattr(page, "blocks", []) if not isinstance(page, dict) else page.get("blocks", [])
+            for b in page_blocks:
+                blocks.append(b)
+
+        title = file_path.stem.replace("_", " ").title()
+        sections: list[dict[str, Any]] = []
+        current_heading = title
+        current_level = 1
+        current_content_parts: list[str] = []
+
+        def get_block_type_and_text(block: Any) -> tuple[str, str]:
+            if isinstance(block, dict):
+                b_type = block.get("type_") or block.get("block_type") or block.get("type", "paragraph")
+                b_text = block.get("text", "")
+                if not b_text and "layout" in block:
+                    anchors = block["layout"].get("text_anchor", {}).get("text_segments", [])
+                    b_text = "".join(full_text[int(seg.get("start_index", 0)):int(seg.get("end_index", 0))] for seg in anchors)
+                return str(b_type), b_text.strip()
+            else:
+                b_type = getattr(block, "type_", None) or getattr(block, "block_type", "paragraph")
+                b_text = getattr(block, "text", "")
+                if not b_text and hasattr(block, "layout") and hasattr(block.layout, "text_anchor"):
+                    segments = getattr(block.layout.text_anchor, "text_segments", [])
+                    b_text = "".join(full_text[int(getattr(s, "start_index", 0)):int(getattr(s, "end_index", 0))] for s in segments)
+                return str(b_type), b_text.strip()
+
+        for b in blocks:
+            b_type, b_text = get_block_type_and_text(b)
+            if not b_text:
+                continue
+
+            if "heading" in b_type.lower():
+                if current_content_parts:
+                    sec_text = "\n\n".join(current_content_parts).strip()
+                    if sec_text:
+                        sections.append({
+                            "level": current_level,
+                            "heading": current_heading,
+                            "content": sec_text,
+                        })
+                    current_content_parts = []
+                
+                m = re.search(r"\d+", b_type)
+                current_level = int(m.group(0)) if m else 1
+                current_heading = b_text
+                if not sections and current_heading:
+                    title = current_heading
+            else:
+                current_content_parts.append(b_text)
+
+        if current_content_parts:
+            sec_text = "\n\n".join(current_content_parts).strip()
+            if sec_text:
+                sections.append({
+                    "level": current_level,
+                    "heading": current_heading,
+                    "content": sec_text,
+                })
+
+        return [{
+            "title": title,
+            "content": full_text.strip() if full_text.strip() else "\n\n".join(s["content"] for s in sections),
+            "source_uri": str(file_path),
+            "file_type": ".pdf",
+            "sections": sections,
+        }]
+
+    @staticmethod
+    def parse_pdf(file_path: Path, doc_proc_config: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
+        if doc_proc_config is None:
+            try:
+                doc_proc_config = get_document_processing_config()
+            except Exception as e:
+                logger.debug("Could not load document processing config: %s", e)
+                doc_proc_config = {"pdf_parser": "pypdf_flat"}
+
+        pdf_parser_mode = (doc_proc_config or {}).get("pdf_parser", "pypdf_flat")
+        if pdf_parser_mode == "document_ai":
+            return DocumentParser.parse_pdf_document_ai(file_path, doc_proc_config)
+
         try:
             import pypdf
             reader = pypdf.PdfReader(str(file_path))
@@ -117,6 +327,7 @@ class DocumentParser:
                 "content": content,
                 "source_uri": str(file_path),
                 "file_type": ".pdf",
+                "sections": [],
             }]
         except ImportError:
             logger.warning("pypdf is not installed. To parse PDF files, install pypdf (`pip install pypdf`).")
@@ -146,36 +357,160 @@ class DocumentParser:
                         "keywords": data.get("keywords", []),
                         "source_uri": source_uri,
                         "file_type": ".jsonl",
+                        "sections": [],
                     })
                 except json.JSONDecodeError as e:
                     logger.warning("Invalid JSON at line %d in %s: %s", line_no, file_path, e)
         return articles
 
 
-def chunk_text(text: str, max_chunk_size: int = 1200, overlap: int = 150) -> list[str]:
-    """Splits a long document into semantic paragraphs/chunks with overlap."""
+def is_well_structured(
+    sections: Optional[list[dict[str, Any]]],
+    max_chunk_size: int = 1200,
+    max_section_ratio: float = 0.65,
+    min_avg_length: int = 100,
+) -> bool:
+    """
+    Evaluates whether a document's extracted sections provide clean structural boundaries:
+    - At least 2 sections.
+    - No single section occupies more than max_section_ratio (65%) of total document text.
+    - Average length per section is at least min_avg_length (100 chars).
+    """
+    if not sections or len(sections) < 2:
+        return False
+
+    total_len = sum(len(s.get("content", "")) for s in sections)
+    if total_len == 0:
+        return False
+
+    avg_len = total_len / len(sections)
+    if avg_len < min_avg_length:
+        return False
+
+    for s in sections:
+        sec_len = len(s.get("content", ""))
+        if (sec_len / total_len) > max_section_ratio:
+            return False
+
+    return True
+
+
+def chunk_by_sections(
+    sections: list[dict[str, Any]],
+    max_chunk_size: int = 1200,
+    overlap: int = 150,
+) -> list[str]:
+    """
+    Chunks document section-by-section, keeping headings attached to content.
+    If a section exceeds max_chunk_size, it is recursively split within that section's scope.
+    """
+    chunks = []
+    for sec in sections:
+        heading = sec.get("heading", "").strip()
+        content = sec.get("content", "").strip()
+        if not content:
+            continue
+
+        header_prefix = f"## {heading}\n\n" if heading else ""
+        full_sec_text = f"{header_prefix}{content}".strip()
+
+        if len(full_sec_text) <= max_chunk_size:
+            chunks.append(full_sec_text)
+        else:
+            # Section exceeds max_chunk_size -> recursive split content within section scope
+            sub_max_size = max(200, max_chunk_size - len(header_prefix))
+            sub_chunks = chunk_text(content, max_chunk_size=sub_max_size, overlap=overlap)
+            for sub in sub_chunks:
+                chunks.append(f"{header_prefix}{sub}".strip())
+
+    return [c for c in chunks if c]
+
+
+def chunk_text(
+    text: str,
+    max_chunk_size: int = 1200,
+    overlap: int = 150,
+    separators: Optional[list[str]] = None,
+) -> list[str]:
+    """
+    Splits text recursively using prioritized separators:
+    \n\n\n -> \n\n -> \n -> .  -> hard character split.
+    """
+    if not text or not text.strip():
+        return []
+
+    text = text.strip()
     if len(text) <= max_chunk_size:
         return [text]
 
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + max_chunk_size
-        if end >= len(text):
-            chunks.append(text[start:].strip())
+    if separators is None:
+        separators = ["\n\n\n", "\n\n", "\n", ". "]
+
+    chosen_sep = None
+    for sep in separators:
+        if sep in text:
+            chosen_sep = sep
             break
 
-        # Try to break on paragraph or sentence boundary
-        break_idx = text.rfind("\n\n", start, end)
-        if break_idx == -1 or break_idx <= start:
-            break_idx = text.rfind(". ", start, end)
-        if break_idx == -1 or break_idx <= start:
-            break_idx = end
+    if chosen_sep is None:
+        # Fallback to hard character split
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = min(start + max_chunk_size, len(text))
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+            if end >= len(text):
+                break
+            start = max(start + 1, end - overlap)
+        return chunks
 
-        chunks.append(text[start:break_idx].strip())
-        start = max(start + 1, break_idx - overlap)
+    splits = text.split(chosen_sep)
+    chunks = []
+    current_parts: list[str] = []
+    current_len = 0
+    remaining_seps = separators[separators.index(chosen_sep) + 1:]
 
-    return [c for c in chunks if c]
+    for part in splits:
+        if not part.strip():
+            continue
+        part_len = len(part)
+
+        if part_len > max_chunk_size:
+            if current_parts:
+                merged = chosen_sep.join(current_parts).strip()
+                if merged:
+                    chunks.append(merged)
+                current_parts = []
+                current_len = 0
+            sub_chunks = chunk_text(part, max_chunk_size=max_chunk_size, overlap=overlap, separators=remaining_seps)
+            chunks.extend(sub_chunks)
+        elif current_len + (len(chosen_sep) if current_parts else 0) + part_len <= max_chunk_size:
+            current_parts.append(part)
+            current_len += (len(chosen_sep) if len(current_parts) > 1 else 0) + part_len
+        else:
+            merged = chosen_sep.join(current_parts).strip()
+            if merged:
+                chunks.append(merged)
+
+            overlap_parts: list[str] = []
+            overlap_len = 0
+            for p in reversed(current_parts):
+                if overlap_len + len(p) <= overlap:
+                    overlap_parts.insert(0, p)
+                    overlap_len += len(p) + len(chosen_sep)
+                else:
+                    break
+            current_parts = overlap_parts + [part]
+            current_len = sum(len(p) for p in current_parts) + (len(chosen_sep) * max(0, len(current_parts) - 1))
+
+    if current_parts:
+        merged = chosen_sep.join(current_parts).strip()
+        if merged:
+            chunks.append(merged)
+
+    return chunks
 
 
 def process_document(
@@ -184,7 +519,8 @@ def process_document(
 ) -> list[dict[str, Any]]:
     """
     Validates, chunks, and prepares a document for embedding and ingestion.
-    Generates deterministic article IDs based on SHA-256(system:source_uri:title:idx)
+    Applies customer-configurable tiered chunking strategy (auto, fixed, semantic),
+    generates deterministic article IDs based on SHA-256(system:source_uri:title:idx)
     and computes content_hash for CDC change tracking.
     """
     valid_systems = get_valid_system_filters()
@@ -215,8 +551,30 @@ def process_document(
     content = doc_info.get("content", "")
     source_uri = doc_info.get("source_uri", "")
     raw_keywords = doc_info.get("keywords", [])
+    sections = doc_info.get("sections", [])
 
-    chunks = chunk_text(content)
+    # Load system-specific or global chunking configuration
+    chunking_cfg = get_chunking_config(system_clean)
+    strategy = chunking_cfg.get("strategy", "auto")
+    max_chunk_size = chunking_cfg.get("max_chunk_size", 1200)
+    overlap = chunking_cfg.get("overlap", 150)
+    max_sec_ratio = chunking_cfg.get("well_structured_max_section_ratio", 0.65)
+    min_avg_len = chunking_cfg.get("well_structured_min_avg_section_length", 100)
+
+    if strategy == "semantic":
+        logger.info("Semantic chunking strategy flagged for system '%s' (fallback to structured/recursive)", system_clean)
+        if sections and is_well_structured(sections, max_chunk_size=max_chunk_size, max_section_ratio=max_sec_ratio, min_avg_length=min_avg_len):
+            chunks = chunk_by_sections(sections, max_chunk_size=max_chunk_size, overlap=overlap)
+        else:
+            chunks = chunk_text(content, max_chunk_size=max_chunk_size, overlap=overlap)
+    elif strategy == "fixed":
+        chunks = chunk_text(content, max_chunk_size=max_chunk_size, overlap=overlap)
+    else:  # "auto"
+        if sections and is_well_structured(sections, max_chunk_size=max_chunk_size, max_section_ratio=max_sec_ratio, min_avg_length=min_avg_len):
+            chunks = chunk_by_sections(sections, max_chunk_size=max_chunk_size, overlap=overlap)
+        else:
+            chunks = chunk_text(content, max_chunk_size=max_chunk_size, overlap=overlap)
+
     processed_articles = []
 
     for idx, chunk in enumerate(chunks):

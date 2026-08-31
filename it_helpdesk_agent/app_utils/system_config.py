@@ -127,9 +127,122 @@ def load_system_config(config_path: Optional[str] = None, force_reload: bool = F
             "raw_roles": system_roles,
         }
 
+    # Validate chunking configuration
+    raw_chunking = data.get("chunking", {})
+    if raw_chunking is not None and not isinstance(raw_chunking, dict):
+        raise SystemConfigurationError(
+            f"Trường 'chunking' trong '{target_path}' phải là dictionary. (Fail-Closed)"
+        )
+    
+    raw_chunking = raw_chunking or {}
+    default_strategy = raw_chunking.get("default_strategy", "auto")
+    if default_strategy not in ("auto", "fixed", "semantic"):
+        raise SystemConfigurationError(
+            f"Chiến lược chunking mặc định '{default_strategy}' không hợp lệ. Phải là 'auto', 'fixed', hoặc 'semantic'."
+        )
+
+    max_chunk_size = raw_chunking.get("max_chunk_size", 1200)
+    if not isinstance(max_chunk_size, int) or max_chunk_size <= 0:
+        raise SystemConfigurationError(
+            f"Trường 'chunking.max_chunk_size' ({max_chunk_size}) phải là số nguyên dương."
+        )
+
+    overlap = raw_chunking.get("overlap", 150)
+    if not isinstance(overlap, int) or overlap < 0 or overlap >= max_chunk_size:
+        raise SystemConfigurationError(
+            f"Trường 'chunking.overlap' ({overlap}) phải là số nguyên không âm và nhỏ hơn max_chunk_size ({max_chunk_size})."
+        )
+
+    well_structured_max_section_ratio = raw_chunking.get("well_structured_max_section_ratio", 0.65)
+    if not isinstance(well_structured_max_section_ratio, (int, float)) or not (0.0 < well_structured_max_section_ratio <= 1.0):
+        raise SystemConfigurationError(
+            f"Trường 'chunking.well_structured_max_section_ratio' ({well_structured_max_section_ratio}) phải nằm trong khoảng (0.0, 1.0]."
+        )
+
+    well_structured_min_avg_section_length = raw_chunking.get("well_structured_min_avg_section_length", 100)
+    if not isinstance(well_structured_min_avg_section_length, int) or well_structured_min_avg_section_length < 0:
+        raise SystemConfigurationError(
+            f"Trường 'chunking.well_structured_min_avg_section_length' ({well_structured_min_avg_section_length}) phải là số nguyên không âm."
+        )
+
+    # Validate system-specific chunking overrides
+    raw_chunking_systems = raw_chunking.get("systems", {})
+    if raw_chunking_systems is not None and not isinstance(raw_chunking_systems, dict):
+        raise SystemConfigurationError(
+            f"Trường 'chunking.systems' trong '{target_path}' phải là dictionary. (Fail-Closed)"
+        )
+    
+    validated_chunking_systems: dict[str, dict[str, Any]] = {}
+    for sys_k, sys_v in (raw_chunking_systems or {}).items():
+        if not isinstance(sys_v, dict):
+            raise SystemConfigurationError(f"Cấu hình chunking cho hệ thống '{sys_k}' phải là dictionary.")
+        sys_strategy = sys_v.get("strategy", default_strategy)
+        if sys_strategy not in ("auto", "fixed", "semantic"):
+            raise SystemConfigurationError(
+                f"Chiến lược chunking cho hệ thống '{sys_k}' ('{sys_strategy}') không hợp lệ. Phải là 'auto', 'fixed', hoặc 'semantic'."
+            )
+        validated_chunking_systems[sys_k.strip().upper()] = {
+            "strategy": sys_strategy,
+            "max_chunk_size": sys_v.get("max_chunk_size", max_chunk_size),
+            "overlap": sys_v.get("overlap", overlap),
+        }
+
+    validated_chunking = {
+        "default_strategy": default_strategy,
+        "max_chunk_size": max_chunk_size,
+        "overlap": overlap,
+        "well_structured_max_section_ratio": float(well_structured_max_section_ratio),
+        "well_structured_min_avg_section_length": int(well_structured_min_avg_section_length),
+        "systems": validated_chunking_systems,
+    }
+
+    # Validate document_processing configuration
+    raw_doc_proc = data.get("document_processing", {})
+    if raw_doc_proc is not None and not isinstance(raw_doc_proc, dict):
+        raise SystemConfigurationError(
+            f"Trường 'document_processing' trong '{target_path}' phải là dictionary. (Fail-Closed)"
+        )
+    
+    raw_doc_proc = raw_doc_proc or {}
+    pdf_parser = raw_doc_proc.get("pdf_parser", "pypdf_flat")
+    if pdf_parser not in ("pypdf_flat", "document_ai"):
+        raise SystemConfigurationError(
+            f"Trường 'document_processing.pdf_parser' ('{pdf_parser}') không hợp lệ. Phải là 'pypdf_flat' hoặc 'document_ai'."
+        )
+
+    doc_ai_proc_id = raw_doc_proc.get("document_ai_processor_id")
+    if pdf_parser == "document_ai":
+        if not doc_ai_proc_id or not isinstance(doc_ai_proc_id, str) or not doc_ai_proc_id.strip():
+            raise SystemConfigurationError(
+                f"Cấu hình 'document_processing.pdf_parser' là 'document_ai' nhưng thiếu 'document_ai_processor_id'. "
+                f"Vui lòng cung cấp Processor ID hợp lệ hoặc chuyển pdf_parser về 'pypdf_flat'. (Fail-Closed)"
+            )
+        doc_ai_proc_id = doc_ai_proc_id.strip()
+
+    timeout_seconds = raw_doc_proc.get("document_ai_timeout_seconds", 60)
+    if not isinstance(timeout_seconds, (int, float)) or timeout_seconds <= 0:
+        raise SystemConfigurationError(
+            f"Trường 'document_processing.document_ai_timeout_seconds' ({timeout_seconds}) phải là số dương."
+        )
+
+    max_retries = raw_doc_proc.get("document_ai_max_retries", 2)
+    if not isinstance(max_retries, int) or max_retries < 0:
+        raise SystemConfigurationError(
+            f"Trường 'document_processing.document_ai_max_retries' ({max_retries}) phải là số nguyên không âm."
+        )
+
+    validated_doc_proc = {
+        "pdf_parser": pdf_parser,
+        "document_ai_processor_id": doc_ai_proc_id,
+        "document_ai_timeout_seconds": float(timeout_seconds),
+        "document_ai_max_retries": int(max_retries),
+    }
+
     parsed_config = {
         "shared_admin_roles": shared_admin_roles,
         "systems": validated_systems,
+        "chunking": validated_chunking,
+        "document_processing": validated_doc_proc,
     }
 
     _CONFIG_CACHE = parsed_config
@@ -195,3 +308,46 @@ def get_system_instructions_prompt() -> str:
         issues = ", ".join(info.get("common_issues", [])) if info.get("common_issues") else info.get("description", "")
         lines.append(f"         * **{sys_name}{vendor}:** {issues}")
     return "\n".join(lines)
+
+
+def get_chunking_config(system: Optional[str] = None) -> dict[str, Any]:
+    """
+    Returns effective chunking configuration for a specific system or global default.
+    Merges global chunking parameters with system-specific overrides if configured.
+    """
+    cfg = load_system_config()
+    chunking_cfg = cfg.get("chunking", {})
+    
+    strategy = chunking_cfg.get("default_strategy", "auto")
+    max_chunk_size = chunking_cfg.get("max_chunk_size", 1200)
+    overlap = chunking_cfg.get("overlap", 150)
+    max_section_ratio = chunking_cfg.get("well_structured_max_section_ratio", 0.65)
+    min_avg_len = chunking_cfg.get("well_structured_min_avg_section_length", 100)
+
+    if system:
+        sys_upper = system.strip().upper()
+        sys_chunking = chunking_cfg.get("systems", {}).get(sys_upper)
+        if sys_chunking:
+            strategy = sys_chunking.get("strategy", strategy)
+            max_chunk_size = sys_chunking.get("max_chunk_size", max_chunk_size)
+            overlap = sys_chunking.get("overlap", overlap)
+
+    return {
+        "strategy": strategy,
+        "max_chunk_size": max_chunk_size,
+        "overlap": overlap,
+        "well_structured_max_section_ratio": max_section_ratio,
+        "well_structured_min_avg_section_length": min_avg_len,
+    }
+
+
+def get_document_processing_config() -> dict[str, Any]:
+    """Returns document processing configuration (PDF parser strategy, Document AI parameters)."""
+    cfg = load_system_config()
+    return cfg.get("document_processing", {
+        "pdf_parser": "pypdf_flat",
+        "document_ai_processor_id": None,
+        "document_ai_timeout_seconds": 60.0,
+        "document_ai_max_retries": 2,
+    })
+
