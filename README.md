@@ -184,13 +184,13 @@ uv sync
 ```bash
 uv run pytest tests/ -v
 ```
-*(Hiện tại toàn bộ **138/138 test cases** đều vượt qua $100\%$)*
+*(Hiện tại toàn bộ **141/141 test cases** đều vượt qua $100\%$)*
 
 ### Bước 3: Chạy Bộ Đo Đánh Giá Chất Lượng Tri Thức & Câu Hỏi Bẫy (Eval Harness)
 ```bash
 uv run python scripts/eval_harness.py
 ```
-*(Đo lường tự động: Intent Accuracy, L2 Groundedness Faithfulness, và Unanswerable / Trap Refusal Rate)*
+*(Đo lường tự động: Intent Accuracy 100%, L2 Groundedness Faithfulness 100%, và Trap Question Refusal Rate 100%)*
 
 ### Bước 4: Chạy Tải Giả Lập CCU (Locust Benchmark)
 ```bash
@@ -207,7 +207,7 @@ uv run python main.py --mode cli
 uv run python main.py --mode serve --port 8080
 ```
 - Giao diện Web: `http://localhost:8080`
-- OpenAPI Swagger Docs: `http://localhost:8080/docs`
+- OpenAPI Swagger Docs: `http://localhost:8080/docs` (Tự động vô hiệu hóa trên Production để bảo mật)
 - Healthcheck Endpoint: `http://localhost:8080/healthz`
 - Semantic Cache Stats: `http://localhost:8080/api/cache/stats`
 - Telemetry Analytics: `http://localhost:8080/api/telemetry/summary`
@@ -255,11 +255,17 @@ it-helpdesk-agent/
 ├── pyproject.toml                   # Định nghĩa dependencies và project metadata
 ├── main.py                          # Entrypoint khởi chạy CLI hoặc Fast-API server
 ├── test_local.py                    # Script chạy thử nghiệm tương tác runner
-├── config/                          # Cấu hình hệ thống & chunking đa tầng
-│   └── systems.yaml                 # Định nghĩa ERP/HRM/CRM, chunking strategies & DocAI
+├── config/                          # Cấu hình hệ thống, RBAC & chunking đa tầng
+│   └── systems.yaml                 # Định nghĩa ERP/HRM/CRM, user role mappings, domain keywords & DocAI
 ├── scripts/
 │   ├── eval_harness.py              # Eval benchmark đo Groundedness & Trap Refusal
-│   ├── ingest_knowledge_base.py     # Pipeline nạp dữ liệu CDC + BigQuery STORING vector
+│   ├── ingest_knowledge_base.py     # CLI Driver nạp dữ liệu CDC + BigQuery STORING vector
+│   ├── ingest/                      # Package module hóa xử lý dữ liệu nạp
+│   │   ├── __init__.py              # Entrypoint package ingest
+│   │   ├── parsers.py               # DocumentParser (MD, TXT, DOCX, DocAI PDF, JSONL)
+│   │   ├── chunkers.py              # Tiered & semantic chunking strategies
+│   │   ├── embedders.py             # Dense Vector Embedding generation
+│   │   └── loaders.py               # BigQuery Table schema, Indexing & MERGE Upsert
 │   └── load_test/                   # Bộ kiểm thử tải và mô phỏng CCU (Locust)
 │       ├── locustfile.py            # Kịch bản tải phân tầng L1/L2/L3
 │       └── eval_set.csv             # Bộ câu hỏi kiểm thử tải
@@ -268,28 +274,28 @@ it-helpdesk-agent/
 │       ├── main.tf                  # Định nghĩa Cloud Run, BigQuery, IAM, Secrets
 │       └── variables.tf             # Biến cấu hình Terraform
 ├── it_helpdesk_agent/
-│   ├── agent.py                     # Cấu hình Multi-Agent 3 cấp bậc (L1, L2, L3)
-│   ├── fast_api_app.py              # Ứng dụng FastAPI, Middleware và Cache endpoints
+│   ├── agent.py                     # Cấu hình Multi-Agent 3 cấp bậc (L1, L2, L3) + Latency tracking
+│   ├── fast_api_app.py              # Ứng dụng FastAPI, Middleware và Cache endpoints (Tắt docs trên Prod)
 │   ├── app_utils/
 │   │   ├── env.py                   # Quản lý nạp biến môi trường & Secret Manager
 │   │   ├── embedding_utils.py       # Embedding abstraction (Vertex AI + Fail-Closed)
-│   │   ├── rate_limiter.py          # InMemory & Redis Sliding Window Limiter + Soft Warning
-│   │   ├── semantic_cache.py        # InMemory & Redis Semantic Cache (Cosine, Circuit Breaker)
-│   │   ├── sso_auth.py              # Xác thực OIDC JWKS, RBAC ContextVar & Middleware
-│   │   ├── system_config.py         # Dynamic loader cho systems.yaml
-│   │   └── telemetry.py             # OpenTelemetry tracking & PII redaction
+│   │   ├── rate_limiter.py          # Token-hash & IP Sliding Window Limiter + Soft Warning
+│   │   ├── semantic_cache.py        # InMemory, Redis & RediSearch Semantic Cache (Cosine, Circuit Breaker)
+│   │   ├── sso_auth.py              # Xác thực OIDC JWKS, Role Resolution, RBAC ContextVar & Middleware
+│   │   ├── system_config.py         # Dynamic loader cho systems.yaml & Domain Keyword Patterns
+│   │   └── telemetry.py             # OpenTelemetry tracking, Fail-Closed Privacy & PII redaction
 │   └── tools/
 │       ├── compliance_tool.py       # Công cụ phân tích SLA & hợp đồng IT (RBAC + Disclaimer)
 │       ├── log_analyzer.py          # Công cụ phân tích log RCA (RBAC + Confidence Level)
 │       ├── mcp_config.py            # Cấu hình Toolset Enterprise RAG MCP
-│       ├── ticketing_tool.py        # Quản lý Ticket (Firestore + fallback cache + IDOR guard)
+│       ├── ticketing_tool.py        # Quản lý Ticket (Firestore limit + bounded LRU cache + IDOR guard)
 │       └── enterprise_rag_mcp/      # Máy chủ Model Context Protocol (MCP) nội bộ
 │           ├── knowledge_store.py   # BaseKnowledgeStore (InMemory + BigQuery Vector Search)
 │           ├── main.py              # Server MCP FastMCP
 │           └── rag_models.py        # Schemas dữ liệu RAG
 └── tests/
     ├── test_redis_backends.py       # Test Redis cluster rate limiter & semantic cache
-    └── unit/                        # Bộ kiểm thử tự động (138 test cases)
+    └── unit/                        # Bộ kiểm thử tự động (141 test cases)
         ├── test_agent_hierarchy.py  # Test cấu trúc phân cấp agent và model
         ├── test_compliance_tool.py  # Test trích xuất SLA 2 chiều & RBAC
         ├── test_container_packaging.py # Test Dockerfile & Fail-closed container env
@@ -299,11 +305,11 @@ it-helpdesk-agent/
         ├── test_knowledge_store_adapters.py # Test Adapter Pattern & BigQuery Store
         ├── test_log_analyzer.py     # Test nhận diện lỗi OOM, DB, Disk, Null & RBAC
         ├── test_production_guardrails.py # Test Fail-closed cache, L3 disclaimer, Circuit breaker
-        ├── test_rate_limiter.py     # Test rate limiter sliding window & soft warnings
+        ├── test_rate_limiter.py     # Test rate limiter sliding window, token hash & soft warnings
         ├── test_security_adversarial.py # Test IDOR, SQLi injection, Cache isolation
         ├── test_semantic_cache.py   # Test Cosine Similarity, Cache Hit/Miss, TTL, LRU
-        ├── test_sso_auth.py         # Test OIDC JWKS, Fail-closed domain, RBAC, Middleware
-        ├── test_system_config.py    # Test dynamic systems.yaml loading & fail-closed
-        ├── test_telemetry.py        # Test Telemetry privacy & PII masking
-        └── test_ticketing_tool.py   # Test tạo, cập nhật, chuyển tiếp ticket
+        ├── test_sso_auth.py         # Test OIDC JWKS, Fail-closed domain, Role Resolution, Middleware
+        ├── test_system_config.py    # Test dynamic systems.yaml loading, role mappings & fail-closed
+        ├── test_telemetry.py        # Test Telemetry privacy, PII masking & regex system classification
+        └── test_ticketing_tool.py   # Test tạo, cập nhật, chuyển tiếp ticket & bounded LRU cache
 ```

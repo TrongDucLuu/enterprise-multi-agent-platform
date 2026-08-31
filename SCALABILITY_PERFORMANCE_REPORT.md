@@ -133,3 +133,15 @@ Nhờ kiến trúc 3 tầng phối hợp với Semantic Cache, cơ cấu chi ph�
    - Khi Redis timeout quá 2.000ms, hệ thống ghi nhận `WARNING` và chuyển tiếp câu hỏi sang Agent xử lý trực tiếp.
 4. **Direct VPC Egress**:
    - Cloud Run Gen2 kết nối trực tiếp đến Subnet `10.10.0.0/24` không cần thông qua Serverless VPC Access Connector truyền thống, giảm $100\%$ độ trễ overhead và tiết kiệm chi phí connector.
+
+---
+
+## 7. Đảm Bảo Ổn Định Bộ Nhớ & Tối Ưu Truy Vấn (Memory Stability & Bounded Resource Control)
+
+1. **Chống Rò Rỉ Bộ Nhớ (Bounded LRU Caches)**:
+   - Bộ nhớ đệm fallback `_TICKETS_DB` và Semantic In-Memory Cache được cấu hình cứng giới hạn `maxsize=1000` (sử dụng thread-safe `OrderedDict`). Khi đạt ngưỡng, các phần tử cũ nhất (LRU) sẽ tự động bị loại bỏ, ngăn ngừa tình trạng OOM (Out Of Memory) ngay cả khi ứng dụng chạy hàng tháng không restart.
+2. **Tối Ưu Hóa Truy Vấn Firestore & Tránh Full-Scan**:
+   - Toàn bộ truy vấn danh sách ticket cá nhân (`list_user_tickets`) bắt buộc áp dụng bộ lọc `FieldFilter("user_id", "==", user_id)` và giới hạn cứng `.limit(50)`. Điều này triệt tiêu nguy cơ tải toàn bộ collection vào RAM khi số lượng ticket doanh nghiệp vượt mốc hàng chục nghìn bản ghi.
+3. **Deterministic SHA-256 Memory Profiling**:
+   - Sử dụng `hashlib.sha256()` thay thế cho hàm `hash()` của Python để định danh Rate Limiting Key và Telemetry Token, triệt tiêu nguy cơ bùng nổ không gian khóa (key collision/bloat) giữa các Uvicorn workers.
+

@@ -39,6 +39,42 @@ shared_admin_roles:
   - "support_agent"
   - "sysadmin"
 
+# Ánh xạ vai trò thực tế cho người dùng SSO (Google OIDC / Enterprise Email)
+# Thứ tự ưu tiên: 1. YAML mapping -> 2. Firestore 'user_roles' -> 3. Token claim -> 4. Base 'employee'
+user_role_mappings:
+  "admin@company.com": ["it_admin", "sysadmin"]
+  "lead_accountant@company.com": ["accountant", "erp_user"]
+  "procurement_lead@company.com": ["procurement_lead", "erp_user"]
+  "hr_director@company.com": ["hr_manager", "hr_specialist"]
+
+# Từ khóa đặc thù nhận diện hệ thống phục vụ phân tích Telemetry và Routing (Word Boundary \b)
+domain_keywords:
+  ERP:
+    - "sap"
+    - "oracle"
+    - "po"
+    - "purchase order"
+    - "me21n"
+    - "me29n"
+    - "hóa đơn"
+    - "mua sắm"
+    - "kế toán"
+  HRM:
+    - "workday"
+    - "nghỉ phép"
+    - "bảo hiểm"
+    - "chấm công"
+    - "lương"
+    - "onboarding"
+    - "hợp đồng lao động"
+  CRM:
+    - "salesforce"
+    - "lead"
+    - "khách hàng"
+    - "quota"
+    - "deal"
+    - "pipeline"
+
 # Danh mục hệ thống nghiệp vụ của khách hàng
 systems:
   ERP:
@@ -80,7 +116,9 @@ systems:
 ```
 
 > [!IMPORTANT]
-> **Quy tắc đặt tên:** Tên hệ thống (key) chỉ bao gồm chữ cái in hoa và số (`[A-Z0-9]+`), độ dài tối đa 20 ký tự. Từ khóa `ALL` là từ khóa dành riêng cho Security Trimming, nghiêm cấm đặt tên hệ thống là `ALL`.
+> **Quy tắc Phân quyền & Định danh:**
+> 1. **Cấp Role thật:** Google ID Token mặc định không chứa claim `roles`. Quản trị viên khai báo danh sách email nhân sự đặc quyền trong `user_role_mappings` hoặc kích hoạt đồng bộ qua Firestore collection `user_roles` (`USE_FIRESTORE_ROLES=true`). Mọi người dùng không nằm trong danh sách đặc quyền đều tự động nhận role cơ bản `employee`.
+> 2. **Quy tắc đặt tên hệ thống:** Tên hệ thống (key) chỉ bao gồm chữ cái in hoa và số (`[A-Z0-9]+`), độ dài tối đa 20 ký tự. Từ khóa `ALL` là từ khóa dành riêng cho Security Trimming, nghiêm cấm đặt tên hệ thống là `ALL`.
 
 ---
 
@@ -132,29 +170,36 @@ retrieval:
 
 ---
 
-### Bước 4: Chuẩn Bị & Nạp Dữ Liệu (Ingestion)
+### Bước 4: Chuẩn Bị & Nạp Dữ Liệu (Modular Ingestion Pipeline)
 
-Tập hợp tài liệu tri thức của khách hàng theo định dạng hỗ trợ:
-- `.md` / `.txt` (Hỗ trợ cấu trúc heading `#`, `##`, `###` trích xuất `section_hierarchy`)
-- `.docx` (Hỗ trợ cấu trúc Style Heading 1, 2, 3)
-- `.pdf` (Trích xuất văn bản phẳng hoặc Document AI Layout)
-- `.jsonl` (Dữ liệu bài viết có cấu trúc sẵn)
+Toàn bộ pipeline nạp dữ liệu được cấu trúc dạng package mở rộng [`scripts/ingest/`](file:///Users/luuduc/.gemini/antigravity/scratch/it-helpdesk-agent/scripts/ingest/):
+- **`parsers.py`**: Xử lý đa định dạng (`.md`, `.txt`, `.docx`, `.pdf` qua PyPDF hoặc Document AI Layout, `.jsonl`).
+- **`chunkers.py`**: Phân chia đoạn tri thức đa chiến lược (Fixed, Semantic, Tiered Section-Aware).
+- **`embedders.py`**: Sinh dense vector embeddings từ Vertex AI với cơ chế Fail-Closed.
+- **`loaders.py`**: Quản lý Staging BigQuery, MERGE Atomic Upsert, dọn dẹp Chunk mồ côi và IVF Vector Index.
+- **`scripts/ingest_knowledge_base.py`**: Giao diện dòng lệnh CLI Driver tương thích ngược.
 
-Chạy lệnh nạp tài liệu vào BigQuery Vector Search:
+Tập hợp tài liệu tri thức của khách hàng theo định dạng hỗ trợ và chạy lệnh nạp:
 
 ```bash
-# Nạp từ thư mục tài liệu với hệ thống mặc định là ERP
+# Nạp từ thư mục tài liệu với hệ thống mặc định là ERP (Dry run kiểm tra trước)
+python scripts/ingest_knowledge_base.py \
+    --source-dir="data/knowledge_base/" \
+    --default-system="ERP" \
+    --dry-run
+
+# Nạp chính thức vào BigQuery Production
 python scripts/ingest_knowledge_base.py \
     --project-id="your-gcp-project-id" \
     --dataset-id="it_helpdesk_kb" \
     --table-name="knowledge_articles" \
-    --data-dir="/path/to/customer/docs" \
+    --source-dir="/path/to/customer/docs" \
     --default-system="ERP"
 ```
 
 Quá trình nạp tự động:
 1. Trích xuất văn bản và phân cấp cây tài liệu (`section_hierarchy` gồm `h1, h2, h3`).
-2. Thực hiện CDC pre-check bỏ qua sinh vector trùng lặp.
+2. Thực hiện CDC pre-check (SHA-256) bỏ qua sinh vector trùng lặp.
 3. Batch load vào Staging Table và Atomic `MERGE` vào bảng đích.
 4. Tự động dọn dẹp các chunk mồ côi (orphaned chunks).
 5. Tự động kiểm tra/khởi tạo BigQuery IVF Vector Index với mệnh đề `STORING (system, category, id, title, content, section_hierarchy)`.
@@ -199,7 +244,7 @@ python scripts/ingest_knowledge_base.py \
     --project-id="$PROJECT_ID" \
     --dataset-id="$DATASET_ID" \
     --table-name="knowledge_articles" \
-    --data-dir="./knowledge_base_files"
+    --source-dir="./knowledge_base_files"
 ```
 
 ---
@@ -225,6 +270,8 @@ min_instance_count               = 2
 max_instance_count               = 40
 max_instance_request_concurrency = 8
 l3_rate_limit_per_minute         = 10
+telemetry_anonymize_users        = true
+telemetry_include_query          = false
 ```
 
 ### 4.2. Chạy Kiểm Thử Tải (Pre-GoLive Load Test Benchmark)
@@ -249,14 +296,18 @@ locust -f scripts/load_test/locustfile.py --host="https://helpdesk.customer.corp
 
 | Hạng mục kiểm tra | Tiêu chuẩn đánh giá | Trạng thái |
 | :--- | :--- | :--- |
-| **Config Schema Validation** | Không chứa ký tự đặc biệt, không dùng key `ALL`. Fail-closed với khối `retrieval`. |  Bắt buộc |
-| **Fail-Closed Protection** | Cấu hình sai YAML hoặc thiếu Processor ID sẽ dừng nạp ngay lập tức. |  Bắt buộc |
-| **SSO & RBAC Alignment** | Tất cả vai trò trong `systems.yaml` phải khớp với claim SSO OIDC của khách hàng. |  Bắt buộc |
-| **BigQuery Pre-Filtering & Index** | Vector search dùng Pre-Filter subquery trong tham số 1 của `VECTOR_SEARCH` và DDL có `STORING`. |  Bắt buộc |
-| **Vector Index Coverage** | Giám sát qua `INFORMATION_SCHEMA.VECTOR_INDEXES`, cảnh báo nếu coverage = 0% trên tập dữ liệu lớn. |  Bắt buộc |
-| **Section Hierarchy** | Trường RECORD `section_hierarchy` được trích xuất và lưu trữ đầy đủ trong BigQuery. |  Bắt buộc |
-| **Deduplication & CDC** | Hash `content_hash` được cập nhật chính xác, không trùng lặp ID trong staging. |  Bắt buộc |
-| **Redis Shared State & HA** | Memorystore Redis kết nối qua Direct VPC Egress, Rate Limit Fail-Open và Cache Soft Fail-Closed. |  Bắt buộc |
-| **Load Test Benchmark** | Đạt p95 Latency < 2.5s ở bậc tải Peak CCU theo cam kết SLA. |  Bắt buộc |
+| **Config Schema Validation** | Không chứa ký tự đặc biệt, không dùng key `ALL`. Khai báo `user_role_mappings` và `domain_keywords`. | ✅ Bắt buộc |
+| **Fail-Closed Protection** | Cấu hình sai YAML hoặc thiếu Processor ID sẽ dừng nạp ngay lập tức. | ✅ Bắt buộc |
+| **SSO & Real RBAC Role Mapping** | Ánh xạ vai trò chính xác qua YAML hoặc Firestore collection `user_roles`. User ngoài danh sách mặc định là `employee`. | ✅ Bắt buộc |
+| **Container Hardening** | Chạy dưới quyền Non-Root `USER appuser` (uid=10001) với `HEALTHCHECK` tích hợp. | ✅ Bắt buộc |
+| **Production API Shielding** | `/docs`, `/redoc`, `/openapi.json` được tự động tắt trên Production. | ✅ Bắt buộc |
+| **Rate Limiting Hardening** | Rate limit key dùng token-hash hoặc client IP đằng sau Load Balancer; SHA-256 xác định đa worker. | ✅ Bắt buộc |
+| **Telemetry Privacy (Fail-Closed)** | Mặc định `TELEMETRY_ANONYMIZE_USERS=true`, `TELEMETRY_INCLUDE_QUERY=false`. Độ trễ đo bằng `perf_counter()`. | ✅ Bắt buộc |
+| **BigQuery Pre-Filtering & Index** | Vector search dùng Pre-Filter subquery trong tham số 1 của `VECTOR_SEARCH` và DDL có `STORING`. | ✅ Bắt buộc |
+| **Vector Index Coverage** | Giám sát qua `INFORMATION_SCHEMA.VECTOR_INDEXES`, cảnh báo nếu coverage = 0% trên tập dữ liệu lớn. | ✅ Bắt buộc |
+| **Section Hierarchy** | Trường RECORD `section_hierarchy` được trích xuất và lưu trữ đầy đủ trong BigQuery. | ✅ Bắt buộc |
+| **Deduplication & CDC** | Hash `content_hash` bằng SHA-256 được cập nhật chính xác, không trùng lặp ID trong staging. | ✅ Bắt buộc |
+| **Redis Shared State & HA** | Memorystore Redis kết nối qua Direct VPC Egress, Rate Limit Fail-Open và Cache Soft Fail-Closed / RediSearch. | ✅ Bắt buộc |
+| **Load Test Benchmark** | Đạt p95 Latency < 2.5s ở bậc tải Peak CCU theo cam kết SLA. | ✅ Bắt buộc |
 
 
