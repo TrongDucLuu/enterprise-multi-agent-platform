@@ -23,9 +23,17 @@ from it_helpdesk_agent.tools.compliance_tool import review_it_contract_sla
 
 PROJECT_ID, MODEL_LOC, SERVICE_LOC, SECRETS = init_environment()
 
+# Dynamic model selection for Enterprise SLAs (supports GA models like gemini-2.5-flash/pro or preview)
+USE_GA_MODELS = os.getenv("USE_GA_MODELS", "false").lower() in ("true", "1", "yes")
+FAST_MODEL_DEFAULT = "gemini-2.5-flash" if USE_GA_MODELS else "gemini-3-flash-preview"
+REASONING_MODEL_DEFAULT = "gemini-2.5-pro" if USE_GA_MODELS else "gemini-3-pro-preview"
+
+FAST_MODEL_NAME = os.getenv("FAST_MODEL_NAME", FAST_MODEL_DEFAULT)
+REASONING_MODEL_NAME = os.getenv("REASONING_MODEL_NAME", REASONING_MODEL_DEFAULT)
+
 # 1. Standard fast model for Triage, L1 and L2 agents
 fast_model = Gemini(
-    model="gemini-3-flash-preview",
+    model=FAST_MODEL_NAME,
     vertexai=True,
     project=PROJECT_ID,
     location=MODEL_LOC,
@@ -35,7 +43,7 @@ fast_model = Gemini(
 # 2. High-reasoning pro model for L3 deep diagnostics & compliance analysis
 # Configured with attempts=2 to prevent runaway token costs on expensive reasoning retries
 high_reasoning_model = Gemini(
-    model="gemini-3-pro-preview",
+    model=REASONING_MODEL_NAME,
     vertexai=True,
     project=PROJECT_ID,
     location=MODEL_LOC,

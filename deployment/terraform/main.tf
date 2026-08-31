@@ -291,6 +291,18 @@ resource "google_cloud_run_v2_service" "default" {
         name  = "USE_VERTEX_EMBEDDING"
         value = tostring(var.use_vertex_embedding)
       }
+      env {
+        name  = "SYSTEMS_CONFIG_PATH"
+        value = var.systems_config_path
+      }
+      env {
+        name  = "FAST_MODEL_NAME"
+        value = var.fast_model_name
+      }
+      env {
+        name  = "REASONING_MODEL_NAME"
+        value = var.reasoning_model_name
+      }
 
       resources {
         limits = {

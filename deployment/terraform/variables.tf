@@ -136,4 +136,22 @@ variable "use_vertex_embedding" {
   default     = true
 }
 
+variable "systems_config_path" {
+  description = "Path to the systems and RBAC configuration YAML file"
+  type        = string
+  default     = "/code/config/systems.yaml"
+}
+
+variable "fast_model_name" {
+  description = "Gemini model name for standard triage, L1 and L2 agents (e.g. gemini-2.5-flash or gemini-3-flash-preview)"
+  type        = string
+  default     = "gemini-3-flash-preview"
+}
+
+variable "reasoning_model_name" {
+  description = "Gemini model name for L3 reasoning diagnostics & compliance (e.g. gemini-2.5-pro or gemini-3-pro-preview)"
+  type        = string
+  default     = "gemini-3-pro-preview"
+}
+
 

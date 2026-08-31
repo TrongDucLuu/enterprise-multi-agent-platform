@@ -129,7 +129,14 @@ async def query_semantic_cache(
         return {"status": "hit", "result": match}
     return {"status": "miss", "message": "No semantically similar query found in cache."}
 
-# 4. Development-Only Mock Token Minting Route (Omitted in Production)
+# 4. Product Analytics & Telemetry Aggregation Endpoint
+@app.get("/api/analytics/summary", tags=["Product Telemetry & Analytics"])
+async def get_analytics_summary(user: SSOUser = Depends(get_current_user)):
+    """Returns aggregated product metrics: Cache Hit Rate, Tier Distribution, and Query Latency."""
+    from it_helpdesk_agent.app_utils.telemetry import ProductMetricsCollector
+    return ProductMetricsCollector.get_summary_stats()
+
+# 5. Development-Only Mock Token Minting Route (Omitted in Production)
 if ALLOW_LOCAL_DEV_SSO:
     @app.post("/api/auth/dev-token", tags=["Development Only"])
     async def generate_dev_sso_token(

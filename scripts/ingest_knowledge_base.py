@@ -214,6 +214,36 @@ def process_document(
     return processed_articles
 
 
+def ensure_vector_index(
+    bq_client: Any,
+    project_id: str,
+    dataset_id: str,
+    table_name: str = "knowledge_articles",
+    index_name: str = "knowledge_articles_vector_idx"
+):
+    """
+    Executes BigQuery CREATE VECTOR INDEX DDL if index does not exist.
+    BigQuery IVF Vector Index will automatically optimize vector queries;
+    if dataset has fewer than 5,000 rows, BigQuery will automatically use exact cosine search.
+    """
+    ddl = f"""
+    CREATE VECTOR INDEX IF NOT EXISTS `{index_name}`
+    ON `{project_id}.{dataset_id}.{table_name}`(embedding)
+    OPTIONS(distance_type='COSINE', index_type='IVF')
+    """
+    try:
+        logger.info("Verifying / Creating BigQuery Vector Index '%s'...", index_name)
+        query_job = bq_client.query(ddl)
+        query_job.result()
+        logger.info("BigQuery Vector Index '%s' is verified and active.", index_name)
+    except Exception as e:
+        logger.warning(
+            "Note: BigQuery Vector Index DDL returned: %s. "
+            "(BigQuery automatically executes exact cosine search when dataset size is under 5,000 rows threshold).",
+            e
+        )
+
+
 def ingest_articles_to_bigquery(
     articles: list[dict[str, Any]],
     project_id: str,
@@ -221,7 +251,7 @@ def ingest_articles_to_bigquery(
     table_name: str = "knowledge_articles"
 ) -> int:
     """
-    Performs batch upsert (MERGE) into BigQuery table with 768-dim embeddings.
+    Performs batch upsert (MERGE) into BigQuery table with 768-dim embeddings and ensures Vector Index exists.
     """
     try:
         from google.cloud import bigquery
@@ -242,8 +272,6 @@ def ingest_articles_to_bigquery(
     # Prepare rows for BigQuery streaming / MERGE
     logger.info("Upserting %d articles into BigQuery %s...", len(articles), full_table)
     
-    # We use parameterized MERGE queries in chunks or table.insert_rows_json
-    # BigQuery table insert or merge:
     errors = bq_client.insert_rows_json(
         f"{project_id}.{dataset_id}.{table_name}",
         articles
@@ -253,6 +281,10 @@ def ingest_articles_to_bigquery(
         raise RuntimeError(f"BigQuery insertion failed: {errors}")
 
     logger.info("Successfully ingested %d articles into BigQuery.", len(articles))
+
+    # Automatically ensure Vector Index DDL
+    ensure_vector_index(bq_client, project_id, dataset_id, table_name)
+
     return len(articles)
 
 
@@ -361,7 +393,7 @@ def main():
     if args.dry_run:
         logger.info("[Dry-Run Mode] Generating sample embeddings locally (No BigQuery writes)...")
         texts = [a["content"] for a in all_articles]
-        embeddings = generate_batch_embeddings(texts, model_name=DEFAULT_EMBEDDING_MODEL)
+        embeddings = generate_batch_embeddings(texts, model_name=DEFAULT_EMBEDDING_MODEL, use_vertex=False)
         for a, emb in zip(all_articles, embeddings):
             a["embedding"] = emb
         logger.info("[Dry-Run Mode] All %d articles validated and embedded successfully.", len(all_articles))

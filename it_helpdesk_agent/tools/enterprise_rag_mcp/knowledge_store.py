@@ -270,10 +270,10 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
         if clean_system not in valid_systems:
             clean_system = "ALL"
 
-        query_vec = self._generate_embedding(query)
-        full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
-
         try:
+            query_vec = self._generate_embedding(query)
+            full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
+
             from google.cloud import bigquery
             query_params = [
                 bigquery.ArrayQueryParameter("query_vector", "FLOAT64", query_vec),
