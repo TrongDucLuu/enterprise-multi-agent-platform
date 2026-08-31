@@ -270,3 +270,97 @@ def test_document_shrinks_triggers_orphaned_chunk_cleanup(monkeypatch):
     assert any("DELETE FROM `test-proj.test_kb.knowledge_articles`" in q for q in all_queries)
     assert any("WHERE source_uri IN UNNEST(@source_uris)" in q for q in all_queries)
     assert any("NOT IN (\n                SELECT id FROM `test-proj.test_kb.knowledge_articles_staging_" in q or "SELECT id FROM" in q for q in all_queries)
+
+
+def test_parse_jsonl_disambiguates_same_title_without_source_uri_using_line_no(tmp_path):
+    """
+    Verifies that two JSONL records with identical titles and no explicit source_uri
+    receive distinct source_uris (#L1, #L2) and produce distinct deterministic IDs.
+    """
+    jsonl_file = tmp_path / "colliding.jsonl"
+    jsonl_file.write_text(
+        json.dumps({"system": "ERP", "title": "Cấu hình SAP", "content": "Nội dung 1"}) + "\n" +
+        json.dumps({"system": "ERP", "title": "Cấu hình SAP", "content": "Nội dung 2"}) + "\n",
+        encoding="utf-8"
+    )
+
+    parsed = DocumentParser.parse_jsonl(jsonl_file)
+    assert len(parsed) == 2
+    assert parsed[0]["source_uri"].endswith("#L1")
+    assert parsed[1]["source_uri"].endswith("#L2")
+
+    articles_1 = process_document(parsed[0])
+    articles_2 = process_document(parsed[1])
+
+    assert len(articles_1) == 1
+    assert len(articles_2) == 1
+    # Distinct IDs guaranteed!
+    assert articles_1[0]["id"] != articles_2[0]["id"]
+
+
+def test_ingest_articles_deduplicates_duplicate_ids_and_uses_sql_qualify(monkeypatch, caplog):
+    """
+    Verifies that ingest_articles_to_bigquery:
+    1. Deduplicates input chunks having identical ID in Python, keeping the latest.
+    2. Logs a clear warning for operators.
+    3. Uses QUALIFY ROW_NUMBER() in MERGE SQL as a fail-safe against BigQuery MERGE runtime error.
+    """
+    mock_bq_module = MagicMock()
+    mock_client = MagicMock()
+    mock_load_job = MagicMock()
+    mock_client.load_table_from_json.return_value = mock_load_job
+    mock_query_job = MagicMock()
+    mock_query_job.num_dml_affected_rows = 0
+    mock_client.query.return_value = mock_query_job
+    mock_bq_module.Client.return_value = mock_client
+    monkeypatch.setattr("google.cloud.bigquery", mock_bq_module, raising=False)
+
+    colliding_articles = [
+        {
+            "id": "ERP-KB-02738B5E",
+            "system": "ERP",
+            "title": "Bản ghi cũ",
+            "category": "Finance",
+            "content": "Nội dung cũ",
+            "keywords": ["sap"],
+            "source_uri": "data/erp.jsonl",
+            "content_hash": "hash_old",
+            "updated_at": "2026-08-31T01:00:00Z"
+        },
+        {
+            "id": "ERP-KB-02738B5E",
+            "system": "ERP",
+            "title": "Bản ghi mới",
+            "category": "Finance",
+            "content": "Nội dung mới",
+            "keywords": ["sap"],
+            "source_uri": "data/erp.jsonl",
+            "content_hash": "hash_new",
+            "updated_at": "2026-08-31T02:00:00Z"
+        }
+    ]
+
+    import logging
+    with caplog.at_level(logging.WARNING):
+        count = ingest_articles_to_bigquery(
+            colliding_articles,
+            project_id="test-proj",
+            dataset_id="test_kb",
+            table_name="knowledge_articles"
+        )
+
+    assert count == 1  # Deduplicated from 2 to 1
+    assert "Phát hiện 1 chunk trùng ID" in caplog.text
+    assert "ERP-KB-02738B5E" in caplog.text
+
+    # Verify load job received the deduped list with the latest record
+    loaded_articles = mock_client.load_table_from_json.call_args[0][0]
+    assert len(loaded_articles) == 1
+    assert loaded_articles[0]["title"] == "Bản ghi mới"
+
+    # Verify QUALIFY ROW_NUMBER() is present in MERGE query
+    all_queries = [c[0][0] for c in mock_client.query.call_args_list]
+    merge_queries = [q for q in all_queries if "MERGE `test-proj.test_kb.knowledge_articles` T" in q]
+    assert len(merge_queries) == 1
+    assert "QUALIFY ROW_NUMBER() OVER (PARTITION BY id ORDER BY updated_at DESC) = 1" in merge_queries[0]
+

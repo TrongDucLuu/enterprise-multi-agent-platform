@@ -135,6 +135,8 @@ class DocumentParser:
                     continue
                 try:
                     data = json.loads(line)
+                    # Gán line_no vào default source_uri để phân biệt các dòng khác nhau trong cùng file JSONL
+                    source_uri = data.get("source_uri") or f"{file_path}#L{line_no}"
                     articles.append({
                         "id": data.get("id"),
                         "system": data.get("system"),
@@ -142,7 +144,7 @@ class DocumentParser:
                         "category": data.get("category", "General"),
                         "content": data.get("content", ""),
                         "keywords": data.get("keywords", []),
-                        "source_uri": data.get("source_uri", str(file_path)),
+                        "source_uri": source_uri,
                         "file_type": ".jsonl",
                     })
                 except json.JSONDecodeError as e:
@@ -301,6 +303,30 @@ def ingest_articles_to_bigquery(
         logger.info("No articles to ingest.")
         return 0
 
+    # Deduplicate input articles by 'id', keeping the latest entry
+    deduped_articles: dict[str, dict[str, Any]] = {}
+    duplicate_id_count = 0
+    duplicate_ids_sample: list[str] = []
+    for a in articles:
+        art_id = a.get("id")
+        if art_id:
+            if art_id in deduped_articles:
+                duplicate_id_count += 1
+                if len(duplicate_ids_sample) < 5:
+                    duplicate_ids_sample.append(art_id)
+            deduped_articles[art_id] = a
+        else:
+            deduped_articles[str(uuid.uuid4())] = a
+
+    if duplicate_id_count > 0:
+        logger.warning(
+            "Phát hiện %d chunk trùng ID trong tập nạp (ví dụ các ID: %s). "
+            "Hệ thống đã tự động loại bỏ bản ghi cũ và giữ bản ghi mới nhất để bảo vệ an toàn cho câu lệnh MERGE.",
+            duplicate_id_count,
+            ", ".join(duplicate_ids_sample)
+        )
+    articles = list(deduped_articles.values())
+
     try:
         from google.cloud import bigquery
     except ImportError:
@@ -397,10 +423,13 @@ def ingest_articles_to_bigquery(
         load_job.result()
         logger.info("Loaded %d articles into staging table.", len(articles))
 
-        # 5. Execute Atomic SQL MERGE from Staging into Target Table
+        # 5. Execute Atomic SQL MERGE from Staging into Target Table with deduplication fail-safe
         merge_sql = f"""
         MERGE {full_target_table} T
-        USING {full_staging_table} S
+        USING (
+          SELECT * FROM {full_staging_table}
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY id ORDER BY updated_at DESC) = 1
+        ) S
         ON T.id = S.id
         WHEN MATCHED AND (T.content_hash != S.content_hash OR T.content_hash IS NULL) THEN
           UPDATE SET
