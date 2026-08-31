@@ -8,7 +8,9 @@ resource "google_project_service" "services" {
     "aiplatform.googleapis.com",
     "secretmanager.googleapis.com",
     "logging.googleapis.com",
-    "bigquery.googleapis.com"
+    "bigquery.googleapis.com",
+    "firestore.googleapis.com",
+    "compute.googleapis.com"
   ])
   service            = each.key
   disable_on_destroy = false
@@ -31,7 +33,7 @@ resource "google_service_account" "agent_sa" {
   display_name = "IT Helpdesk Agent Service Account"
 }
 
-# 4. IAM Permissions for Vertex AI, BigQuery, Logging, and Secret Access
+# 4. IAM Permissions for Vertex AI, BigQuery, Firestore, Logging, and Secret Access
 resource "google_project_iam_member" "vertex_ai_user" {
   project = var.project_id
   role    = "roles/aiplatform.user"
@@ -41,6 +43,12 @@ resource "google_project_iam_member" "vertex_ai_user" {
 resource "google_project_iam_member" "bigquery_job_user" {
   project = var.project_id
   role    = "roles/bigquery.jobUser"
+  member  = "serviceAccount:${google_service_account.agent_sa.email}"
+}
+
+resource "google_project_iam_member" "firestore_user" {
+  project = var.project_id
+  role    = "roles/datastore.user"
   member  = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
@@ -77,7 +85,20 @@ resource "google_bigquery_dataset_iam_member" "kb_dataset_viewer" {
   member     = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-# 6. Secret Manager Configuration
+# 6. Firestore Database for Persistent Helpdesk Ticketing
+resource "google_firestore_database" "database" {
+  project     = var.project_id
+  name        = "(default)"
+  location_id = var.region
+  type        = "FIRESTORE_NATIVE"
+  
+  delete_protection_state = var.environment == "production" ? "DELETE_PROTECTION_ENABLED" : "DELETE_PROTECTION_DISABLED"
+  deletion_policy         = var.environment == "production" ? "ABANDON" : "DELETE"
+
+  depends_on = [google_project_service.services]
+}
+
+# 7. Secret Manager Configuration
 resource "google_secret_manager_secret" "agent_secrets" {
   project   = var.project_id
   for_each  = toset(keys(var.secrets))
@@ -102,15 +123,18 @@ resource "google_secret_manager_secret_iam_member" "secret_accessor" {
   member    = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-# 7. Cloud Run Service Deployment (Enterprise SSO Hardened)
+# 8. Cloud Run Service Deployment (Enterprise Production Ready)
 resource "google_cloud_run_v2_service" "default" {
   project  = var.project_id
   name     = var.service_name
   location = var.region
-  ingress  = "INGRESS_TRAFFIC_ALL"
+  ingress  = var.enable_load_balancer ? "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER" : "INGRESS_TRAFFIC_ALL"
 
   template {
-    service_account = google_service_account.agent_sa.email
+    service_account                  = google_service_account.agent_sa.email
+    timeout                          = "300s"
+    max_instance_request_concurrency = var.max_instance_request_concurrency
+    execution_environment            = "EXECUTION_ENVIRONMENT_GEN2"
     
     containers {
       image = "us-docker.pkg.dev/cloudrun/container/hello"
@@ -164,6 +188,22 @@ resource "google_cloud_run_v2_service" "default" {
         value = var.bigquery_kb_dataset
       }
       env {
+        name  = "USE_FIRESTORE_TICKETS"
+        value = tostring(var.use_firestore_tickets)
+      }
+      env {
+        name  = "RATE_LIMIT_ENABLED"
+        value = tostring(var.rate_limit_enabled)
+      }
+      env {
+        name  = "RATE_LIMIT_PER_MINUTE"
+        value = tostring(var.rate_limit_per_minute)
+      }
+      env {
+        name  = "AGENT_ENGINE_RESOURCE_NAME"
+        value = var.agent_engine_resource_name
+      }
+      env {
         name  = "SEMANTIC_CACHE_ENABLED"
         value = "true"
       }
@@ -177,6 +217,28 @@ resource "google_cloud_run_v2_service" "default" {
           cpu    = "2"
           memory = "2Gi"
         }
+      }
+
+      startup_probe {
+        http_get {
+          path = "/healthz"
+          port = 8080
+        }
+        initial_delay_seconds = 5
+        timeout_seconds       = 3
+        period_seconds        = 10
+        failure_threshold     = 10
+      }
+
+      liveness_probe {
+        http_get {
+          path = "/healthz"
+          port = 8080
+        }
+        initial_delay_seconds = 10
+        timeout_seconds       = 3
+        period_seconds        = 30
+        failure_threshold     = 3
       }
     }
 
@@ -197,5 +259,19 @@ resource "google_cloud_run_v2_service" "default" {
     ]
   }
 
-  depends_on = [google_project_service.services]
+  depends_on = [
+    google_project_service.services,
+    google_firestore_database.database
+  ]
 }
+
+# 9. Cloud Run Public Invoker IAM Policy (Application Auth is gated by SSO OIDC Middleware)
+resource "google_cloud_run_v2_service_iam_member" "invoker" {
+  count    = var.allow_unauthenticated ? 1 : 0
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.default.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+

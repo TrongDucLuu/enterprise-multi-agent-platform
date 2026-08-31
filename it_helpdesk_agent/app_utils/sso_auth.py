@@ -369,6 +369,7 @@ class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
     PUBLIC_PATHS = {
         "/healthz",
         "/health",
+        "/readyz",
         "/docs",
         "/openapi.json",
         "/redoc",

@@ -1,4 +1,5 @@
 import os
+import time
 import logging
 from fastapi import FastAPI, Depends, Query
 from google.adk.cli.fast_api import get_fast_api_app
@@ -74,6 +75,29 @@ app.add_middleware(SSOAuthenticationMiddleware)
 
 # 2. Outer layer: Rate Limiting Middleware (executes FIRST on incoming requests to drop DDoS/bot spam)
 app.add_middleware(RateLimitMiddleware)
+
+# 1. System Health & Readiness Endpoints (Used by Cloud Run startup/liveness probes & Load Balancer)
+@app.get("/healthz", tags=["Health"])
+@app.get("/health", tags=["Health"])
+async def health_check():
+    """Liveness probe endpoint confirming container availability."""
+    return {
+        "status": "healthy",
+        "service": "it-helpdesk-agent",
+        "timestamp": time.time()
+    }
+
+
+@app.get("/readyz", tags=["Health"])
+async def readiness_check():
+    """Readiness probe endpoint confirming system and semantic cache readiness."""
+    cache = get_semantic_cache()
+    return {
+        "status": "ready",
+        "service": "it-helpdesk-agent",
+        "cache_entries": len(cache._entries)
+    }
+
 
 # 2. Authenticated user profile inspection endpoint
 @app.get("/api/auth/me", tags=["Authentication"])

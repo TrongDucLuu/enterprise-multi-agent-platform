@@ -140,3 +140,120 @@ def test_in_memory_rate_limiter_auto_cleanup():
     assert "expired_key" not in limiter._history
     assert "active_key" in limiter._history
 
+
+def test_route_ticket_to_tier_rate_limits_by_caller_not_owner():
+    """
+    Validates that when Admin Alice escalates a ticket belonging to Employee Bob to L3,
+    the L3 rate limit quota is charged to Alice (the caller), NOT Bob (the ticket owner).
+    """
+    import contextvars
+    from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
+    from it_helpdesk_agent.app_utils.rate_limiter import get_l3_rate_limiter, check_l3_rate_limit
+    from it_helpdesk_agent.tools.ticketing_tool import create_helpdesk_ticket, route_ticket_to_tier
+
+    l3_limiter = get_l3_rate_limiter()
+    l3_limiter._history["l3_user:alice-admin"] = []
+    l3_limiter._history["l3_user:bob-employee"] = []
+
+    # 1. Bob creates a ticket
+    bob = SSOUser(
+        user_id="bob-employee",
+        email="bob@company.com",
+        email_verified=True,
+        full_name="Bob Employee",
+        department="Finance",
+        roles=["employee"]
+    )
+    token_bob = current_sso_user.set(bob)
+    created = create_helpdesk_ticket(
+        user_id="bob-employee",
+        title="Complex DB deadlock issue",
+        description="Transaction timeout in finance DB",
+        category="Software",
+        priority="Critical"
+    )
+    current_sso_user.reset(token_bob)
+    ticket_id = created["ticket"]["id"]
+
+    # 2. Admin Alice escalates Bob's ticket to L3
+    alice = SSOUser(
+        user_id="alice-admin",
+        email="alice@company.com",
+        email_verified=True,
+        full_name="Alice Admin",
+        department="IT",
+        roles=["it_admin"]
+    )
+    token_alice = current_sso_user.set(alice)
+    res = route_ticket_to_tier(ticket_id, "L3_Deep_Diagnostics", "Deep analysis required")
+    current_sso_user.reset(token_alice)
+
+    assert res["status"] == "success"
+
+    # Alice's L3 quota should be charged (1 request in history)
+    assert len(l3_limiter._history.get("l3_user:alice-admin", [])) == 1
+
+    # Bob's L3 quota MUST NOT be charged (0 requests in history)
+    assert len(l3_limiter._history.get("l3_user:bob-employee", [])) == 0
+
+    # Verify Bob still has full 10 requests available
+    allowed, remaining, _ = check_l3_rate_limit("bob-employee")
+    assert allowed is True
+    assert remaining == 9  # Consumed this check call, confirming full quota was untouched
+
+
+def test_rate_limiter_middleware_leftmost_ip_extraction():
+    """
+    Validates that RateLimitMiddleware extracts the leftmost IP (the actual client)
+    from X-Forwarded-For when behind a Load Balancer / reverse proxy.
+    """
+    app = FastAPI()
+    limiter = InMemoryRateLimiter(requests_per_minute=2)
+    app.add_middleware(RateLimitMiddleware, limiter=limiter)
+
+    @app.get("/api/data")
+    def get_data():
+        return {"ok": True}
+
+    client = TestClient(app)
+
+    # Client IP: 198.51.100.10, Proxies: 10.0.0.1, 10.0.0.2
+    headers = {"X-Forwarded-For": "198.51.100.10, 10.0.0.1, 10.0.0.2"}
+
+    # 1st and 2nd requests from client 198.51.100.10 should succeed
+    r1 = client.get("/api/data", headers=headers)
+    assert r1.status_code == 200
+
+    r2 = client.get("/api/data", headers=headers)
+    assert r2.status_code == 200
+
+    # 3rd request from 198.51.100.10 should be rate limited (429)
+    r3 = client.get("/api/data", headers=headers)
+    assert r3.status_code == 429
+
+    # Another client IP: 203.0.113.50 passing through the SAME proxies should NOT be blocked!
+    headers2 = {"X-Forwarded-For": "203.0.113.50, 10.0.0.1, 10.0.0.2"}
+    r4 = client.get("/api/data", headers=headers2)
+    assert r4.status_code == 200
+
+
+def test_healthz_and_readyz_endpoints():
+    """
+    Validates that /healthz and /readyz endpoints return HTTP 200 without authentication.
+    """
+    from it_helpdesk_agent.fast_api_app import app
+    client = TestClient(app)
+
+    r_healthz = client.get("/healthz")
+    assert r_healthz.status_code == 200
+    assert r_healthz.json()["status"] == "healthy"
+
+    r_health = client.get("/health")
+    assert r_health.status_code == 200
+    assert r_health.json()["status"] in ["ok", "healthy"]
+
+    r_readyz = client.get("/readyz")
+    assert r_readyz.status_code == 200
+    assert r_readyz.json()["status"] == "ready"
+
+

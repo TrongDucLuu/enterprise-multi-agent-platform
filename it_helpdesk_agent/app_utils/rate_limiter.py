@@ -93,7 +93,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     FastAPI Middleware enforcing client rate limits per IP and SSO user.
     """
 
-    EXEMPT_PATHS = {"/", "/healthz", "/docs", "/openapi.json", "/redoc", "/favicon.ico"}
+    EXEMPT_PATHS = {"/", "/healthz", "/health", "/readyz", "/docs", "/openapi.json", "/redoc", "/favicon.ico"}
 
     def __init__(self, app, limiter: Optional[InMemoryRateLimiter] = None):
         super().__init__(app)
@@ -111,9 +111,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Safely extract client IP from trusted proxy or client host
         forwarded = request.headers.get("X-Forwarded-For", "").strip()
         if forwarded:
-            # Under Google Cloud Run / Load Balancer, the verified client IP is in X-Forwarded-For
+            # Under Google Cloud Load Balancer / Proxy, the originating client IP is the FIRST element (ips[0]).
+            # Using ips[-1] would mistakenly take the Load Balancer IP, collapsing all users into a single bucket.
             ips = [ip.strip()[:45] for ip in forwarded.split(",") if ip.strip()]
-            client_ip = ips[-1] if ips else "unknown"
+            client_ip = ips[0] if ips else "unknown"
+        elif request.headers.get("X-Real-IP"):
+            client_ip = request.headers.get("X-Real-IP", "").strip()[:45]
         elif request.client and request.client.host:
             client_ip = request.client.host[:45]
         else:

@@ -76,3 +76,52 @@ variable "min_instance_count" {
   default     = 0
 }
 
+variable "max_instance_request_concurrency" {
+  description = "Maximum concurrent requests per container instance (recommended 4-8 for LLM reasoning workloads)"
+  type        = number
+  default     = 8
+}
+
+variable "allow_unauthenticated" {
+  description = "Whether to allow unauthenticated public HTTP access at Cloud Run layer (SSO auth is enforced at application middleware)"
+  type        = bool
+  default     = true
+}
+
+variable "use_firestore_tickets" {
+  description = "Enable Google Cloud Firestore for persistent helpdesk ticket storage"
+  type        = bool
+  default     = true
+}
+
+variable "rate_limit_enabled" {
+  description = "Enable sliding window rate limiting"
+  type        = bool
+  default     = true
+}
+
+variable "rate_limit_per_minute" {
+  description = "Rate limit threshold per client per minute"
+  type        = number
+  default     = 60
+}
+
+variable "agent_engine_resource_name" {
+  description = "Pre-provisioned Vertex AI Agent Engine resource name (optional, overrides auto-creation at runtime)"
+  type        = string
+  default     = ""
+}
+
+variable "enable_load_balancer" {
+  description = "Provision a Google Cloud Global HTTPS Load Balancer with Cloud Armor WAF"
+  type        = bool
+  default     = false
+}
+
+variable "domain_name" {
+  description = "Custom domain name for the Load Balancer (e.g., helpdesk.corp.internal)"
+  type        = string
+  default     = ""
+}
+
+

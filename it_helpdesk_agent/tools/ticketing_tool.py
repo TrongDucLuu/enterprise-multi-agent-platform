@@ -44,7 +44,7 @@ def _get_firestore():
             _firestore_client = firestore.Client()
             logger.info("Connected to Google Cloud Firestore for persistent ticketing storage.")
         except Exception as e:
-            logger.warning(f"Firestore unavailable ({e}). Falling back to in-memory ticketing store.")
+            logger.error(f"CRITICAL: Firestore initialization failed ({e}) in production environment. Falling back to ephemeral in-memory store.")
             _firestore_client = None
     _firestore_initialized = True
     return _firestore_client
@@ -231,7 +231,17 @@ def route_ticket_to_tier(
 
     if target_tier in ["L3_Deep_Diagnostics", "L3"]:
         from it_helpdesk_agent.app_utils.rate_limiter import check_l3_rate_limit
-        allowed, rem, retry_after = check_l3_rate_limit(ticket.user_id)
+        # Rate limit based on the caller (not the ticket owner) - consistent with
+        # semantic_cache_before_model_callback in agent.py. If checked against ticket.user_id,
+        # an admin escalating another employee's ticket would deplete that employee's L3 quota.
+        try:
+            from it_helpdesk_agent.app_utils.sso_auth import get_current_sso_user
+            caller = get_current_sso_user()
+            caller_id = caller.user_id if caller else None
+        except Exception:
+            caller_id = None
+
+        allowed, rem, retry_after = check_l3_rate_limit(caller_id)
         if not allowed:
             return {
                 "status": "error",
