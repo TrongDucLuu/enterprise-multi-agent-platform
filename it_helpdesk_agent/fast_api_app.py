@@ -68,11 +68,12 @@ app: FastAPI = get_fast_api_app(
     otel_to_cloud=OTEL_TO_CLOUD,
 )
 
-# 1. Protect endpoints with rate limiting to prevent bot abuse and runaway demo costs
-app.add_middleware(RateLimitMiddleware)
-
-# 2. Protect ALL endpoints (Agent runs, streams, API calls) with global authentication middleware
+# Middleware Stack (Starlette executes in reverse registration order - LIFO):
+# 1. Inner layer: SSO Authentication Middleware (verifies JWT/OIDC after passing rate limiter)
 app.add_middleware(SSOAuthenticationMiddleware)
+
+# 2. Outer layer: Rate Limiting Middleware (executes FIRST on incoming requests to drop DDoS/bot spam)
+app.add_middleware(RateLimitMiddleware)
 
 # 2. Authenticated user profile inspection endpoint
 @app.get("/api/auth/me", tags=["Authentication"])

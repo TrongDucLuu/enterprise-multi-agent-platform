@@ -105,10 +105,11 @@ def test_semantic_cache_lru_eviction():
 
 
 @pytest.mark.asyncio
-async def test_semantic_cache_callbacks_roundtrip():
+async def test_semantic_cache_callbacks_roundtrip_authenticated_isolation():
     from unittest.mock import MagicMock
     from google.genai import types
     from google.adk.models import LlmRequest, LlmResponse
+    from it_helpdesk_agent.app_utils.sso_auth import current_sso_user, SSOUser
     from it_helpdesk_agent.agent import (
         semantic_cache_before_model_callback,
         semantic_cache_after_model_callback
@@ -117,41 +118,124 @@ async def test_semantic_cache_callbacks_roundtrip():
     cache = get_semantic_cache()
     cache.clear()
 
-    # 1. Setup mock context and query
+    # 1. Set current authenticated SSO user (Alice)
+    alice = SSOUser(user_id="alice_123", email="alice@corp.com", full_name="Alice Nguyen", roles=["employee"])
+    token_alice = current_sso_user.set(alice)
+
+    try:
+        mock_ctx = MagicMock()
+        mock_ctx._invocation_context.agent.name = "l1_selfservice_agent"
+        
+        mock_user_event = MagicMock()
+        mock_user_event.author = "user"
+        mock_user_event.content.parts = [types.Part.from_text(text="Hướng dẫn cài đặt VPN FortiClient trên macOS")]
+        mock_ctx._invocation_context._get_events.return_value = [mock_user_event]
+
+        req = LlmRequest(
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text="Hướng dẫn cài đặt VPN FortiClient trên macOS")]
+                )
+            ]
+        )
+
+        # 2. Before callback should miss initially
+        res_before = await semantic_cache_before_model_callback(mock_ctx, req)
+        assert res_before is None
+
+        # 3. Simulate Gemini responding and calling after_model_callback
+        simulated_resp = LlmResponse(
+            content=types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Để cài FortiClient trên macOS: 1. Tải DMG từ portal. 2. Cấp quyền System Extension.")]
+            )
+        )
+
+        await semantic_cache_after_model_callback(mock_ctx, simulated_resp)
+
+        # 4. For Alice: before callback MUST HIT
+        cached_res = await semantic_cache_before_model_callback(mock_ctx, req)
+        assert cached_res is not None
+        assert cached_res.custom_metadata.get("cached") is True
+        assert "Để cài FortiClient trên macOS" in cached_res.content.parts[0].text
+
+        # 5. Multi-Tenant Isolation Check: Switch context to Bob
+        bob = SSOUser(user_id="bob_456", email="bob@corp.com", full_name="Bob Tran", roles=["employee"])
+        token_bob = current_sso_user.set(bob)
+        try:
+            # For Bob: Same query MUST MISS because cache is strictly private to Alice!
+            res_bob = await semantic_cache_before_model_callback(mock_ctx, req)
+            assert res_bob is None
+        finally:
+            current_sso_user.reset(token_bob)
+
+    finally:
+        current_sso_user.reset(token_alice)
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_after_callback_fails_closed_when_unauthenticated():
+    from unittest.mock import MagicMock
+    from google.genai import types
+    from google.adk.models import LlmResponse
+    from it_helpdesk_agent.agent import semantic_cache_after_model_callback
+
+    cache = get_semantic_cache()
+    cache.clear()
+
+    # Ensure no SSO user in contextvar
     mock_ctx = MagicMock()
     mock_ctx._invocation_context.agent.name = "l1_selfservice_agent"
-    
     mock_user_event = MagicMock()
     mock_user_event.author = "user"
-    mock_user_event.content.parts = [types.Part.from_text(text="Hướng dẫn cài đặt VPN FortiClient trên macOS")]
+    mock_user_event.content.parts = [types.Part.from_text(text="Lương tháng này khi nào được chuyển?")]
     mock_ctx._invocation_context._get_events.return_value = [mock_user_event]
 
-    req = LlmRequest(
-        contents=[
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text="Hướng dẫn cài đặt VPN FortiClient trên macOS")]
-            )
-        ]
-    )
-
-    # 2. Before callback should miss initially
-    res_before = await semantic_cache_before_model_callback(mock_ctx, req)
-    assert res_before is None
-
-    # 3. Simulate Gemini responding and calling after_model_callback
     simulated_resp = LlmResponse(
         content=types.Content(
             role="model",
-            parts=[types.Part.from_text(text="Để cài FortiClient trên macOS: 1. Tải DMG từ portal. 2. Cấp quyền System Extension trong Security Settings.")]
+            parts=[types.Part.from_text(text="Lương sẽ chuyển vào ngày 25 hàng tháng.")]
         )
     )
 
+    # Calling without authenticated user MUST FAIL CLOSED and NOT insert into cache
     await semantic_cache_after_model_callback(mock_ctx, simulated_resp)
+    assert len(cache._entries) == 0
 
-    # 4. Now before callback should hit directly without calling Gemini!
-    cached_res = await semantic_cache_before_model_callback(mock_ctx, req)
-    assert cached_res is not None
-    assert cached_res.custom_metadata.get("cached") is True
-    assert "Để cài FortiClient trên macOS" in cached_res.content.parts[0].text
+
+@pytest.mark.asyncio
+async def test_contextvar_propagation_across_threadpool():
+    """
+    Verifies that current_sso_user contextvar correctly propagates across asyncio
+    and concurrent.futures threadpools (preventing identity loss during agent execution).
+    """
+    import asyncio
+    import concurrent.futures
+    from it_helpdesk_agent.app_utils.sso_auth import current_sso_user, SSOUser
+
+    user = SSOUser(user_id="engineer_007", email="dev@corp.com", full_name="Dev User", roles=["sys_admin"])
+    token = current_sso_user.set(user)
+
+    try:
+        # 1. Propagation across asyncio tasks
+        async def sub_task():
+            u = current_sso_user.get()
+            return u.user_id if u else None
+
+        task_user_id = await asyncio.create_task(sub_task())
+        assert task_user_id == "engineer_007"
+
+        # 2. Propagation across to_thread (asyncio threadpool)
+        def thread_task():
+            # In Python 3.11+, context is automatically propagated by asyncio.to_thread
+            u = current_sso_user.get()
+            return u.user_id if u else None
+
+        thread_user_id = await asyncio.to_thread(thread_task)
+        assert thread_user_id == "engineer_007"
+
+    finally:
+        current_sso_user.reset(token)
+
 

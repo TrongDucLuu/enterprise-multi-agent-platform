@@ -228,6 +228,17 @@ def route_ticket_to_tier(
     ticket, err_resp = _load_and_authorize_ticket(ticket_id)
     if err_resp:
         return err_resp
+
+    if target_tier in ["L3_Deep_Diagnostics", "L3"]:
+        from it_helpdesk_agent.app_utils.rate_limiter import check_l3_rate_limit
+        allowed, rem, retry_after = check_l3_rate_limit(ticket.user_id)
+        if not allowed:
+            return {
+                "status": "error",
+                "error_code": "L3_RATE_LIMIT_EXCEEDED",
+                "message": f"Hạn mức leo thang lên L3 phân tích chuyên sâu đã vượt quá giới hạn (10 lượt/phút). Vui lòng thử lại sau {retry_after}s.",
+                "ticket_id": ticket.id
+            }
     
     ticket.assigned_tier = target_tier
     if target_tier in ["L2_Enterprise_RAG", "L3_Deep_Diagnostics", "Human_Ops"]:

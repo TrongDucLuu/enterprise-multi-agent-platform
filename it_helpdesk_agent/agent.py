@@ -8,6 +8,7 @@ from google.adk.tools import load_memory_tool, preload_memory_tool
 from google.genai import types
 from it_helpdesk_agent.app_utils.env import init_environment
 from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
+from it_helpdesk_agent.app_utils.rate_limiter import check_l3_rate_limit
 from it_helpdesk_agent.app_utils.sso_auth import current_sso_user
 from it_helpdesk_agent.tools.mcp_config import get_enterprise_rag_mcp_toolset
 from it_helpdesk_agent.tools.ticketing_tool import (
@@ -57,9 +58,31 @@ async def semantic_cache_before_model_callback(
     llm_request: LlmRequest
 ) -> Optional[LlmResponse]:
     """
-    Checks the semantic cache for matching questions before calling Gemini.
-    If hit, returns LlmResponse immediately to short-circuit the model call and save tokens.
+    Checks L3 rate limits and semantic cache for matching questions before calling Gemini.
+    - For L3 Deep Diagnostics: Enforces strict 10 req/min quota to prevent runaway Gemini 3 Pro costs.
+    - If cache hit: Returns LlmResponse immediately to short-circuit the model call and save 100% tokens.
     """
+    inv_ctx = getattr(callback_context, "_invocation_context", None)
+    agent_name = inv_ctx.agent.name if inv_ctx and hasattr(inv_ctx, "agent") else ""
+
+    user = current_sso_user.get()
+    user_id = user.user_id if user else None
+
+    # 1. Protect expensive L3 Pro model with per-user rate limiting (10 req/min)
+    if agent_name == "l3_deep_diagnostics_agent":
+        allowed, rem, retry_after = check_l3_rate_limit(user_id)
+        if not allowed:
+            return LlmResponse(
+                content=types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(
+                        text=f"⚠️ [L3 Rate Limit Exceeded] Hạn mức gọi mô hình phân tích sâu L3 (Gemini 3 Pro) của bạn đã vượt quá giới hạn (10 lượt/phút). Vui lòng thử lại sau {retry_after}s."
+                    )]
+                ),
+                custom_metadata={"rate_limited": True, "tier": "L3"}
+            )
+
+    # 2. Check semantic cache
     if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
         return None
 
@@ -75,9 +98,6 @@ async def semantic_cache_before_model_callback(
     query_text = " ".join(query_parts).strip()
     if not query_text or len(query_text) < 3:
         return None
-
-    user = current_sso_user.get()
-    user_id = user.user_id if user else None
 
     cache = get_semantic_cache()
     cached = cache.get(query=query_text, user_id=user_id)
@@ -98,6 +118,7 @@ async def semantic_cache_after_model_callback(
 ) -> Optional[LlmResponse]:
     """
     Persists successful conversational text responses into Semantic Cache for subsequent queries.
+    Enforces strict Fail-Closed multi-tenant isolation: Never cache unauthenticated/missing user context.
     """
     if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
         return None
@@ -105,7 +126,9 @@ async def semantic_cache_after_model_callback(
     if not llm_response or getattr(llm_response, "error_code", None):
         return None
 
-    if llm_response.custom_metadata and llm_response.custom_metadata.get("cached"):
+    if llm_response.custom_metadata and (
+        llm_response.custom_metadata.get("cached") or llm_response.custom_metadata.get("rate_limited")
+    ):
         return None
 
     if not llm_response.content or not getattr(llm_response.content, "parts", None):
@@ -146,15 +169,19 @@ async def semantic_cache_after_model_callback(
 
     if user_query and len(user_query) >= 3:
         user = current_sso_user.get()
-        user_id = user.user_id if user else None
+        # Fail-Closed: If user context is missing (unauthenticated or lost contextvar), do NOT cache
+        if not user or not user.user_id:
+            return None
+
         agent_name = inv_ctx.agent.name if inv_ctx and hasattr(inv_ctx, "agent") else "root"
 
+        # Multi-tenant isolation: always store with is_public=False scoped strictly to user.user_id
         cache = get_semantic_cache()
         cache.set(
             query=user_query,
             response=response_text,
-            user_id=user_id,
-            is_public=(user_id is None),
+            user_id=user.user_id,
+            is_public=False,
             tier=agent_name
         )
 

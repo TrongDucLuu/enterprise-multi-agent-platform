@@ -19,6 +19,8 @@ class InMemoryRateLimiter:
         self._window_seconds = 60.0
         self._history: dict[str, list[float]] = {}
         self._lock = threading.Lock()
+        self._last_cleanup = time.time()
+        self._op_count = 0
 
     def is_allowed(self, key: str, max_requests: Optional[int] = None) -> tuple[bool, int, float]:
         """
@@ -30,6 +32,13 @@ class InMemoryRateLimiter:
         window_start = now - self._window_seconds
 
         with self._lock:
+            # Auto-clean expired entries periodically to prevent unbounded memory growth
+            self._op_count += 1
+            if self._op_count >= 50 or (now - self._last_cleanup) > 60.0:
+                self._cleanup_expired_keys_internal(now)
+                self._last_cleanup = now
+                self._op_count = 0
+
             # Clean up older timestamps for this key
             timestamps = self._history.get(key, [])
             valid_timestamps = [t for t in timestamps if t > window_start]
@@ -45,17 +54,20 @@ class InMemoryRateLimiter:
             remaining = limit - len(valid_timestamps)
             return True, remaining, 0.0
 
-    def cleanup_expired_keys(self) -> None:
-        """Evicts keys that have had no traffic in the last 10 minutes to bound memory usage."""
-        now = time.time()
+    def _cleanup_expired_keys_internal(self, now: float) -> None:
+        """Internal helper to evict keys inactive for > 10 minutes (called under lock)."""
         expiry = now - 600.0
+        keys_to_remove = [k for k, ts in self._history.items() if not ts or ts[-1] < expiry]
+        for k in keys_to_remove:
+            del self._history[k]
+
+    def cleanup_expired_keys(self) -> None:
+        """Explicit eviction of inactive keys."""
         with self._lock:
-            keys_to_remove = [k for k, ts in self._history.items() if not ts or ts[-1] < expiry]
-            for k in keys_to_remove:
-                del self._history[k]
+            self._cleanup_expired_keys_internal(time.time())
 
 
-_global_rate_limiter = InMemoryRateLimiter()
+_global_rate_limiter = InMemoryRateLimiter(requests_per_minute=60)
 _l3_rate_limiter = InMemoryRateLimiter(requests_per_minute=10)
 
 
@@ -65,6 +77,15 @@ def get_global_rate_limiter() -> InMemoryRateLimiter:
 
 def get_l3_rate_limiter() -> InMemoryRateLimiter:
     return _l3_rate_limiter
+
+
+def check_l3_rate_limit(user_id: Optional[str] = None) -> tuple[bool, int, float]:
+    """
+    Verifies if the current user/session is permitted to execute high-cost L3 reasoning.
+    Limits L3 reasoning calls to 10 requests/minute per user.
+    """
+    key = f"l3_user:{user_id}" if user_id else "l3_user:anonymous"
+    return get_l3_rate_limiter().is_allowed(key)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -87,13 +108,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if os.getenv("RATE_LIMIT_ENABLED", "true").lower() not in ("true", "1", "yes"):
             return await call_next(request)
 
-        # Client identifier: Forwarded IP or client host
-        forwarded = request.headers.get("X-Forwarded-For")
-        client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown")
-        
+        # Safely extract client IP from trusted proxy or client host
+        forwarded = request.headers.get("X-Forwarded-For", "").strip()
+        if forwarded:
+            # Under Google Cloud Run / Load Balancer, the verified client IP is in X-Forwarded-For
+            ips = [ip.strip()[:45] for ip in forwarded.split(",") if ip.strip()]
+            client_ip = ips[-1] if ips else "unknown"
+        elif request.client and request.client.host:
+            client_ip = request.client.host[:45]
+        else:
+            client_ip = "unknown"
+
         # User authorization header hash or IP
         auth_header = request.headers.get("Authorization", "")
-        key = f"ip:{client_ip}" if not auth_header else f"auth:{hash(auth_header)}"
+        key = f"ip:{client_ip[:45]}" if not auth_header else f"auth:{hash(auth_header)}"
 
         allowed, remaining, retry_after = self.limiter.is_allowed(key)
         if not allowed:
