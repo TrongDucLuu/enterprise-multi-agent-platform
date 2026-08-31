@@ -333,4 +333,112 @@ def test_redis_semantic_cache_deserialization_and_errors_log_warning(caplog):
     assert any("error" in msg.lower() or "soft fail-closed" in msg.lower() for msg in warning_messages)
 
 
+def test_semantic_cache_tier_aware_thresholds():
+    """
+    P1.2: Verifies that risk-weighted thresholds differ by operational tier:
+    - L1: 0.90 (Low risk)
+    - L2: 0.92 (Medium risk)
+    - L3: 0.98 (High risk - near exact match required)
+    """
+    from it_helpdesk_agent.app_utils.semantic_cache import InMemorySemanticCache, DEFAULT_TIER_THRESHOLDS
+
+    cache = InMemorySemanticCache(similarity_threshold=0.92)
+    assert cache.get_tier_threshold("L1") == 0.90
+    assert cache.get_tier_threshold("l1_selfservice_agent") == 0.90
+    assert cache.get_tier_threshold("L2") == 0.92
+    assert cache.get_tier_threshold("l2_enterprise_rag_agent") == 0.92
+    assert cache.get_tier_threshold("L3") == 0.98
+    assert cache.get_tier_threshold("l3_deep_diagnostics_agent") == 0.98
+
+
+def test_l3_queries_false_hit_protection_mutation():
+    """
+    P1.2 (Mutation): Test 2 L3 queries with similar incident symptoms but distinct contexts/causes.
+    Verifies that L3 threshold (0.98) prevents false cache hits on distinct incidents.
+    """
+    from it_helpdesk_agent.app_utils.semantic_cache import InMemorySemanticCache
+
+    cache = InMemorySemanticCache(similarity_threshold=0.92)
+    cache.clear()
+
+    # Incident 1
+    q1 = "Sự cố OutOfMemory trên SAP App Server node 1"
+    resp1 = "RCA Incident 1: Heap dump phân tích phát hiện rò rỉ bộ nhớ do batch job xuất báo cáo hóa đơn treo luồng."
+    cache.set(query=q1, response=resp1, is_public=True, tier="L3")
+
+    # Incident 2 (Similar phrasing but different cause/node)
+    q2 = "Sự cố OutOfMemory trên SAP App Server node 2 do spike người dùng"
+
+    # In L1/L2 with threshold 0.85/0.90 it might hit, but in L3 with threshold 0.98 it MUST miss
+    match_l3 = cache.get(q2, tier="l3_deep_diagnostics_agent")
+    assert match_l3 is None, "L3 query must NOT falsely hit cache for distinct incident context"
+
+
+@pytest.mark.asyncio
+async def test_l3_agent_cache_bypass_in_callbacks():
+    """
+    P1.2: Verifies that l3_deep_diagnostics_agent completely bypasses semantic cache:
+    1. semantic_cache_before_model_callback returns None (never returns cached response).
+    2. semantic_cache_after_model_callback never persists L3 outputs to cache.
+    """
+    from unittest.mock import MagicMock
+    from it_helpdesk_agent.agent import (
+        semantic_cache_before_model_callback,
+        semantic_cache_after_model_callback,
+        current_sso_user,
+    )
+    from it_helpdesk_agent.app_utils.sso_auth import SSOUser
+    from google.genai import types
+    from google.adk.models import LlmRequest, LlmResponse
+    from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
+
+    cache = get_semantic_cache()
+    cache.clear()
+
+    test_user = SSOUser(user_id="dev_user", email="dev@corp.internal", hosted_domain="corp.internal")
+    token = current_sso_user.set(test_user)
+
+    try:
+        mock_ctx = MagicMock()
+        mock_ctx._invocation_context.agent.name = "l3_deep_diagnostics_agent"
+
+        query_text = "Phân tích lỗi OutOfMemory trên cụm SAP"
+        mock_user_event = MagicMock()
+        mock_user_event.author = "user"
+        mock_user_event.content.parts = [types.Part.from_text(text=query_text)]
+        mock_ctx._invocation_context._get_events.return_value = [mock_user_event]
+
+        req = LlmRequest(
+            contents=[types.Content(role="user", parts=[types.Part.from_text(text=query_text)])]
+        )
+
+        # 1. Before callback: MUST return None (bypassed) even if query was in cache
+        cache.set(
+            query=query_text,
+            response="Cached fake L3 response",
+            user_id="dev_user",
+            is_public=True
+        )
+
+        before_res = await semantic_cache_before_model_callback(mock_ctx, req)
+        assert before_res is None, "L3 agent before_model_callback must return None to bypass cache"
+
+        # 2. After callback: MUST NOT store into cache
+        cache.clear()
+        sim_resp = LlmResponse(
+            content=types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Live diagnostic RCA result")]
+            )
+        )
+
+        after_res = await semantic_cache_after_model_callback(mock_ctx, sim_resp)
+        # modified_response is None if no soft warning modification was needed
+        assert after_res is None or isinstance(after_res, LlmResponse)
+        # Verify nothing was added to cache
+        assert cache.get(query_text) is None
+    finally:
+        current_sso_user.reset(token)
+
+
 

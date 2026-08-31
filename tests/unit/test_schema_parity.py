@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import pytest
 from google.cloud import bigquery
-from scripts.ingest.loaders import get_knowledge_articles_schema
+from scripts.ingest.loaders import get_knowledge_articles_schema, get_dlq_schema
 
 
 def extract_terraform_schema() -> list[dict]:
@@ -107,3 +107,55 @@ def test_schema_parity_mutation_detection():
         # Emulate checking with mutated type
         is_deleted_tf = next(f for f in mutated_type_tf if f["name"] == "is_deleted")
         assert normalize_type(is_deleted_tf["type"]) == normalize_type(py_dict["is_deleted"].field_type)
+
+
+def extract_terraform_dlq_schema() -> list[dict]:
+    """Parses the JSON schema block for google_bigquery_table.ingestion_dead_letter_queue from Terraform."""
+    tf_path = Path(__file__).parent.parent.parent / "deployment" / "terraform" / "main.tf"
+    assert tf_path.exists(), f"Terraform main.tf not found at {tf_path}"
+
+    content = tf_path.read_text(encoding="utf-8")
+    match = re.search(r'resource\s+"google_bigquery_table"\s+"ingestion_dead_letter_queue"\s*\{.*?schema\s*=\s*<<EOF\s*(.*?)\s*EOF', content, re.DOTALL)
+    assert match is not None, "Could not find schema block in google_bigquery_table.ingestion_dead_letter_queue"
+
+    raw_json = match.group(1).strip()
+    schema_fields = json.loads(raw_json)
+    assert isinstance(schema_fields, list), "Terraform DLQ schema JSON must be a list of field definitions"
+    return schema_fields
+
+
+def test_dlq_schema_parity_fields_and_types():
+    """Verifies that all 7 fields, types, and modes match between Terraform and loaders.py get_dlq_schema()."""
+    tf_schema = extract_terraform_dlq_schema()
+    py_schema = get_dlq_schema()
+
+    assert len(tf_schema) == len(py_schema) == 7, (
+        f"DLQ Schema count mismatch: Terraform has {len(tf_schema)} fields, "
+        f"Python get_dlq_schema() has {len(py_schema)} fields (Expected exactly 7)."
+    )
+
+    tf_dict = {f["name"]: f for f in tf_schema}
+    py_dict = {f.name: f for f in py_schema}
+
+    for name, py_field in py_dict.items():
+        assert name in tf_dict, f"Field '{name}' defined in Python get_dlq_schema() is missing from Terraform main.tf!"
+        tf_field = tf_dict[name]
+
+        expected_type = normalize_type(py_field.field_type)
+        actual_type = normalize_type(tf_field.get("type", ""))
+        assert actual_type == expected_type, (
+            f"Type mismatch for DLQ field '{name}': Python={expected_type}, Terraform={actual_type}"
+        )
+
+        expected_mode = py_field.mode.upper() if py_field.mode else "NULLABLE"
+        actual_mode = tf_field.get("mode", "NULLABLE").upper()
+        assert actual_mode == expected_mode, (
+            f"Mode mismatch for DLQ field '{name}': Python={expected_mode}, Terraform={actual_mode}"
+        )
+
+
+def test_dlq_schema_parity_mutation_detection():
+    """Mutation Test: Injects synthetic schema drift into DLQ schema and confirms detection."""
+    tf_schema = extract_terraform_dlq_schema()
+    mutated_tf = [f for f in tf_schema if f["name"] != "doc_payload"]
+    assert len(mutated_tf) != len(get_dlq_schema()), "Mutation should alter DLQ schema length"

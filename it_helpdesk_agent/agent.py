@@ -104,6 +104,10 @@ async def semantic_cache_before_model_callback(
         else:
             _current_l3_soft_warning.set(None)
 
+        # L3 Cache Bypass: Root-cause analysis, deep system diagnostics, and SLA/compliance require live reasoning.
+        # Bypass semantic cache completely for L3 to eliminate high-risk false cache collisions across distinct incidents.
+        return None
+
     # 2. Check semantic cache
     if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
         return None
@@ -122,7 +126,7 @@ async def semantic_cache_before_model_callback(
         return None
 
     cache = get_semantic_cache()
-    cached = cache.get(query=query_text, user_id=user_id)
+    cached = cache.get(query=query_text, user_id=user_id, tier=agent_name)
     if cached:
         # Record cache hit in product metrics telemetry with actual cache lookup latency
         hit_latency_ms = round((time.perf_counter() - start_t) * 1000.0, 2)
@@ -296,7 +300,10 @@ async def semantic_cache_after_model_callback(
                 custom_metadata=meta
             )
 
-    # 3. Persist to Semantic Cache if eligible
+    # 3. Persist to Semantic Cache if eligible (L1 / L2 only; L3 is strictly bypassed)
+    if agent_name == "l3_deep_diagnostics_agent":
+        return modified_response
+
     if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
         return modified_response
 

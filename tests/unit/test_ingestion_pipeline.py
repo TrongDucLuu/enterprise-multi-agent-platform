@@ -754,6 +754,92 @@ def test_get_stale_chunks_for_reprocessing():
     assert "chunker_version != @chunker_version" in sql
 
 
+def test_persist_and_read_dead_letter_queue(tmp_path, caplog):
+    """
+    P2.3: Verifies that unparseable documents in DLQ are:
+    1. Persisted to durable storage independently of process lifetime.
+    2. Read back correctly via read_persisted_dead_letter_queue.
+    3. Trigger a structured CRITICAL alert log for Cloud Monitoring alerting.
+    """
+    import logging
+    from scripts.ingest.loaders import persist_dead_letter_queue, read_persisted_dead_letter_queue
+
+    caplog.set_level(logging.CRITICAL)
+
+    dlq_file = tmp_path / "dlq_store.jsonl"
+    fake_dlq = [
+        {
+            "file": "data/corrupted_manual.docx",
+            "stage": "parsing",
+            "error": "BadZipFile: File is not a zip file",
+            "doc": {"title": "Corrupted SOP Document"}
+        },
+        {
+            "file": "data/empty_table.pdf",
+            "stage": "chunking",
+            "error": "ValueError: Empty section content",
+            "doc": {"title": "Empty Document"}
+        }
+    ]
+
+    # 1. Persist DLQ
+    count = persist_dead_letter_queue(fake_dlq, dlq_file_path=str(dlq_file))
+    assert count == 2
+    assert dlq_file.exists()
+
+    # 2. Verify CRITICAL alert log emitted for Cloud Monitoring
+    critical_logs = [rec.message for rec in caplog.records if rec.levelno == logging.CRITICAL]
+    assert any("ALERT: DLQ_THRESHOLD_EXCEEDED" in msg for msg in critical_logs)
+    assert any("2 document(s) failed ingestion" in msg for msg in critical_logs)
+
+    # 3. Read back persisted records from disk
+    restored = read_persisted_dead_letter_queue(dlq_file_path=str(dlq_file))
+    assert len(restored) == 2
+    assert restored[0]["file_path"] == "data/corrupted_manual.docx"
+    assert restored[0]["stage"] == "parsing"
+    assert "BadZipFile" in restored[0]["error_message"]
+    assert restored[0]["doc_title"] == "Corrupted SOP Document"
+    assert restored[0]["occurred_at"] is not None
+    assert restored[1]["stage"] == "chunking"
+
+
+def test_persist_dead_letter_queue_bigquery(monkeypatch, tmp_path):
+    """
+    P2.3: Verifies BigQuery table insertion for DLQ records when GCP project/dataset are specified.
+    """
+    from scripts.ingest.loaders import persist_dead_letter_queue
+
+    mock_bq_client = MagicMock()
+    mock_bq_client.insert_rows_json.return_value = []
+
+    fake_dlq = [
+        {
+            "file": "data/bad_doc.md",
+            "stage": "chunking",
+            "error": "Invalid YAML header",
+            "doc": {"title": "Broken Header"}
+        }
+    ]
+
+    count = persist_dead_letter_queue(
+        fake_dlq,
+        project_id="test-corp-ai",
+        dataset_id="it_helpdesk_kb",
+        table_name="ingestion_dead_letter_queue",
+        dlq_file_path=str(tmp_path / "dlq_bq.jsonl"),
+        bq_client=mock_bq_client
+    )
+
+    assert count == 1
+    assert mock_bq_client.insert_rows_json.called
+    table_arg, rows_arg = mock_bq_client.insert_rows_json.call_args[0]
+    assert table_arg == "test-corp-ai.it_helpdesk_kb.ingestion_dead_letter_queue"
+    assert len(rows_arg) == 1
+    assert rows_arg[0]["file_path"] == "data/bad_doc.md"
+    assert rows_arg[0]["stage"] == "chunking"
+
+
+
 
 
 

@@ -71,15 +71,49 @@ class SemanticCacheEntry:
         )
 
 
+DEFAULT_TIER_THRESHOLDS = {
+    "L1": 0.90,
+    "L2": 0.92,
+    "L3": 0.98,
+}
+
+
 class BaseSemanticCache(ABC):
     """Abstract interface for Semantic Cache implementations."""
+
+    def __init__(self, similarity_threshold: float = 0.92):
+        self.similarity_threshold = float(
+            os.getenv("SEMANTIC_CACHE_THRESHOLD", similarity_threshold)
+        )
+
+    def get_tier_threshold(self, tier: Optional[str] = None) -> float:
+        """
+        Returns the risk-weighted similarity threshold for a specific operational tier.
+        - L1 (Self-service FAQs / common issues): threshold ~0.90 (Low risk)
+        - L2 (Enterprise RAG SOPs / Manuals): threshold ~0.92 (Medium risk)
+        - L3 (Deep Diagnostics / RCA / Legal / SLA): threshold ~0.98 (High risk - requires near-exact text match)
+        """
+        if not tier:
+            return self.similarity_threshold
+        tier_upper = tier.upper().strip()
+        if "L3" in tier_upper:
+            env_val = os.getenv("SEMANTIC_CACHE_THRESHOLD_L3")
+            return float(env_val) if env_val else DEFAULT_TIER_THRESHOLDS["L3"]
+        elif "L2" in tier_upper:
+            env_val = os.getenv("SEMANTIC_CACHE_THRESHOLD_L2")
+            return float(env_val) if env_val else DEFAULT_TIER_THRESHOLDS["L2"]
+        elif "L1" in tier_upper:
+            env_val = os.getenv("SEMANTIC_CACHE_THRESHOLD_L1")
+            return float(env_val) if env_val else DEFAULT_TIER_THRESHOLDS["L1"]
+        return self.similarity_threshold
 
     @abstractmethod
     def get(
         self,
         query: str,
         user_id: Optional[str] = None,
-        similarity_threshold: Optional[float] = None
+        similarity_threshold: Optional[float] = None,
+        tier: Optional[str] = None,
     ) -> Optional[dict]:
         pass
 
@@ -127,9 +161,7 @@ class InMemorySemanticCache(BaseSemanticCache):
         max_size: int = 1000,
         embedding_fn: Optional[Callable[[str], list[float]]] = None,
     ):
-        self.similarity_threshold = float(
-            os.getenv("SEMANTIC_CACHE_THRESHOLD", similarity_threshold)
-        )
+        super().__init__(similarity_threshold=similarity_threshold)
         self.default_ttl_seconds = int(
             os.getenv("SEMANTIC_CACHE_TTL_SECONDS", default_ttl_seconds)
         )
@@ -191,7 +223,8 @@ class InMemorySemanticCache(BaseSemanticCache):
         self,
         query: str,
         user_id: Optional[str] = None,
-        similarity_threshold: Optional[float] = None
+        similarity_threshold: Optional[float] = None,
+        tier: Optional[str] = None,
     ) -> Optional[dict]:
         if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
             return None
@@ -201,7 +234,7 @@ class InMemorySemanticCache(BaseSemanticCache):
             return None
 
         self._total_lookups += 1
-        threshold = similarity_threshold or self.similarity_threshold
+        threshold = similarity_threshold or self.get_tier_threshold(tier)
 
         self._entries = [e for e in self._entries if not e.is_expired()]
 
@@ -318,9 +351,7 @@ class RedisSemanticCache(BaseSemanticCache):
         cooldown_seconds: float = 30.0,
         embedding_fn: Optional[Callable[[str], list[float]]] = None,
     ):
-        self.similarity_threshold = float(
-            os.getenv("SEMANTIC_CACHE_THRESHOLD", similarity_threshold)
-        )
+        super().__init__(similarity_threshold=similarity_threshold)
         self.default_ttl_seconds = int(
             os.getenv("SEMANTIC_CACHE_TTL_SECONDS", default_ttl_seconds)
         )
@@ -475,7 +506,8 @@ class RedisSemanticCache(BaseSemanticCache):
         self,
         query: str,
         user_id: Optional[str] = None,
-        similarity_threshold: Optional[float] = None
+        similarity_threshold: Optional[float] = None,
+        tier: Optional[str] = None,
     ) -> Optional[dict]:
         """
         Retrieves cached response from Redis with vector cosine similarity.
@@ -493,7 +525,7 @@ class RedisSemanticCache(BaseSemanticCache):
             return None
 
         self._local_lookups += 1
-        threshold = similarity_threshold or self.similarity_threshold
+        threshold = similarity_threshold or self.get_tier_threshold(tier)
 
         if self._redis is None:
             self._init_redis()

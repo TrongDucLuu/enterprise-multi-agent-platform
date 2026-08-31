@@ -4,8 +4,11 @@ Provides idempotent upsert (atomic MERGE), staging table orchestration, orphaned
 vector index DDL creation, and coverage monitoring.
 """
 
+import os
+import json
 import uuid
 import logging
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Any
 
@@ -152,6 +155,131 @@ def get_knowledge_articles_schema() -> list[Any]:
         ),
         bigquery.SchemaField("updated_at", "TIMESTAMP", mode="REQUIRED"),
     ]
+
+
+def get_dlq_schema() -> list[Any]:
+    """Returns the canonical BigQuery SchemaField list for ingestion dead-letter queue (DLQ)."""
+    from google.cloud import bigquery
+    return [
+        bigquery.SchemaField("id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("file_path", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("stage", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("error_message", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("doc_title", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("doc_payload", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("occurred_at", "TIMESTAMP", mode="REQUIRED"),
+    ]
+
+
+def persist_dead_letter_queue(
+    dead_letter_queue: list[dict[str, Any]],
+    project_id: Optional[str] = None,
+    dataset_id: Optional[str] = None,
+    table_name: str = "ingestion_dead_letter_queue",
+    dlq_file_path: Optional[str] = None,
+    bq_client: Optional[Any] = None,
+) -> int:
+    """
+    Persists unparseable/failed documents from the Dead-Letter Queue (DLQ) to durable storage:
+    1. Writes JSONL records to local/persistent file storage (e.g. data/dlq/ingestion_dlq.jsonl).
+    2. If project_id & dataset_id are supplied, streams/inserts records into BigQuery DLQ table.
+    3. Emits structured CRITICAL / ALERT logs formatted for Google Cloud Monitoring log-based alert metric triggers.
+    """
+    if not dead_letter_queue:
+        return 0
+
+    records: list[dict[str, Any]] = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for item in dead_letter_queue:
+        doc_info = item.get("doc") or {}
+        doc_title = doc_info.get("title") if isinstance(doc_info, dict) else None
+        doc_payload_str = json.dumps(doc_info, ensure_ascii=False) if doc_info else None
+        rec = {
+            "id": str(uuid.uuid4()),
+            "file_path": str(item.get("file", "unknown")),
+            "stage": str(item.get("stage", "unknown")),
+            "error_message": str(item.get("error", "unknown error")),
+            "doc_title": doc_title,
+            "doc_payload": doc_payload_str,
+            "occurred_at": now_iso,
+        }
+        records.append(rec)
+
+    # 1. File Persistence (Fallback & Local Audit)
+    target_path = Path(dlq_file_path or os.getenv("DLQ_STORAGE_PATH", "data/dlq/ingestion_dlq.jsonl"))
+    try:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(target_path, "a", encoding="utf-8") as f:
+            for r in records:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        logger.info("Persisted %d DLQ failure record(s) to %s", len(records), target_path)
+    except Exception as e:
+        logger.error("Failed persisting DLQ to file %s: %s", target_path, e)
+
+    # 2. BigQuery Persistence (if GCP credentials/project supplied)
+    if project_id and dataset_id:
+        try:
+            from google.cloud import bigquery
+            client = bq_client or bigquery.Client(project=project_id)
+            full_table_id = f"{project_id}.{dataset_id}.{table_name}"
+            
+            # Insert rows into BigQuery DLQ table
+            errors = client.insert_rows_json(full_table_id, records)
+            if errors:
+                logger.error("BigQuery insert_rows_json DLQ errors: %s", errors)
+            else:
+                logger.info("Successfully persisted %d DLQ record(s) to BigQuery table %s", len(records), full_table_id)
+        except Exception as e:
+            logger.warning("Could not persist DLQ to BigQuery table `%s.%s.%s`: %s", project_id, dataset_id, table_name, e)
+
+    # 3. Active Alerting trigger for Cloud Monitoring
+    logger.critical(
+        "ALERT: DLQ_THRESHOLD_EXCEEDED — %d document(s) failed ingestion! "
+        "Alert details: %s",
+        len(records),
+        json.dumps([{"file": r["file_path"], "stage": r["stage"], "error": r["error_message"][:100]} for r in records], ensure_ascii=False)
+    )
+
+    return len(records)
+
+
+def read_persisted_dead_letter_queue(
+    dlq_file_path: Optional[str] = None,
+    project_id: Optional[str] = None,
+    dataset_id: Optional[str] = None,
+    table_name: str = "ingestion_dead_letter_queue",
+    bq_client: Optional[Any] = None,
+) -> list[dict[str, Any]]:
+    """
+    Reads back persisted DLQ records from persistent storage (file or BigQuery).
+    Allows human operators and automated health watchdogs to audit ingestion failures.
+    """
+    results: list[dict[str, Any]] = []
+
+    # Try file storage
+    target_path = Path(dlq_file_path or os.getenv("DLQ_STORAGE_PATH", "data/dlq/ingestion_dlq.jsonl"))
+    if target_path.exists():
+        try:
+            with open(target_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        results.append(json.loads(line))
+        except Exception as e:
+            logger.warning("Could not read DLQ records from %s: %s", target_path, e)
+
+    # If project_id & dataset_id given and no file entries or requested, also check BigQuery
+    if not results and project_id and dataset_id:
+        try:
+            from google.cloud import bigquery
+            client = bq_client or bigquery.Client(project=project_id)
+            query = f"SELECT id, file_path, stage, error_message, doc_title, doc_payload, occurred_at FROM `{project_id}.{dataset_id}.{table_name}` ORDER BY occurred_at DESC LIMIT 100"
+            rows = list(client.query(query).result())
+            results = [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning("Could not query DLQ records from BigQuery: %s", e)
+
+    return results
 
 
 def ingest_articles_to_bigquery(

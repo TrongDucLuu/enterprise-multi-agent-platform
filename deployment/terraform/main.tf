@@ -237,6 +237,66 @@ EOF
   depends_on = [google_bigquery_dataset.kb_dataset]
 }
 
+resource "google_bigquery_table" "ingestion_dead_letter_queue" {
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.kb_dataset.dataset_id
+  table_id            = "ingestion_dead_letter_queue"
+  friendly_name       = "Knowledge Ingestion Dead Letter Queue"
+  description         = "Persistent DLQ table storing unparseable or failed documents with error tracebacks"
+  deletion_protection = var.environment == "production" ? true : false
+
+  clustering = ["stage"]
+
+  schema = <<EOF
+[
+  {
+    "name": "id",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Unique DLQ entry UUID"
+  },
+  {
+    "name": "file_path",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Source file path of the unparseable/failed document"
+  },
+  {
+    "name": "stage",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Ingestion pipeline stage where failure occurred (parsing, chunking, embedding, loading)"
+  },
+  {
+    "name": "error_message",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Detailed error message and traceback snippet"
+  },
+  {
+    "name": "doc_title",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Extracted document title if available"
+  },
+  {
+    "name": "doc_payload",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Serialized raw JSON payload of the failing document"
+  },
+  {
+    "name": "occurred_at",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED",
+    "description": "UTC timestamp when the ingestion error occurred"
+  }
+]
+EOF
+
+  depends_on = [google_bigquery_dataset.kb_dataset]
+}
+
 # Scope BigQuery read-only access strictly to the KB dataset (Least Privilege)
 resource "google_bigquery_dataset_iam_member" "kb_dataset_viewer" {
   project    = var.project_id

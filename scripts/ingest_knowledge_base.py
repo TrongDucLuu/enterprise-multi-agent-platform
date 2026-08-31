@@ -44,6 +44,9 @@ from scripts.ingest import (
     DEFAULT_EMBEDDING_MODEL,
     EMBEDDING_MODEL,
     EMBEDDING_DIM,
+    get_dlq_schema,
+    persist_dead_letter_queue,
+    read_persisted_dead_letter_queue,
     ensure_vector_index,
     check_vector_index_coverage,
     ingest_articles_to_bigquery,
@@ -98,8 +101,22 @@ def main():
     parser.add_argument("--purge-tombstones-older-than", type=int, help="Hard delete tombstones older than N days")
     parser.add_argument("--reprocess-where", type=str, help="Check and list stale chunks requiring reprocessing")
     parser.add_argument("--test-query", type=str, help="Run a verification query after ingestion")
+    parser.add_argument("--dlq-path", type=str, default=os.getenv("DLQ_STORAGE_PATH", "data/dlq/ingestion_dlq.jsonl"), help="Path to save / load dead-letter queue records")
+    parser.add_argument("--show-dlq", action="store_true", help="Display all persisted dead-letter queue records and exit")
 
     args = parser.parse_args()
+
+    # Show DLQ inspect option
+    if args.show_dlq:
+        records = read_persisted_dead_letter_queue(
+            dlq_file_path=args.dlq_path,
+            project_id=args.project_id or None,
+            dataset_id=args.dataset_id or None
+        )
+        print(f"=== Persisted Dead-Letter Queue Records ({len(records)}) ===")
+        for idx, rec in enumerate(records, 1):
+            print(f"[{idx}] {rec.get('occurred_at')} | Stage: {rec.get('stage')} | File: {rec.get('file_path')} | Error: {rec.get('error_message')}")
+        return
 
     # Maintenance / Query options
     if args.purge_tombstones_older_than is not None:
@@ -188,6 +205,12 @@ def main():
 
     if dead_letter_queue:
         logger.warning("Dead Letter Queue Summary: %d document(s) failed during ingestion pipeline.", len(dead_letter_queue))
+        persist_dead_letter_queue(
+            dead_letter_queue,
+            project_id=args.project_id if not args.dry_run else None,
+            dataset_id=args.dataset_id if not args.dry_run else None,
+            dlq_file_path=args.dlq_path
+        )
 
     if args.dry_run:
         logger.info("[Dry-Run Mode] Generating sample embeddings locally (No BigQuery writes)...")
