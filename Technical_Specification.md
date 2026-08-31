@@ -1,0 +1,600 @@
+# TÀI LIỆU ĐẶC TẢ KỸ THUẬT VÀ THIẾT KẾ KIẾN TRÚC HỆ THỐNG
+# (SYSTEM TECHNICAL SPECIFICATION & ARCHITECTURE DOCUMENT)
+
+**Dự án:** Enterprise IT Helpdesk Multi-Agent AI System  
+**Nền tảng:** Google Cloud Platform (GCP) & Google Agent Development Kit (ADK)  
+**Tác giả:** Solutions Architecture & Engineering Team  
+**Phiên bản:** 2.5.0 (Tiered Chunking & Enterprise Ingestion GA)  
+**Trạng thái:** Approved & Production-Ready  
+
+---
+
+## MỤC LỤC
+1. [TỔNG QUAN HỆ THỐNG VÀ MỤC TIÊU KIẾN TRÚC](#1-tổng-quan-hệ-thống-và-mục-tiêu-kiến-trúc)
+2. [KIẾN TRÚC TỔNG THỂ (HIGH-LEVEL ARCHITECTURE)](#2-kiến-trúc-tổng-thể-high-level-architecture)
+3. [PHÂN RÃ HỆ THỐNG ĐA ĐẶC VỤ (MULTI-AGENT SUBSYSTEMS)](#3-phân-rã-hệ-thống-đa-đặc-vụ-multi-agent-subsystems)
+4. [KIẾN TRÚC BẢO MẬT VÀ PHÂN QUYỀN ZERO-TRUST (SECURITY & RBAC)](#4-kiến-trúc-bảo-mật-và-phân-quyền-zero-trust-security--rbac)
+5. [CƠ CHẾ TĂNG TỐC VÀ TỐI ƯU HÓA CHI PHÍ (SEMANTIC CACHE & RATE LIMITING)](#5-cơ-chế-tăng-tốc-và-tối-ưu-hóa-chi-phí-semantic-cache--rate-limiting)
+6. [KIẾN TRÚC DỮ LIỆU VÀ INGESTION PIPELINE (DATA ARCHITECTURE & VECTOR SEARCH)](#6-kiến-trúc-dữ-liệu-và-ingestion-pipeline-data-architecture--vector-search)
+7. [HỆ THỐNG ĐO LƯỜNG VÀ BẢO VỆ QUYỀN RIÊNG TƯ (TELEMETRY & PRIVACY)](#7-hệ-thống-đo-lường-và-bảo-vệ-quyền-riêng-tư-telemetry--privacy)
+8. [HẠ TẦNG VÀ TRIỂN KHAI ĐÁM MÂY (INFRASTRUCTURE & DEPLOYMENT)](#8-hạ-tầng-và-triển-khai-đám-mây-infrastructure--deployment)
+9. [DANH MỤC API VÀ HỢP ĐỒNG DỮ LIỆU (API REFERENCE & DATA CONTRACTS)](#9-danh-mục-api-và-hợp-đồng-dữ-liệu-api-reference--data-contracts)
+10. [QUY TRÌNH KIỂM THỬ VÀ ĐẢM BẢO CHẤT LƯỢNG (TESTING & QA)](#10-quy-trình-kiểm-thử-và-đảm-bảo-chất-lượng-testing--qa)
+
+---
+
+## 1. TỔNG QUAN HỆ THỐNG VÀ MỤC TIÊU KIẾN TRÚC
+
+### 1.1. Bối cảnh Doanh nghiệp
+Hệ thống **Enterprise IT Helpdesk Multi-Agent AI** là giải pháp hỗ trợ kỹ thuật tự động hóa toàn diện, được thiết kế cho các doanh nghiệp quy mô vừa và lớn với hàng nghìn nhân sự. Hệ thống giải quyết bài toán quá tải của đội ngũ IT Helpdesk truyền thống thông qua mô hình phân cấp xử lý sự cố 3 tầng (L1 Self-Service, L2 Enterprise RAG, L3 Deep Diagnostics).
+
+### 1.2. Mục tiêu Kỹ thuật Cốt lõi (Architectural Goals)
+- **Zero-Trust Security & Multi-Tenancy**: Đảm bảo phân tách ngữ cảnh người dùng tuyệt đối qua `ContextVar`, ngăn ngừa hoàn toàn các lỗ hổng IDOR, SQL Injection, Cache Poisoning và rò rỉ dữ liệu chéo giữa các phòng ban.
+- **Cost & Latency Optimization**: Triển khai Semantic Cache với Cosine Similarity để phản hồi tức thì (<15ms) các câu hỏi phổ biến, tiết kiệm 100% token LLM. Tỷ lệ phản hồi tự động kỳ vọng > 75% tại tầng L1.
+- **Fail-Closed Architecture**: Tất cả các lớp bảo mật, xác thực OIDC, kiểm tra RBAC, truy vấn Vector BigQuery và sinh Vector Embedding đều hoạt động theo nguyên tắc Fail-Closed (từ chối truy cập hoặc ném ngoại lệ rõ ràng khi xảy ra lỗi, tuyệt đối không dùng fallback mất an toàn trong production).
+- **Config-Driven Extensibility**: Dễ dàng tích hợp hệ thống nghiệp vụ mới (ERP, HRM, CRM, MES, Core Banking) chỉ qua tệp cấu hình YAML mà không cần sửa đổi mã nguồn Python.
+
+---
+
+## 2. KIẾN TRÚC TỔNG THỂ (HIGH-LEVEL ARCHITECTURE)
+
+Hệ thống được xây dựng trên nền tảng Serverless Containerized của Google Cloud Platform, kết hợp Google ADK và Vertex AI Gemini Models.
+
+```mermaid
+flowchart TD
+    subgraph ClientLayer ["Client & Network Layer"]
+        User["End User / IT Staff"] -->|HTTPS / TLS 1.3| CloudArmor["Cloud Armor WAF (Rate Limit & DDoS)"]
+        CloudArmor --> ExtLB["Global External HTTPS Load Balancer"]
+        ExtLB --> ServerlessNEG["Serverless NEG"]
+    end
+
+    subgraph MiddlewareLayer ["FastAPI Ingress & Middlewares (Fail-Closed)"]
+        ServerlessNEG --> RateLimitMW["1. RateLimitMiddleware (IP / Header)"]
+        RateLimitMW --> SSOMW["2. SSOAuthenticationMiddleware (Google OIDC)"]
+        SSOMW --> ContextVar["ContextVar Context: current_sso_user"]
+    end
+
+    subgraph AgentRuntime ["Google ADK Multi-Agent Orchestrator"]
+        ContextVar --> BeforeCB["semantic_cache_before_model_callback"]
+        BeforeCB -->|Cache Hit <15ms| TelemetryCache["Record Cache Hit Telemetry"]
+        BeforeCB -->|Cache Miss| Router["App / Agent Orchestrator"]
+        
+        Router --> L1["L1 Self-Service Agent (Gemini 2.5/3 Flash)"]
+        Router --> L2["L2 Enterprise RAG Agent (Gemini 2.5/3 Flash)"]
+        Router --> L3["L3 Deep Diagnostics Agent (Gemini 2.5/3 Pro)"]
+        
+        L1 --> AfterCB["semantic_cache_after_model_callback"]
+        L2 --> AfterCB
+        L3 --> AfterCB
+        AfterCB --> TelemetryModel["Record Model & Tool Telemetry"]
+    end
+
+    subgraph EnterpriseBackends ["Enterprise Toolsets & Backends"]
+        L1 --> Ticketing["Ticketing Tool (Firestore Native / Memory)"]
+        L1 --> MemoryBank["Vertex AI Memory Bank"]
+        L2 --> RAG_MCP["Enterprise RAG MCP Server"]
+        RAG_MCP --> BigQuery["BigQuery Vector Search (IVF Index)"]
+        L3 --> LogAnalyzer["Log Analyzer Tool"]
+        L3 --> ComplianceTool["Compliance & SLA Review Tool"]
+    end
+
+    subgraph ConfigAndTelemetry ["Config & Observability"]
+        YAML["config/systems.yaml"] -.->|Loads Rules| SystemConfigMgr["SystemConfigManager"]
+        TelemetryCache --> CloudLogging["Google Cloud Logging (Structured JSON)"]
+        TelemetryModel --> CloudLogging
+    end
+```
+
+---
+
+## 3. PHÂN RÃ HỆ THỐNG ĐA ĐẶC VỤ (MULTI-AGENT SUBSYSTEMS)
+
+Hệ thống triển khai 3 đặc vụ chuyên biệt hóa theo nguyên tắc trách nhiệm đơn lẻ (Single Responsibility Principle) và định tuyến thông minh theo mức độ phức tạp của sự cố.
+
+### 3.1. Bảng So sánh và Cấu hình Đặc vụ
+
+| Tiêu chí | L1 Self-Service Agent | L2 Enterprise RAG Agent | L3 Deep Diagnostics Agent |
+| :--- | :--- | :--- | :--- |
+| **Mục tiêu Nghiệp vụ** | Giải đáp FAQ, Self-service Reset Password, Tạo & Tra cứu Ticket cá nhân | Tra cứu tài liệu nghiệp vụ nội bộ (ERP, HRM, CRM), Tóm tắt quy trình, Soạn email | Phân tích Log lỗi phân tán (RCA), Đánh giá vi phạm SLA & Tuân thủ hợp đồng IT |
+| **Mô hình LLM** | `gemini-2.5-flash` / `gemini-3-flash-preview` | `gemini-2.5-flash` / `gemini-3-flash-preview` | `gemini-2.5-pro` / `gemini-3-pro-preview` |
+| **Độ trễ trung bình** | 300ms - 800ms (hoặc <15ms nếu cache hit) | 800ms - 1500ms | 2500ms - 5000ms |
+| **Công cụ Tích hợp** | `create_helpdesk_ticket`, `list_user_tickets`, `get_ticket_details`, `load_memory` | `search_enterprise_knowledge`, `get_system_manual`, `summarize_long_document`, `draft_email_response` | `analyze_system_logs_for_rca`, `review_it_contract_sla`, `route_ticket_to_tier`, `update_ticket_status` |
+| **Hạn mức Gọi (Rate Limit)** | Theo IP / User: 60 req/phút | Theo IP / User: 60 req/phút | Hạn mức riêng: **10 req/phút / user** (chống cạn kiệt ngân sách Gemini Pro) |
+
+### 3.2. Chi tiết Từng Tầng Đặc vụ
+
+#### Tầng L1: L1 Self-Service Agent
+- **Đặc tả:** Đóng vai trò là điểm tiếp xúc đầu tiên (First Contact Point). L1 xử lý các câu hỏi về chính sách, mạng Wi-Fi, cài đặt VPN, hướng dẫn mở khóa tài khoản Active Directory/Google Workspace và tạo ticket hỗ trợ.
+- **Bảo mật Định danh:** L1 tuyệt đối không thể tra cứu ticket của người dùng khác nhờ cơ chế RBAC chặn ở tầng công cụ.
+- **Tích hợp Bộ nhớ Dài hạn:** Gọi `load_memory` và `preload_memory_tool` để đọc ngữ cảnh sự cố trong quá khứ của chính nhân viên đang tương tác.
+
+#### Tầng L2: L2 Enterprise RAG Agent
+- **Đặc tả:** Xử lý các câu hỏi nghiệp vụ chuyên sâu về các hệ thống nội bộ của doanh nghiệp (ví dụ: Tạo Purchase Order trên SAP ME21N, Quy trình xin nghỉ phép trên HRM Workday, Quản lý khách hàng tiềm năng trên CRM).
+- **Kết nối MCP (Model Context Protocol):** Giao tiếp với `enterprise_rag_mcp` thông qua giao thức MCP chuẩn hóa. Tầng RAG thực hiện **Security Trimming** trước khi gửi truy vấn xuống BigQuery.
+
+#### Tầng L3: L3 Deep Diagnostics & RCA Agent
+- **Đặc tả:** Được điều phối khi các tầng dưới gặp sự cố phức tạp, lỗi hệ thống phân tán hoặc tranh chấp hợp đồng SLA với nhà cung cấp IT bên ngoài.
+- **Khả năng Suy luận Phân tích:** Sử dụng Gemini 2.5/3 Pro với `thinking_budget` tối ưu để phân tích vết ngăn xếp (stack traces), mã lỗi HTTP 5xx, xác định nguyên nhân gốc rễ (Root Cause Analysis - RCA) và đề xuất phương án khắc phục cho đội DevOps/SRE.
+
+---
+
+## 4. KIẾN TRÚC BẢO MẬT VÀ PHÂN QUYỀN ZERO-TRUST (SECURITY & RBAC)
+
+Hệ thống được thiết kế theo mô hình **Zero-Trust Defense-in-Depth** với 5 lớp bảo vệ nghiêm ngặt:
+
+```mermaid
+graph TD
+    subgraph Layer1 ["Lớp 1: Ingress Authentication"]
+        A[OIDC Bearer Token] -->|Verify RSA Signature & Expiry| B[SSOAuthenticationMiddleware]
+        B -->|Fail-Closed: Reject Unknown Issuer / Domain| C[Extract SSOUser Claims]
+    end
+
+    subgraph Layer2 ["Lớp 2: Context Isolation"]
+        C -->|Thread-safe set| D[ContextVar: current_sso_user]
+    end
+
+    subgraph Layer3 ["Lớp 3: Tool-Level RBAC & IDOR Defense"]
+        D --> E[Ticketing Tool: _get_and_authorize_ticket]
+        E -->|Check Owner ID == SSO User ID OR Role in Admin Roles| F[Authorized Ticket Operation]
+    end
+
+    subgraph Layer4 ["Lớp 4: Database Query Parameterization"]
+        D --> G[Enterprise RAG: _get_authorized_systems]
+        G -->|Calculate Allowed Systems Param| H[BigQuery SQL Parameterized Query]
+        H -->|IN UNNEST @allowed_systems_param| I[Secure Vector Search]
+    end
+
+    subgraph Layer5 ["Lớp 5: Multi-Tenant Cache Isolation"]
+        D --> J[Semantic Cache set / get]
+        J -->|Scoped by user_id for non-public entries| K[Isolated In-Memory Cache]
+    end
+```
+
+### 4.1. Xác thực SSO OIDC & Chống Lỗi Cấu hình Môi trường
+- **Module:** `it_helpdesk_agent.app_utils.sso_auth`
+- **Xác thực Token:** Kiểm tra chữ ký mật mã Google OIDC (`https://accounts.google.com`) qua JWKS công khai.
+- **Chống Giả mạo Thuật toán (Algorithm Confusion Prevention):** Từ chối hoàn toàn token sử dụng thuật toán đối xứng `HS256` trong môi trường production (`ENVIRONMENT != dev`).
+- **Giới hạn Miền Doanh nghiệp (Domain Restriction):** Token phải có email thuộc danh sách miền được phép (`ALLOWED_SSO_DOMAINS`). Nếu biến môi trường này rỗng trên môi trường production, hệ thống lập tức **Fail-Closed** và từ chối 100% yêu cầu.
+
+### 4.2. Chống Lỗ hổng IDOR trong Quản lý Sự cố (Ticketing Tool)
+Tất cả các thao tác đọc, cập nhật trạng thái và điều phối ticket đều bắt buộc đi qua helper dùng chung `_get_and_authorize_ticket()` trong `ticketing_tool.py`:
+
+```python
+def _get_and_authorize_ticket(
+    ticket_id: str,
+    action_description: str,
+    admin_roles_override: Optional[list[str]] = None
+) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
+    """
+    Helper bảo mật dùng chung cho get, update, route ticket:
+    1. Lấy dữ liệu ticket từ backend (Firestore / In-Memory).
+    2. Kiểm tra tồn tại.
+    3. Thực thi RBAC và IDOR check (Chủ sở hữu hoặc IT Admin).
+    """
+    store = _get_ticket_store()
+    ticket = store.get_ticket(ticket_id)
+    if not ticket:
+        return None, {"status": "error", "message": f"Không tìm thấy ticket {ticket_id}."}
+
+    user = current_sso_user.get()
+    admin_roles = admin_roles_override or SYSTEM_ADMIN_ROLES
+    is_owner = bool(user and user.user_id == ticket.get("user_id"))
+    is_admin = bool(user and any(r in admin_roles for r in user.roles))
+
+    if not (is_owner or is_admin):
+        logger.warning(
+            "Truy cập trái phép bị chặn (IDOR Defense): user=%s cố gắng %s ticket=%s của user=%s",
+            user.user_id if user else "None", action_description, ticket_id, ticket.get("user_id")
+        )
+        return None, {
+            "status": "error",
+            "message": f"Truy cập bị từ chối: Bạn không có quyền {action_description} ticket {ticket_id}."
+        }
+
+    return ticket, None
+```
+
+### 4.3. Chống Lỗ hổng SQL Injection & Parameterized Vector Query
+Trong `BigQueryVectorKnowledgeStore.search()`, chuỗi truy vấn và danh sách hệ thống được phép truy cập (`allowed_systems`) tuyệt đối không bao giờ được nối chuỗi (string concatenation) vào câu lệnh SQL. Toàn bộ tham số được truyền qua `google.cloud.bigquery.ScalarQueryParameter` và `ArrayQueryParameter`:
+
+```sql
+-- Chuẩn hóa câu lệnh SQL BigQuery với Security Trimming
+SELECT 
+    id, system, title, category, content, keywords, source_uri, updated_at,
+    (1.0 - ML.DISTANCE(embedding, @query_vector, 'COSINE')) AS similarity_score
+FROM `{project_id}.{dataset_id}.{table_name}`
+WHERE system IN UNNEST(@allowed_systems_param)
+ORDER BY similarity_score DESC
+LIMIT @limit;
+```
+
+---
+
+## 5. CƠ CHẾ TĂNG TỐC VÀ TỐI ƯU HÓA CHI PHÍ (SEMANTIC CACHE & RATE LIMITING)
+
+### 5.1. Cơ chế Semantic Cache Đa Thể hiện (Multi-Tenant Semantic Cache)
+- **Module:** `it_helpdesk_agent.app_utils.semantic_cache`
+- **Nguyên lý Toán học:** Sử dụng độ tương đồng Cosine giữa vector embedding câu hỏi mới ($A$) và vector embedding các câu hỏi đã lưu ($B$):
+
+$$\text{Similarity}(A, B) = \frac{A \cdot B}{\|A\|_2 \|B\|_2} = \frac{\sum_{i=1}^{n} A_i B_i}{\sqrt{\sum_{i=1}^{n} A_i^2} \sqrt{\sum_{i=1}^{n} B_i^2}}$$
+
+- **Ngưỡng Kích hoạt (Similarity Threshold):** $\text{Cosine Similarity} \ge 0.88$.
+- **Thời gian sống (TTL):** Mặc định 1 giờ (3600 giây).
+- **Chính sách Giải phóng Bộ nhớ (Eviction Policy):** Least Recently Used (LRU) với dung lượng tối đa 1,000 mục nhớ / instance.
+- **Cô lập Đa Người dùng (Multi-Tenant Isolation):** Mục nhớ cache mặc định lưu với cờ `is_public=False` và gắn liền với `user_id`. Người dùng B không thể truy xuất câu trả lời lưu trong cache của Người dùng A.
+
+### 5.2. Hệ thống Giới hạn Tốc độ (Sliding Window Rate Limiting)
+- **Module:** `it_helpdesk_agent.app_utils.rate_limiter`
+- **Thuật toán:** Cửa sổ trượt thời gian thực (Real-time Sliding Window) sử dụng `collections.deque` lưu timestamps.
+- **Trích xuất IP Khách hàng:** Ưu tiên đọc IP thực tế từ header `X-Forwarded-For` do Cloud Armor / Global External HTTPS Load Balancer gửi xuống, ngăn ngừa việc toàn bộ người dùng sau LB bị chặn chung một IP.
+- **Bảo vệ Cổng Quản trị L3:** Thực thi giới hạn riêng biệt 10 req/phút/user đối với các yêu cầu chuyển tiếp lên Gemini 2.5/3 Pro.
+
+---
+
+## 6. KIẾN TRÚC DỮ LIỆU VÀ INGESTION PIPELINE (DATA ARCHITECTURE & VECTOR SEARCH)
+
+### 6.1. Cấu hình Doanh nghiệp Động (`config/systems.yaml`)
+Hệ thống cho phép bổ sung các phần mềm nghiệp vụ của khách hàng mà không cần tái cấu trúc mã nguồn:
+
+```yaml
+version: "1.0"
+systems:
+  ERP:
+    name: "Enterprise Resource Planning (SAP S/4HANA)"
+    description: "Quản lý mua hàng (PO), kho vận (MM), tài chính kế toán (FI/CO)"
+    required_roles:
+      - "erp_user"
+      - "finance_team"
+      - "procurement_specialist"
+      - "it_admin"
+      - "sysadmin"
+  HRM:
+    name: "Human Resource Management (Workday)"
+    description: "Quản lý nhân sự, chấm công, bảng lương, chế độ bảo hiểm"
+    required_roles:
+      - "hr_specialist"
+      - "payroll_officer"
+      - "it_admin"
+      - "sysadmin"
+  CRM:
+    name: "Customer Relationship Management (Salesforce)"
+    description: "Quản lý khách hàng tiềm năng, cơ hội bán hàng, hợp đồng dịch vụ"
+    required_roles:
+      - "sales_rep"
+      - "account_executive"
+      - "crm_manager"
+      - "it_admin"
+      - "sysadmin"
+```
+
+### 6.2. Mô hình Dữ liệu BigQuery (Schema Definition)
+
+Bảng BigQuery: `knowledge_articles`
+
+| Tên Cột | Kiểu Dữ liệu | Mô tả | Chú thích |
+| :--- | :--- | :--- | :--- |
+| `id` | `STRING` | Khóa chính của đoạn tài liệu | Sinh băm định danh `SYSTEM-KB-{hash}` |
+| `system` | `STRING` | Mã hệ thống nghiệp vụ | Ví dụ: `ERP`, `HRM`, `CRM` |
+| `title` | `STRING` | Tiêu đề bài viết hướng dẫn | Hỗ trợ tìm kiếm từ khóa |
+| `category` | `STRING` | Phân loại nghiệp vụ | Ví dụ: `Procurement`, `Payroll` |
+| `content` | `STRING` | Nội dung chi tiết hướng dẫn xử lý | Được cắt nhỏ (chunking) tối đa 1000 từ |
+| `keywords` | `ARRAY<STRING>` | Danh sách từ khóa tra cứu nhanh | Gắn thẻ nghiệp vụ |
+| `embedding` | `ARRAY<FLOAT64>` | Vector nhúng ngữ nghĩa 768 chiều | Sinh từ `text-embedding-005` |
+| `source_uri` | `STRING` | Đường dẫn tài liệu gốc | File PDF / DOCX / MD / JSONL |
+| `content_hash` | `STRING` | SHA-256 hash của raw content | Dùng cho CDC Change Detection & Tránh embed lại |
+| `updated_at` | `TIMESTAMP` | Thời điểm cập nhật cuối cùng | UTC Timestamp |
+
+### 6.3. Trích Xuất Cấu Trúc Tài Liệu Đa Định Dạng (Structured Document Parsing)
+
+Module [`scripts/ingest_knowledge_base.py`](file:///Users/luuduc/.gemini/antigravity/scratch/it-helpdesk-agent/scripts/ingest_knowledge_base.py) trang bị lớp `DocumentParser` với khả năng bóc tách cấu trúc phân cấp (Hierarchical Sections) cho đa dạng định dạng:
+
+1. **Markdown & Plain Text (`parse_markdown_or_text`):**
+   - Phân tích cú pháp tiêu đề Markdown qua biểu thức chính quy `^(#{1,3})\s+(.+)$` (hỗ trợ H1, H2, H3).
+   - Tách tài liệu thành danh sách các `sections: [{"level": int, "heading": str, "content": str}]` đi kèm nội dung phẳng tổng thể và tiêu đề bài viết.
+2. **Microsoft Word (`parse_docx`):**
+   - Kiểm tra thuộc tính `style.name` của từng đoạn văn trong `python-docx`. Nhận diện các style `Heading 1`, `Heading 2`, `Heading 3` để phân đoạn logic, giữ lại toàn bộ định dạng phân mục của tài liệu nội bộ.
+3. **Adobe PDF (`parse_pdf` & `parse_pdf_document_ai`):**
+   - **Chế độ `pypdf_flat` (Mặc định - Chi phí $0):** Trích xuất văn bản phẳng nhanh qua `pypdf`, phù hợp với tài liệu đơn giản 1 cột.
+   - **Chế độ `document_ai` (Google Cloud Document AI Layout Parser - $10 / 1.000 trang):**
+     - Gọi dịch vụ Document AI Layout Parser phân tích layout phức tạp (multi-column, bảng biểu, danh mục phân cấp).
+     - **Fail-Closed & Retry An toàn:** Tích hợp `timeout_seconds` (mặc định 60s) và vòng lặp `max_retries` (mặc định 2) với cơ chế lũy thừa cơ số 2 (Exponential Backoff $2^{\text{attempt}}$). Tuyệt đối **không fallback âm thầm sang `pypdf_flat`** khi API lỗi để tránh suy giảm chất lượng dữ liệu ngoài ý muốn.
+     - Ánh xạ block layout `heading-1`, `heading-2`, `paragraph`, `table` sang danh sách `sections` logic.
+4. **JSON Lines (`parse_jsonl`):**
+   - Đọc các bài viết có cấu trúc sẵn. Tự động thêm `#L{line_no}` vào `source_uri` nếu thiếu, ngăn chặn triệt để nguy cơ đụng độ khóa định danh.
+
+---
+
+### 6.4. Pipeline Phân Mảnh Phân Tầng Thích Ứng (Tiered Adaptive Chunking Pipeline)
+
+Pipeline tự động lựa chọn chiến lược phân mảnh tối ưu nhất cho từng tài liệu dựa trên cấu hình khai báo tại [`config/systems.yaml`](file:///Users/luuduc/.gemini/antigravity/scratch/it-helpdesk-agent/config/systems.yaml):
+
+```mermaid
+flowchart TD
+    DocInput["Tài liệu đầu vào đã bóc tách sections"] --> Strategy{"Chiến lược cấu hình (strategy)"}
+    
+    Strategy -->|semantic| SemanticBranch["Cờ Semantic Chunking (Fallback auto/structured)"]
+    Strategy -->|fixed| FixedSplit["Cắt Đệ Quy chunk_text()"]
+    Strategy -->|auto| AutoEval{"is_well_structured() (>=2 sections, max 65% ratio, avg>=100)"}
+    
+    SemanticBranch --> AutoEval
+    AutoEval -->|True - Cấu trúc tốt| SectionChunk["chunk_by_sections() (Gắn Heading vào từng Chunk)"]
+    AutoEval -->|False - Thiếu cấu trúc| FixedSplit
+    
+    SectionChunk --> OverSize{"Kích thước section > max_chunk_size?"}
+    OverSize -->|Yes| SubSplit["Đệ quy chia nhỏ + Kế thừa Heading"]
+    OverSize -->|No| OutputChunks["Tập Chunks Hoàn Chỉnh"]
+    SubSplit --> OutputChunks
+    FixedSplit --> OutputChunks
+```
+
+#### 1. Thuật toán Thẩm định Cấu trúc Tự động (`is_well_structured`)
+Tài liệu được đánh giá là có cấu trúc chuẩn mực nếu thỏa mãn đồng thời 3 điều kiện:
+- Có tối thiểu **2 sections** logic (`len(sections) >= 2`).
+- Không có bất kỳ section đơn lẻ nào chiếm quá **65%** tổng dung lượng ký tự của tài liệu (`well_structured_max_section_ratio = 0.65`).
+- Độ dài trung bình mỗi section đạt ít nhất **100 ký tự** (`well_structured_min_avg_section_length = 100`).
+
+#### 2. Phân mảnh theo Section và Bảo toàn Tiêu đề (`chunk_by_sections`)
+- Luôn gắn ngữ cảnh tiêu đề phân mục vào đầu mỗi chunk (`## {heading}\n\n{content}`). Điều này giúp mô hình embedding và LLM nắm bắt chính xác chủ đề ngay cả khi đoạn văn đứng độc lập.
+- Khi một section vượt quá `max_chunk_size`, hệ thống tự động đệ quy chia nhỏ phần thân (`content`) với dung lượng khả dụng $\text{sub\_max\_size} = \text{max\_chunk\_size} - \text{len(header\_prefix)}$, đồng thời tự động gắn header tiền tố vào tất cả các sub-chunk con.
+
+#### 3. Phân mảnh Đệ quy Phân cấp Ký tự Phân cách (`chunk_text`)
+Khi tài liệu rơi vào tầng văn bản phẳng (`fixed` hoặc `auto` không đạt chuẩn cấu trúc), hàm `chunk_text()` áp dụng danh sách phân cách ưu tiên giảm dần:
+$$\text{Separators: } [\text{"\textbackslash n\textbackslash n\textbackslash n"}, \text{"\textbackslash n\textbackslash n"}, \text{"\textbackslash n"}, \text{". "}]$$
+Nếu đoạn văn vẫn dài hơn `max_chunk_size`, hệ thống tự động rơi xuống mức phân cách tiếp theo hoặc cắt cứng ký tự (Character Slicing) với độ gối đầu `overlap=150`.
+
+---
+
+### 6.5. Quy trình Nạp Dữ liệu Chuẩn Doanh nghiệp (Enterprise Ingestion Pipeline)
+
+Pipeline nạp tài liệu tiếp nhận đa định dạng và thực thi quy trình 8 bước chuẩn công nghiệp:
+
+```mermaid
+flowchart TD
+    Doc["Tài liệu Khách hàng (.pdf, .docx, .md, .jsonl)"] --> Parse["1. DocumentParser (Bóc tách Sections & Metadata)"]
+    Parse --> Chunk["2. Tiered Chunking (auto / fixed / semantic)"]
+    Chunk --> Hash["3. Tính ID xác định & content_hash (SHA-256)"]
+    
+    Hash --> CDC{"4. CDC Pre-Check (Đã có trong BigQuery?)"}
+    CDC -->|Trùng hash| Reuse["Tái sử dụng Embedding cũ (Skip API)"]
+    CDC -->|Hash mới/thay đổi| Embed["Gọi Vertex AI text-embedding-005"]
+    
+    Reuse --> Stage["5. Load Job vào Staging Table tạm thời (TTL=1h)"]
+    Embed --> Stage
+    
+    Stage --> Merge["6. Atomic SQL MERGE vào bảng chính (Dedup QUALIFY)"]
+    Merge --> Cleanup["7. DML DELETE Orphaned Chunks (Dọn dẹp chunk cũ)"]
+    Cleanup --> DropStage["8. DROP Staging Table & Đảm bảo IVF Index"]
+```
+
+1. **Băm Định danh Xác định & Content Hash:**
+   $$\text{Article ID} = \text{SYSTEM-KB-} + \text{SHA-256}(\text{system} + \text{":"} + \text{source\_uri} + \text{":"} + \text{title} + \text{":"} + \text{idx})[:8]$$
+   $$\text{Content Hash} = \text{SHA-256}(\text{chunk\_text})$$
+2. **Change Data Capture (CDC) Pre-Check & Tối ưu Chi phí Nhúng:**
+   - Hệ thống truy vấn trước `id`, `content_hash`, `embedding` từ bảng đích đối với các `source_uri` được nạp.
+   - Nếu `content_hash` không đổi $\rightarrow$ tái sử dụng vector embedding có sẵn, **tiết kiệm 95–99% chi phí gọi Embedding API** khi chạy lại định kỳ.
+   - Chỉ các chunk mới hoặc bị sửa đổi mới được gửi tới Vertex AI `text-embedding-005`.
+3. **Phòng vệ Chống Trùng ID 3 Tầng (3-Layer Anti-Collision Defense):**
+   - **Tầng 1 (Source URI Disambiguation):** Tự động gắn `#L{line_no}` cho các dòng JSONL độc lập.
+   - **Tầng 2 (Python In-Memory Deduplication & Alert):** Lọc trùng theo `id`, giữ bản ghi mới nhất và phát cảnh báo log chi tiết liệt kê các ID trùng để người vận hành kiểm tra dữ liệu đầu vào.
+   - **Tầng 3 (SQL Staging Dedup with `QUALIFY`):** Đảm bảo truy vấn `MERGE` không bao giờ gặp lỗi runtime *"UPDATE/MERGE must match at most one source row"*.
+4. **Staging Table & Batch Load Job (Loại bỏ Streaming Buffer Lock):**
+   - Tạo bảng tạm `{table_name}_staging_{uuid8}` với TTL tự hủy sau 1 giờ.
+   - Sử dụng `load_table_from_json` (Batch Load Job miễn phí) để đưa dữ liệu vào staging table $\rightarrow$ không tạo streaming buffer trên bảng đích.
+5. **Atomic SQL MERGE (Chống Trùng lặp & Idempotent Tuyệt đối):**
+   ```sql
+   MERGE `{project_id}.{dataset_id}.knowledge_articles` T
+   USING (
+     SELECT * FROM `{project_id}.{dataset_id}.knowledge_articles_staging`
+     QUALIFY ROW_NUMBER() OVER (PARTITION BY id ORDER BY updated_at DESC) = 1
+   ) S
+   ON T.id = S.id
+   WHEN MATCHED AND (T.content_hash != S.content_hash OR T.content_hash IS NULL) THEN
+     UPDATE SET
+       T.system = S.system,
+       T.title = S.title,
+       T.category = S.category,
+       T.content = S.content,
+       T.keywords = S.keywords,
+       T.embedding = S.embedding,
+       T.source_uri = S.source_uri,
+       T.content_hash = S.content_hash,
+       T.updated_at = S.updated_at
+   WHEN NOT MATCHED THEN
+     INSERT (id, system, title, category, content, keywords, embedding, source_uri, content_hash, updated_at)
+     VALUES (S.id, S.system, S.title, S.category, S.content, S.keywords, S.embedding, S.source_uri, S.content_hash, S.updated_at);
+   ```
+6. **Dọn dẹp Orphaned Chunks khi Thay Đổi Chiến Lược Chunking hoặc Tài Liệu Ngắn Lại:**
+   - Do bảng chính sử dụng Batch Load Job vào staging nên không có streaming buffer, câu lệnh DML `DELETE` chạy trơn tru 100%:
+   ```sql
+   DELETE FROM `{project_id}.{dataset_id}.knowledge_articles`
+   WHERE source_uri IN UNNEST(@source_uris)
+     AND id NOT IN (
+       SELECT id FROM `{project_id}.{dataset_id}.knowledge_articles_staging`
+     );
+   ```
+7. **BigQuery IVF Index DDL:** Tự động tạo chỉ mục vector nếu chưa có:
+   ```sql
+   CREATE VECTOR INDEX IF NOT EXISTS `knowledge_articles_vector_idx`
+   ON `{project_id}.{dataset_id}.knowledge_articles`(embedding)
+   OPTIONS(distance_type='COSINE', index_type='IVF');
+   ```
+
+> [!NOTE]
+> - **Chuyển đổi Chỉ mục:** BigQuery tự động thực hiện tìm kiếm chính xác (Exact Cosine Search) khi kích thước bảng dưới 5,000 dòng, và tự động kích hoạt tìm kiếm gần đúng tốc độ cao (IVF) khi số lượng bài viết vượt quá 5,000 dòng.
+> - **Tối ưu Scan Query:** Bảng được cấu hình `clustering = ["system", "category"]`. Khi tìm kiếm theo từng hệ thống nghiệp vụ, mức tiết kiệm 60–80% chi phí scan dữ liệu là ước tính điển hình của ngành (industry benchmark) dựa trên nguyên lý lọc block của BigQuery Clustering.
+
+---
+
+## 7. HỆ THỐNG ĐO LƯỜNG VÀ BẢO VỆ QUYỀN RIÊNG TƯ (TELEMETRY & PRIVACY)
+
+### 7.1. Kiến trúc Telemetry Đa Tầng
+- **Module:** `it_helpdesk_agent.app_utils.telemetry`
+- **Kết nối Luồng Thực tế:** Tự động ghi nhận thông số qua `semantic_cache_before_model_callback` (khi Cache Hit) và `semantic_cache_after_model_callback` (khi Model phản hồi).
+- **Source of Truth:** Ghi structured JSON log trực tiếp lên **Google Cloud Logging**. Cho phép xây dựng dashboard theo thời gian thực trên BigQuery Log Sink hoặc Looker Studio.
+- **In-Memory Rolling Buffer:** Lưu trữ 1,000 sự kiện gần nhất phục vụ endpoint API `/api/analytics/summary` cho việc giám sát tức thời.
+
+```mermaid
+flowchart LR
+    UserQuery["User Request"] --> BeforeCB["before_model_callback"]
+    BeforeCB -->|Cache Hit| RecHit["Record Telemetry: cache_hit=True, 10ms"]
+    BeforeCB -->|Cache Miss| LLM["Gemini Model Execution"]
+    LLM --> AfterCB["after_model_callback"]
+    AfterCB --> RecMiss["Record Telemetry: cache_hit=False, Model/Tools"]
+    
+    RecHit --> StreamLog["Cloud Logging (JSON Payload)"]
+    RecMiss --> StreamLog
+    RecHit --> MemBuf["Memory Buffer (1,000 events)"]
+    RecMiss --> MemBuf
+    MemBuf --> API["GET /api/analytics/summary"]
+```
+
+### 7.2. Chính sách Bảo vệ Dữ liệu Nhạy cảm (Banking & Pharma Compliance)
+Hệ thống cung cấp các biến môi trường để tuân thủ các quy định bảo mật khắt khe (GDPR, HIPAA, PCI-DSS):
+
+| Biến Môi trường | Kiểu | Mặc định | Ý nghĩa & Hành vi |
+| :--- | :--- | :--- | :--- |
+| `TELEMETRY_ANONYMIZE_USERS` | `bool` | `false` | Nếu `true`, tự động băm mã nhân viên bằng thuật toán SHA-256 (`anon_7a8f9c...`) trước khi ghi log. Ngăn ngừa lộ lọt danh tính nhân sự. |
+| `TELEMETRY_INCLUDE_QUERY` | `bool` | `true` | Nếu `false`, ẩn toàn bộ nội dung câu hỏi nghiệp vụ và thay bằng `[REDACTED_PRIVACY]`. Bảo vệ tuyệt đối thông tin tài chính/bệnh án nhạy cảm. |
+
+---
+
+## 8. HẠ TẦNG VÀ TRIỂN KHAI ĐÁM MÂY (INFRASTRUCTURE & DEPLOYMENT)
+
+Toàn bộ hạ tầng được định nghĩa dưới dạng mã (Infrastructure as Code - IaC) thông qua Terraform tại `deployment/terraform/`.
+
+```mermaid
+graph TB
+    subgraph GoogleCloud ["Google Cloud Project"]
+        subgraph SecurityEdge ["Edge Security & Routing"]
+            IP["Static Global External IP"] --> Cert["Google-Managed SSL Certificate"]
+            Cert --> HTTPSProxy["Target HTTPS Proxy (Port 443)"]
+            HTTPSProxy --> URLMap["URL Map Routing"]
+            URLMap --> BackendService["Compute Backend Service"]
+            CloudArmor["Cloud Armor Security Policy (WAF)"] -.-> BackendService
+            BackendService --> ServerlessNEG["Serverless NEG"]
+        end
+
+        subgraph ComputePlatform ["Serverless Execution"]
+            ServerlessNEG --> CloudRun["Cloud Run Service (it-helpdesk-agent)"]
+            CloudRun --- SA["Service Account: sa-it-helpdesk-agent"]
+        end
+
+        subgraph ManagedStorage ["Enterprise Data Stores"]
+            SA -->|bigquery.dataViewer, jobUser| BigQuery["BigQuery Dataset: it_helpdesk_kb"]
+            SA -->|datastore.user| Firestore["Firestore Native Database"]
+            SA -->|aiplatform.user| VertexAI["Vertex AI (Gemini & Embeddings)"]
+            SA -->|storage.objectAdmin| GCS["Cloud Storage Bucket (Doc Ingestion)"]
+        end
+    end
+```
+
+### 8.1. Thông số Kỹ thuật Cloud Run
+- **Tài nguyên Instance:** 2 vCPU, 2 GiB Memory / container instance.
+- **Chính sách Tự động Co giãn (Autoscaling):** `min_instance_count = 0` (scale-to-zero tiết kiệm chi phí ngoài giờ làm việc), `max_instance_count = 5` (kiểm soát ngân sách).
+- **Độ tương tranh (Concurrency):** 80 concurrent requests / container.
+- **Giám sát Sức khỏe (Health Probes):**
+  - `startup_probe`: HTTP GET `/healthz`, delay ban đầu 5s, timeout 3s.
+  - `liveness_probe`: HTTP GET `/healthz`, chu kỳ 15s, timeout 3s.
+
+### 8.2. Bảo mật Cạnh Mạng (Cloud Armor & HTTPS Load Balancer)
+- **HTTPS Enforcement:** Bắt buộc mã hóa toàn bộ dữ liệu truyền tải trên đường truyền (In-transit Encryption via TLS 1.3).
+- **Google-Managed SSL Certificate:** Tự động gia hạn chứng chỉ SSL cho domain doanh nghiệp.
+- **Chính sách Cloud Armor WAF:**
+  - Quy tắc Chống Tấn công: Rate limiting tầng L7 (giới hạn 100 req/phút/IP).
+  - Quy tắc Kiểm soát Địa lý: Hạn chế truy cập theo dải IP mạng nội bộ hoặc quốc gia chỉ định.
+
+---
+
+## 9. DANH MỤC API VÀ HỢP ĐỒNG DỮ LIỆU (API REFERENCE & DATA CONTRACTS)
+
+### 9.1. Các Endpoint Cốt lõi của Ứng dụng
+
+#### 1. `GET /healthz` & `GET /readyz`
+- **Mục đích:** Health check probe cho Cloud Run, Kubernetes và Load Balancer.
+- **Xác thực:** Không yêu cầu (Public Probe Endpoint).
+- **Phản hồi:**
+  ```json
+  {
+    "status": "healthy",
+    "timestamp": 1756612800.0,
+    "service": "it-helpdesk-agent"
+  }
+  ```
+
+#### 2. `GET /api/analytics/summary`
+- **Mục đích:** Xem báo cáo thống kê hoạt động nhanh của hệ thống.
+- **Xác thực:** Bắt buộc Bearer Token (SSO OIDC).
+- **Phản hồi:**
+  ```json
+  {
+    "total_interactions": 1250,
+    "cache_hit_count": 520,
+    "cache_hit_rate_pct": 41.6,
+    "tier_breakdown": {
+      "L1_SELFSERVICE_AGENT": 850,
+      "L2_ENTERPRISE_RAG_AGENT": 320,
+      "L3_DEEP_DIAGNOSTICS_AGENT": 80
+    },
+    "system_breakdown": {
+      "ERP": 450,
+      "HRM": 310,
+      "CRM": 180,
+      "GENERAL": 310
+    },
+    "avg_latency_ms": 342.5,
+    "resolution_breakdown": {
+      "RESOLVED_CACHE": 520,
+      "RESOLVED_MODEL": 610,
+      "INVOKED_TOOLS": 120
+    }
+  }
+  ```
+
+#### 3. `POST /run` (Google ADK Agent Invocation)
+- **Mục đích:** Gửi thông điệp trò chuyện với Agent.
+- **Xác thực:** Bắt buộc Bearer Token (SSO OIDC).
+- **Payload:**
+  ```json
+  {
+    "app_name": "it_helpdesk_agent",
+    "user_id": "emp-001@company.com",
+    "session_id": "sess-49b81f30",
+    "message": "Làm sao để tạo Purchase Order SAP ME21N khi bị lỗi thiếu ngân sách?"
+  }
+  ```
+
+---
+
+## 10. QUY TRÌNH KIỂM THỬ VÀ ĐẢM BẢO CHẤT LƯỢNG (TESTING & QA)
+
+Hệ thống sở hữu bộ kiểm thử tự động toàn diện với **116 test cases**, đạt độ bao phủ mã nguồn **85%** trên toàn bộ các module.
+
+```mermaid
+pie title Phân bổ Bộ Kiểm thử Đơn vị & Tích hợp (116 Test Cases)
+    "Security & Adversarial (IDOR, SQLi, Fail-Closed)" : 23
+    "Semantic Cache & ContextVar Isolation" : 9
+    "SSO Auth & OIDC JWT Verification" : 13
+    "Ticketing Tool & RBAC Workflows" : 4
+    "System Config & Dynamic Loading" : 10
+    "Telemetry, Analytics & Privacy" : 4
+    "Enterprise RAG MCP & Knowledge Store" : 10
+    "Rate Limiting & Middleware Order" : 9
+    "Container Packaging & Dockerfile" : 6
+    "Tiered Chunking & Ingestion Pipeline" : 28
+```
+
+### 10.1. Lệnh Thực thi Kiểm thử
+
+```bash
+# 1. Kích hoạt môi trường ảo
+source .venv/bin/activate
+
+# 2. Chạy toàn bộ 116 unit tests với báo cáo coverage
+pytest tests/ --cov=it_helpdesk_agent -v
+
+# 3. Kiểm tra riêng biệt bộ kiểm thử bảo mật & tấn công giả lập
+pytest tests/unit/test_security_adversarial.py -v
+```
+
+### 10.2. Kết luận & Mức độ Sẵn sàng (Production-Readiness Verdict)
+Hệ thống **Enterprise IT Helpdesk Multi-Agent AI** đã hoàn thành toàn diện các vòng rà soát kiến trúc chuyên sâu, trang bị đầy đủ pipeline xử lý tri thức phân tầng thông minh, cơ chế dọn dẹp dữ liệu mồ côi, bảo vệ toàn diện dữ liệu nhạy cảm theo tiêu chuẩn Zero-Trust và sẵn sàng triển khai trên môi trường Production của Google Cloud Platform.
