@@ -24,10 +24,12 @@ _METRICS_BUFFER: deque = deque(maxlen=1000)
 
 
 import hashlib
+import re
 
 # Configuration for sensitive/regulated environments (Banking, Pharma, Healthcare)
-TELEMETRY_ANONYMIZE_USERS = os.getenv("TELEMETRY_ANONYMIZE_USERS", "false").lower() in ("true", "1", "yes")
-TELEMETRY_INCLUDE_QUERY = os.getenv("TELEMETRY_INCLUDE_QUERY", "true").lower() in ("true", "1", "yes")
+# Fail-Closed Defaults: User ID is anonymized (SHA-256) and query snippet is redacted by default
+TELEMETRY_ANONYMIZE_USERS = os.getenv("TELEMETRY_ANONYMIZE_USERS", "true").lower() in ("true", "1", "yes")
+TELEMETRY_INCLUDE_QUERY = os.getenv("TELEMETRY_INCLUDE_QUERY", "false").lower() in ("true", "1", "yes")
 
 
 class ProductMetricsCollector:
@@ -35,14 +37,10 @@ class ProductMetricsCollector:
 
     @staticmethod
     def infer_system(query: str, tools_called: Optional[list[str]] = None) -> str:
-        """Infers target enterprise system (ERP, HRM, CRM) from query or tool invocation."""
-        q_upper = query.upper() if query else ""
-        if "SAP" in q_upper or "ERP" in q_upper or "ME21N" in q_upper or "PO" in q_upper:
-            return "ERP"
-        if "HRM" in q_upper or "WORKDAY" in q_upper or "PHÉP" in q_upper or "BHXH" in q_upper:
-            return "HRM"
-        if "CRM" in q_upper or "SALESFORCE" in q_upper or "LEAD" in q_upper:
-            return "CRM"
+        """
+        Infers target enterprise system (ERP, HRM, CRM) from query using word-boundary (\\b) regex
+        or tool invocation. Prevents substring collision (e.g. 'PO' in 'chính sách').
+        """
         if tools_called:
             for t in tools_called:
                 if "rag" in t.lower():
@@ -51,6 +49,21 @@ class ProductMetricsCollector:
                     return "TICKETING"
                 if "log" in t.lower():
                     return "LOG_ANALYZER"
+
+        if query:
+            try:
+                from it_helpdesk_agent.app_utils.system_config import get_domain_keyword_patterns
+                patterns = get_domain_keyword_patterns()
+                for domain in ("ERP", "HRM", "CRM"):
+                    if domain in patterns and patterns[domain].search(query):
+                        return domain
+            except Exception:
+                # Fallback word-boundary check
+                for dom in ("ERP", "HRM", "CRM"):
+                    pattern = rf"(?i)\b{dom}\b"
+                    if re.search(pattern, query):
+                        return dom
+
         return "GENERAL"
 
     @staticmethod

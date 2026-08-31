@@ -53,7 +53,10 @@ high_reasoning_model = Gemini(
 )
 
 from contextvars import ContextVar
+import time
+
 _current_l3_soft_warning: ContextVar[Optional[str]] = ContextVar("_current_l3_soft_warning", default=None)
+_turn_start_time: ContextVar[Optional[float]] = ContextVar("_turn_start_time", default=None)
 
 async def save_session_to_memory_callback(*args, **kwargs) -> None:
     """
@@ -75,6 +78,9 @@ async def semantic_cache_before_model_callback(
     - For L3 Deep Diagnostics: Enforces strict 10 req/min quota to prevent runaway Gemini 3 Pro costs.
     - If cache hit: Returns LlmResponse immediately to short-circuit the model call and save 100% tokens.
     """
+    start_t = time.perf_counter()
+    _turn_start_time.set(start_t)
+
     inv_ctx = getattr(callback_context, "_invocation_context", None)
     agent_name = inv_ctx.agent.name if inv_ctx and hasattr(inv_ctx, "agent") else ""
 
@@ -122,7 +128,8 @@ async def semantic_cache_before_model_callback(
     cache = get_semantic_cache()
     cached = cache.get(query=query_text, user_id=user_id)
     if cached:
-        # Record cache hit in product metrics telemetry
+        # Record cache hit in product metrics telemetry with actual cache lookup latency
+        hit_latency_ms = round((time.perf_counter() - start_t) * 1000.0, 2)
         try:
             session_id = getattr(getattr(inv_ctx, "session", None), "id", "sess_unknown")
             user_inst = current_sso_user.get()
@@ -134,7 +141,7 @@ async def semantic_cache_before_model_callback(
                 query=query_text,
                 tier_invoked=agent_name or "L1",
                 cache_hit=True,
-                latency_ms=10.0,
+                latency_ms=hit_latency_ms,
                 resolution_status="RESOLVED_CACHE"
             )
         except Exception as e:
@@ -209,6 +216,9 @@ async def semantic_cache_after_model_callback(
             if getattr(llm_response, "error_code", None):
                 res_status = "ERROR"
 
+            start_t = _turn_start_time.get()
+            measured_latency_ms = round((time.perf_counter() - start_t) * 1000.0, 2) if start_t is not None else 0.0
+
             ProductMetricsCollector.record_interaction(
                 session_id=session_id,
                 user_id=user_id,
@@ -216,7 +226,7 @@ async def semantic_cache_after_model_callback(
                 query=user_query,
                 tier_invoked=agent_name,
                 cache_hit=False,
-                latency_ms=0.0,
+                latency_ms=measured_latency_ms,
                 resolution_status=res_status,
                 tools_called=tools_called,
             )

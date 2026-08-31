@@ -207,9 +207,12 @@ def classify_helpdesk_intent(query: str) -> Tuple[str, str]:
     """
     Genuine triage classifier applying Root Orchestrator instructions and system configuration.
     Inspects ONLY the query text — no access to test case ground truth metadata or answer labels.
+    Uses centralized domain patterns with word boundary regex from config/systems.yaml.
     Returns: (predicted_tier, predicted_system) where tier in {"L1", "L2", "L3", "TRAP"}.
     """
     import re
+    from it_helpdesk_agent.app_utils.system_config import get_domain_keyword_patterns
+    patterns = get_domain_keyword_patterns()
     q_lower = query.lower()
 
     # 1. Adversarial & Security Threat Detection (Zero-Trust Security Boundary)
@@ -230,25 +233,24 @@ def classify_helpdesk_intent(query: str) -> Tuple[str, str]:
     if any(p in q_lower for p in out_of_scope_patterns):
         return "TRAP", "NONE"
 
+    if "TRAP_REFUSAL" in patterns and patterns["TRAP_REFUSAL"].search(query):
+        return "TRAP", "NONE"
+
     # 3. L3 Deep Diagnostics & Compliance Triage
     l3_patterns = [
         "stack trace", "nullpointer", "outofmemory", "deadlock",
         "connection pool", "root cause", "rca",
         "sla", "uptime", "service credits", "hợp đồng", "dpa", "bồi thường"
     ]
-    if any(p in q_lower for p in l3_patterns):
+    if any(p in q_lower for p in l3_patterns) or ("L3_DIAGNOSTICS" in patterns and patterns["L3_DIAGNOSTICS"].search(query)):
         return "L3", "ALL"
 
-    # 4. L2 Enterprise RAG Systems (ERP / HRM / CRM)
-    erp_keywords = ["sap", "erp", "po", "purchase order", "fiscal", "kỳ kế toán", "me21n", "ob52", "oracle erp"]
-    hrm_keywords = ["workday", "hrm", "bamboohr", "payroll", "bảng lương", "chấm công", "onboarding"]
-    crm_keywords = ["salesforce", "crm", "hubspot", "lead", "daily api limit", "api limit", "webhook"]
-
-    if any(re.search(r'\b' + re.escape(w) + r'\b', q_lower) for w in erp_keywords):
+    # 4. L2 Enterprise RAG Systems (ERP / HRM / CRM) using centralized word boundary patterns
+    if "ERP" in patterns and patterns["ERP"].search(query):
         return "L2", "ERP"
-    if any(re.search(r'\b' + re.escape(w) + r'\b', q_lower) for w in hrm_keywords):
+    if "HRM" in patterns and patterns["HRM"].search(query):
         return "L2", "HRM"
-    if any(re.search(r'\b' + re.escape(w) + r'\b', q_lower) for w in crm_keywords):
+    if "CRM" in patterns and patterns["CRM"].search(query):
         return "L2", "CRM"
 
     # 5. L1 IT Support & Self-Service FAQ (Password, Wifi, Account unlock, standard apps)

@@ -25,8 +25,34 @@ class HelpdeskTicket(BaseModel):
     updated_at: str
 
 
-# In-memory ticket storage (Local cache & fallback for offline/test environments)
-_TICKETS_DB: dict[str, HelpdeskTicket] = {}
+from collections import OrderedDict
+import threading
+
+MAX_LOCAL_TICKETS_CACHE = int(os.getenv("MAX_LOCAL_TICKETS_CACHE", "1000"))
+# In-memory LRU ticket storage (Local cache & fallback for offline/test environments)
+_TICKETS_DB: OrderedDict[str, HelpdeskTicket] = OrderedDict()
+_tickets_cache_lock = threading.Lock()
+
+
+def _cache_put_ticket(ticket: HelpdeskTicket) -> None:
+    """Inserts or updates ticket in local LRU cache with eviction when size exceeds limit."""
+    with _tickets_cache_lock:
+        norm_id = ticket.id.upper()
+        if norm_id in _TICKETS_DB:
+            _TICKETS_DB.move_to_end(norm_id)
+        _TICKETS_DB[norm_id] = ticket
+        while len(_TICKETS_DB) > MAX_LOCAL_TICKETS_CACHE:
+            _TICKETS_DB.popitem(last=False)
+
+
+def _cache_get_ticket(ticket_id: str) -> Optional[HelpdeskTicket]:
+    """Retrieves ticket from LRU cache, updating its access recency."""
+    with _tickets_cache_lock:
+        norm_id = ticket_id.upper()
+        if norm_id in _TICKETS_DB:
+            _TICKETS_DB.move_to_end(norm_id)
+            return _TICKETS_DB[norm_id]
+        return None
 
 # Lazy Firestore Client Initialization
 _firestore_client = None
@@ -51,8 +77,8 @@ def _get_firestore():
 
 
 def _persist_ticket_to_storage(ticket: HelpdeskTicket):
-    """Persists ticket to Firestore if available and updates local cache."""
-    _TICKETS_DB[ticket.id] = ticket
+    """Persists ticket to Firestore if available and updates local LRU cache."""
+    _cache_put_ticket(ticket)
     fs = _get_firestore()
     if fs:
         try:
@@ -62,10 +88,11 @@ def _persist_ticket_to_storage(ticket: HelpdeskTicket):
 
 
 def _load_ticket_from_storage(ticket_id: str) -> Optional[HelpdeskTicket]:
-    """Loads ticket from local cache, or fetches from Firestore if missing."""
+    """Loads ticket from local LRU cache, or fetches from Firestore if missing."""
     ticket_id_norm = ticket_id.upper()
-    if ticket_id_norm in _TICKETS_DB:
-        return _TICKETS_DB[ticket_id_norm]
+    cached = _cache_get_ticket(ticket_id_norm)
+    if cached is not None:
+        return cached
     
     fs = _get_firestore()
     if fs:
@@ -74,7 +101,7 @@ def _load_ticket_from_storage(ticket_id: str) -> Optional[HelpdeskTicket]:
             if doc.exists:
                 data = doc.to_dict()
                 ticket = HelpdeskTicket(**data)
-                _TICKETS_DB[ticket_id_norm] = ticket
+                _cache_put_ticket(ticket)
                 return ticket
         except Exception as e:
             logger.error(f"Error fetching ticket {ticket_id} from Firestore: {e}")
@@ -271,23 +298,27 @@ def route_ticket_to_tier(
     return resp
 
 
-def list_user_tickets(user_id: str) -> dict:
+def list_user_tickets(user_id: str, limit: int = 50) -> dict:
     """
-    Lists all tickets associated with a specific user ID.
+    Lists tickets associated with a specific user ID with bounded pagination limit.
     Enforces ownership verification: employees can only list their own tickets.
     """
     allowed, err = _check_ticket_access(user_id)
     if not allowed:
         return {"status": "error", "message": err}
 
+    bounded_limit = max(1, min(int(limit), 100))
+
     fs = _get_firestore()
     if fs:
         try:
-            docs = fs.collection("helpdesk_tickets").where("user_id", "==", user_id).stream()
+            from google.cloud.firestore_v1.base_query import FieldFilter
+            query = fs.collection("helpdesk_tickets").where(filter=FieldFilter("user_id", "==", user_id)).limit(bounded_limit)
+            docs = query.stream()
             results = []
             for doc in docs:
                 t = HelpdeskTicket(**doc.to_dict())
-                _TICKETS_DB[t.id] = t
+                _cache_put_ticket(t)
                 results.append(t.model_dump())
             if results:
                 return {
@@ -298,7 +329,13 @@ def list_user_tickets(user_id: str) -> dict:
         except Exception as e:
             logger.warning(f"Firestore query failed, reading local cache: {e}")
 
-    user_tickets = [t.model_dump() for t in _TICKETS_DB.values() if t.user_id == user_id or (t.user_id and str(t.user_id).lower() == str(user_id).lower())]
+    with _tickets_cache_lock:
+        user_tickets = [
+            t.model_dump()
+            for t in _TICKETS_DB.values()
+            if t.user_id == user_id or (t.user_id and str(t.user_id).lower() == str(user_id).lower())
+        ][:bounded_limit]
+
     return {
         "status": "success",
         "count": len(user_tickets),

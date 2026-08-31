@@ -199,13 +199,17 @@ def verify_google_oidc_token(
                     detail=f"Access denied: Account domain not permitted. Allowed domains: {domains_to_check}.",
                 )
 
+        from it_helpdesk_agent.app_utils.system_config import resolve_user_roles
+
+        assigned_roles = resolve_user_roles(email, payload.get("roles"))
+
         return SSOUser(
             user_id=payload.get("sub", email),
             email=email,
             email_verified=True,
             full_name=payload.get("name", "Enterprise Employee"),
             department=payload.get("department", "General"),
-            roles=payload.get("roles", ["employee"]),
+            roles=assigned_roles,
             hosted_domain=hd,
             is_authenticated=True,
         )

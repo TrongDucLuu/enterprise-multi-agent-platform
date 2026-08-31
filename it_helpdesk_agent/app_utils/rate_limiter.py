@@ -1,5 +1,6 @@
 import os
 import time
+import hashlib
 import logging
 import threading
 from abc import ABC, abstractmethod
@@ -299,9 +300,35 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         else:
             client_ip = "unknown"
 
-        # User authorization header hash or IP
-        auth_header = request.headers.get("Authorization", "")
-        key = f"ip:{client_ip[:45]}" if not auth_header else f"auth:{hash(auth_header)}"
+        # Determine client rate-limiting key:
+        # 1. Authenticated User: f"user:{sha256(user_id)}"
+        # 2. Unauthenticated / Invalid Token: f"ip:{client_ip}"
+        user_id = None
+        try:
+            from it_helpdesk_agent.app_utils.sso_auth import current_sso_user
+            current_user = current_sso_user.get()
+            if current_user and getattr(current_user, "is_authenticated", False):
+                user_id = getattr(current_user, "user_id", None)
+        except Exception:
+            pass
+
+        auth_header = request.headers.get("Authorization", "").strip()
+        if not user_id and auth_header.startswith("Bearer "):
+            token = auth_header[7:].strip()
+            try:
+                from it_helpdesk_agent.app_utils.sso_auth import verify_sso_token
+                user = verify_sso_token(token)
+                if user and getattr(user, "is_authenticated", False):
+                    user_id = user.user_id
+            except Exception:
+                user_id = None
+
+        if user_id:
+            user_hash = hashlib.sha256(str(user_id).encode("utf-8")).hexdigest()[:32]
+            key = f"user:{user_hash}"
+        else:
+            ip_clean = client_ip[:45].strip()
+            key = f"ip:{ip_clean}"
 
         allowed, remaining, retry_after = self._get_limiter().is_allowed(key)
         if not allowed:

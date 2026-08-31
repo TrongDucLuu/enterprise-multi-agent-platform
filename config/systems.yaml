@@ -9,6 +9,26 @@ shared_admin_roles:
   - "helpdesk_operator"
   - "lead_engineer"
 
+# Enterprise User / Service Role Mappings
+# Maps authenticated email addresses to enterprise RBAC roles
+user_role_mappings:
+  "admin@company.com":
+    - "it_admin"
+    - "sys_admin"
+  "it.admin@company.com":
+    - "it_admin"
+  "erp.user@company.com":
+    - "erp_user"
+  "finance.lead@company.com":
+    - "finance_user"
+    - "accountant"
+  "hr.manager@company.com":
+    - "hr_manager"
+    - "hr_specialist"
+  "sales.director@company.com":
+    - "sales_manager"
+    - "sales_rep"
+
 systems:
   ERP:
     display_name: "Enterprise Resource Planning (ERP)"
@@ -52,6 +72,70 @@ systems:
       - "sales_manager"
       - "marketing"
       - "crm_admin"
+
+# Centralized Domain Classification Keywords
+# Used with word-boundary (\b) regex for intent routing and telemetry
+domain_keywords:
+  ERP:
+    - "ERP"
+    - "SAP"
+    - "ORACLE"
+    - "ME21N"
+    - "PURCHASE ORDER"
+    - "PO"
+    - "KHO HÀNG"
+    - "KẾ TOÁN"
+    - "INVENTORY"
+    - "TÀI CHÍNH"
+  HRM:
+    - "HRM"
+    - "WORKDAY"
+    - "BAMBOOHR"
+    - "CHẤM CÔNG"
+    - "TIMESHEET"
+    - "BẢNG LƯƠNG"
+    - "PAYROLL"
+    - "ONBOARDING"
+    - "BHXH"
+    - "NGHỈ PHÉP"
+    - "NHÂN SỰ"
+  CRM:
+    - "CRM"
+    - "SALESFORCE"
+    - "HUBSPOT"
+    - "LEAD"
+    - "PIPELINE"
+    - "TERRITORY"
+    - "OPPORTUNITY"
+    - "SALES"
+    - "KHÁCH HÀNG"
+  L3_DIAGNOSTICS:
+    - "ROOT CAUSE"
+    - "STACK TRACE"
+    - "MEMORY LEAK"
+    - "THREAD DUMP"
+    - "HEAP DUMP"
+    - "CORRUPT"
+    - "SEGFAULT"
+    - "KERNEL PANIC"
+    - "OUT OF MEMORY"
+    - "DEADLOCK"
+    - "CRASH LOG"
+    - "CORE DUMP"
+  TRAP_REFUSAL:
+    - "THỜI TIẾT"
+    - "WEATHER"
+    - "VIẾT THƠ"
+    - "POEM"
+    - "LÀM THƠ"
+    - "CHỨNG KHOÁN"
+    - "BITCOIN"
+    - "CRYPTO"
+    - "NẤU ĂN"
+    - "RECIPE"
+    - "XEM PHIM"
+    - "BÓNG ĐÁ"
+    - "TỬ VI"
 
 # Tiered Chunking Pipeline Strategy Configuration
 chunking:

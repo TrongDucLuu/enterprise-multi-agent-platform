@@ -137,7 +137,7 @@ variable "firestore_database_name" {
 }
 
 variable "enable_load_balancer" {
-  description = "Provision a Google Cloud Global HTTPS Load Balancer with Cloud Armor WAF and SSL"
+  description = "Provision a Google Cloud Global HTTPS Load Balancer with Cloud Armor WAF and SSL (Recommended for Enterprise Production)"
   type        = bool
   default     = false
 }
@@ -173,15 +173,15 @@ variable "reasoning_model_name" {
 }
 
 variable "telemetry_anonymize_users" {
-  description = "Hash user IDs (SHA-256) in telemetry logs for GDPR/HIPAA/Banking compliance"
+  description = "Hash user IDs (SHA-256) in telemetry logs for GDPR/HIPAA/Banking compliance (Fail-closed default: true)"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "telemetry_include_query" {
-  description = "Include query snippets in telemetry logs (set to false in highly sensitive environments)"
+  description = "Include query snippets in telemetry logs (Fail-closed default: false for sensitive data protection)"
   type        = bool
-  default     = true
+  default     = false
 }
 
 

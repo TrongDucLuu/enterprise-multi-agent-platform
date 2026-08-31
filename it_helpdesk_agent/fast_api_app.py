@@ -69,6 +69,15 @@ app: FastAPI = get_fast_api_app(
     otel_to_cloud=OTEL_TO_CLOUD,
 )
 
+# Enterprise Security Hardening: Disable Swagger UI, ReDoc, and OpenAPI schema in Production
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
+IS_PRODUCTION = ENVIRONMENT == "production" or bool(os.getenv("K_SERVICE"))
+if IS_PRODUCTION:
+    app.docs_url = None
+    app.redoc_url = None
+    app.openapi_url = None
+
+
 # Middleware Stack (Starlette executes in reverse registration order - LIFO):
 # 1. Inner layer: SSO Authentication Middleware (verifies JWT/OIDC after passing rate limiter)
 app.add_middleware(SSOAuthenticationMiddleware)

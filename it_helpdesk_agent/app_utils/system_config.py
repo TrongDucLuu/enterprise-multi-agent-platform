@@ -263,12 +263,22 @@ def load_system_config(config_path: Optional[str] = None, force_reload: bool = F
         "hybrid_search_enabled": bool(hybrid_search_enabled),
     }
 
+    user_role_mappings = data.get("user_role_mappings", {})
+    if not isinstance(user_role_mappings, dict):
+        user_role_mappings = {}
+
+    domain_keywords = data.get("domain_keywords", {})
+    if not isinstance(domain_keywords, dict):
+        domain_keywords = {}
+
     parsed_config = {
         "shared_admin_roles": shared_admin_roles,
         "systems": validated_systems,
         "chunking": validated_chunking,
         "document_processing": validated_doc_proc,
         "retrieval": validated_retrieval,
+        "user_role_mappings": user_role_mappings,
+        "domain_keywords": domain_keywords,
     }
 
     _CONFIG_CACHE = parsed_config
@@ -279,6 +289,9 @@ def load_system_config(config_path: Optional[str] = None, force_reload: bool = F
 
 def reload_system_config(config_path: Optional[str] = None) -> dict[str, Any]:
     """Forces cache invalidation and reloads the configuration."""
+    global _USER_ROLE_MAPPINGS_CACHE, _COMPILED_KEYWORD_PATTERNS
+    _USER_ROLE_MAPPINGS_CACHE = None
+    _COMPILED_KEYWORD_PATTERNS = None
     return load_system_config(config_path=config_path, force_reload=True)
 
 
@@ -385,4 +398,132 @@ def get_retrieval_config() -> dict[str, Any]:
         "fraction_lists_to_search": 0.05,
         "hybrid_search_enabled": False,
     })
+
+
+def get_user_role_mappings() -> dict[str, list[str]]:
+    """
+    Returns mapping from user email (lowercase) to list of assigned roles.
+    Combines config/systems.yaml user_role_mappings with optional USER_ROLE_MAPPINGS env var.
+    """
+    cfg = load_system_config()
+    mappings: dict[str, list[str]] = {}
+    
+    # 1. From YAML
+    raw_mappings = cfg.get("user_role_mappings", {})
+    if isinstance(raw_mappings, dict):
+        for email, roles in raw_mappings.items():
+            if isinstance(email, str) and isinstance(roles, list):
+                mappings[email.strip().lower()] = [str(r).strip() for r in roles if str(r).strip()]
+
+    # 2. From Environment Variable (Format: email:r1,r2;email2:r3 or JSON)
+    env_mappings_raw = os.getenv("USER_ROLE_MAPPINGS", "").strip()
+    if env_mappings_raw:
+        try:
+            if env_mappings_raw.startswith("{"):
+                import json
+                env_dict = json.loads(env_mappings_raw)
+                for email, roles in env_dict.items():
+                    if isinstance(roles, list):
+                        mappings[email.strip().lower()] = [str(r).strip() for r in roles if str(r).strip()]
+            else:
+                for entry in env_mappings_raw.split(";"):
+                    if ":" in entry:
+                        email, roles_str = entry.split(":", 1)
+                        roles_list = [r.strip() for r in roles_str.split(",") if r.strip()]
+                        mappings[email.strip().lower()] = roles_list
+        except Exception as e:
+            logger.warning(f"Failed to parse USER_ROLE_MAPPINGS environment variable: {e}")
+
+    return mappings
+
+
+def get_domain_keywords() -> dict[str, list[str]]:
+    """Returns centralized domain keywords mapping for regex classification."""
+    cfg = load_system_config()
+    keywords = cfg.get("domain_keywords", {})
+    if isinstance(keywords, dict):
+        return keywords
+    return {}
+
+
+_COMPILED_KEYWORD_PATTERNS: Optional[dict[str, re.Pattern]] = None
+
+
+def get_domain_keyword_patterns() -> dict[str, re.Pattern]:
+    """
+    Returns compiled regular expressions with word boundary (\\b) for each domain.
+    Prevents substring collision (e.g., 'PO' matching 'chính sách' or 'report').
+    """
+    global _COMPILED_KEYWORD_PATTERNS
+    if _COMPILED_KEYWORD_PATTERNS is not None:
+        return _COMPILED_KEYWORD_PATTERNS
+
+    keywords_dict = get_domain_keywords()
+    patterns = {}
+    for domain, kws in keywords_dict.items():
+        if not kws:
+            continue
+        # Sort keywords by length descending to match longest phrases first
+        escaped_kws = [re.escape(k.strip()) for k in kws if k.strip()]
+        if escaped_kws:
+            pattern_str = r"(?i)(?:\b" + r"\b|\b".join(escaped_kws) + r"\b)"
+            patterns[domain] = re.compile(pattern_str, re.IGNORECASE)
+
+    _COMPILED_KEYWORD_PATTERNS = patterns
+    return _COMPILED_KEYWORD_PATTERNS
+
+
+def resolve_user_roles(
+    email: str,
+    payload_roles: Optional[list[str]] = None
+) -> list[str]:
+    """
+    Resolves enterprise roles for a verified SSO user.
+    Priority:
+    1. Static mappings from config/systems.yaml and USER_ROLE_MAPPINGS env.
+    2. Firestore collection 'user_roles' lookup (if Firestore is active).
+    3. Payload roles provided in JWT/OIDC.
+    4. Base fallback: ['employee'].
+    """
+    email_norm = email.strip().lower() if email else ""
+    resolved_roles: list[str] = []
+
+    # 1. Config & Env Mapping
+    mapping = get_user_role_mappings()
+    if email_norm in mapping:
+        resolved_roles.extend(mapping[email_norm])
+
+    # 2. Firestore Lookup if enabled
+    if not resolved_roles and (os.getenv("USE_FIRESTORE_ROLES", "false").lower() in ("true", "1") or bool(os.getenv("K_SERVICE"))):
+        try:
+            from google.cloud import firestore
+            fs = firestore.Client()
+            doc = fs.collection("user_roles").document(email_norm).get()
+            if doc.exists:
+                doc_roles = doc.to_dict().get("roles", [])
+                if isinstance(doc_roles, list):
+                    resolved_roles.extend(doc_roles)
+        except Exception as e:
+            logger.debug(f"Firestore role lookup skipped/failed for {email_norm}: {e}")
+
+    # 3. Payload roles from token
+    if payload_roles:
+        for r in payload_roles:
+            if r and r not in resolved_roles:
+                resolved_roles.append(r)
+
+    # 4. Ensure baseline 'employee' role is always present
+    if "employee" not in resolved_roles:
+        resolved_roles.append("employee")
+
+    # Deduplicate preserving order
+    seen = set()
+    deduped = []
+    for r in resolved_roles:
+        if r not in seen:
+            seen.add(r)
+            deduped.append(r)
+
+    return deduped
+
 
