@@ -1,0 +1,36 @@
+tier,category,query,expected_system,expected_intent
+L1,FAQ,Chính sách bảo mật mật khẩu của công ty quy định độ dài tối thiểu là bao nhiêu ký tự?,ALL,PASSWORD_POLICY
+L1,FAQ,Làm thế nào để kết nối vào mạng Wi-Fi nội bộ Enterprise-Secure của văn phòng?,ALL,WIFI_SETUP
+L1,FAQ,Quy định về việc cài đặt phần mềm ngoài vào máy tính công ty như thế nào?,ALL,SOFTWARE_POLICY
+L1,FAQ,Hướng dẫn cài đặt máy in tại tầng 3 tòa nhà văn phòng?,ALL,PRINTER_SETUP
+L1,FAQ,Cách cấu hình xác thực 2 yếu tố Google Authenticator hoặc YubiKey?,ALL,MFA_SETUP
+L1,SelfService,Tôi muốn đổi mật khẩu tài khoản Active Directory do sắp hết hạn 90 ngày.,ALL,RESET_PASSWORD
+L1,SelfService,Tài khoản của tôi bị khóa do gõ sai mật khẩu 5 lần, hãy mở khóa giúp tôi.,ALL,UNLOCK_ACCOUNT
+L1,SelfService,Làm cách nào để cấu hình VPN GlobalProtect khi làm việc từ xa (Work From Home)?,ALL,VPN_CONFIG
+L1,SelfService,Tôi cần cấp lại quyền truy cập vào hòm thư dùng chung của phòng ban.,ALL,SHARED_MAILBOX
+L1,SelfService,Kiểm tra xem máy tính của tôi đã được cài đặt phần mềm diệt virus EDR CrowdStrike chưa.,ALL,EDR_CHECK
+L1,Ticket,Tôi muốn kiểm tra trạng thái các ticket IT mà tôi đã gửi gần đây.,ALL,LIST_MY_TICKETS
+L1,Ticket,Kiểm tra tiến độ xử lý của ticket INC-9901 của tôi.,ALL,TICKET_DETAILS
+L1,Ticket,Tôi muốn cập nhật thêm thông tin ảnh chụp màn hình vào ticket của tôi.,ALL,UPDATE_TICKET
+L1,FAQ,Quy trình bàn giao và thu hồi laptop khi nhân viên nghỉ việc ra sao?,ALL,OFFBOARDING_ASSET
+L1,FAQ,Phải làm sao khi nhận được email nghi ngờ là phishing lừa đảo?,ALL,PHISHING_REPORT
+L1,FAQ,Thời gian hoạt động hỗ trợ trực tiếp của quầy IT Helpdesk là mấy giờ?,ALL,HELPDESK_HOURS
+L1,SelfService,Hướng dẫn tôi cài đặt bộ ứng dụng Microsoft Office 365 và Teams trên máy mới.,ALL,O365_INSTALL
+L1,SelfService,Tôi bị mất điện thoại chứa mã xác thực 2FA, cần hỗ trợ phương án đăng nhập khẩn cấp.,ALL,MFA_RECOVERY
+L2,ERP,Hướng dẫn tạo đơn mua hàng Purchase Order (PO) trên SAP hệ thống ERP.,ERP,PO_CREATION
+L2,ERP,Tôi gặp lỗi ME21N khi duyệt PO vượt ngân sách phòng ban trên SAP ERP.,ERP,PO_APPROVAL_ERROR
+L2,ERP,Làm thế nào để mở lại kỳ kế toán Fiscal Period đã bị khóa trên hệ thống Oracle ERP?,ERP,FISCAL_PERIOD_UNLOCK
+L2,ERP,Kho vận báo lỗi đồng bộ tồn kho giữa hệ thống WMS và SAP ERP.,ERP,INVENTORY_SYNC_ERROR
+L2,HRM,Làm sao để đồng bộ lại dữ liệu chấm công vân tay bị thiếu trên Workday HRM?,HRM,TIMESHEET_SYNC
+L2,HRM,Tôi là HR Admin, bảng lương Payroll tháng này bị khóa không thể điều chỉnh phụ cấp.,HRM,PAYROLL_LOCK
+L2,HRM,Quy trình onboarding tài khoản cho nhân sự mới trên BambooHR diễn ra như thế nào?,HRM,HR_ONBOARDING
+L2,HRM,Nhân viên không xem được số ngày phép còn lại trên cổng thông tin Workday.,HRM,LEAVE_BALANCE
+L2,CRM,Sales báo lỗi không đồng bộ được Lead từ Web form vào Salesforce CRM.,CRM,LEAD_SYNC_ERROR
+L2,CRM,Hệ thống HubSpot CRM báo lỗi vượt giới hạn 24h Daily API Limit.,CRM,API_LIMIT_REACHED
+L2,CRM,Hướng dẫn chuyển giao quản lý Territory và Account khách hàng cho Sales Rep mới.,CRM,TERRITORY_TRANSFER
+L2,CRM,Lỗi không tải được báo cáo Pipeline doanh số quý trên Salesforce.,CRM,PIPELINE_REPORT_ERROR
+L3,LogAnalysis,Phân tích stack trace sau: NullPointerException tại OrderService.java:142 do DB connection pool timeout.,ERP,RCA_NULL_POINTER
+L3,LogAnalysis,Hệ thống HRM bị sập do OutOfMemoryError: Java heap space trong quá trình tính toán Payroll hàng loạt.,HRM,RCA_OOM_HEAP
+L3,LogAnalysis,Phân tích nguyên nhân lỗi Deadlock phát hiện giữa hai tiến trình ghi log của CRM Integration gateway.,CRM,RCA_DEADLOCK
+L3,Compliance,Rà soát điều khoản cam kết SLA Uptime 99.9% và chế tài phạt Service Credits trong hợp đồng dịch vụ đám mây.,ALL,SLA_COMPLIANCE_REVIEW
+L3,Compliance,Đánh giá rủi ro pháp lý về điều khoản bồi thường thiệt hại khi rò rỉ dữ liệu khách hàng theo tiêu chuẩn DPA.,ALL,DPA_SECURITY_REVIEW

@@ -71,3 +71,8 @@ document_processing:
   document_ai_timeout_seconds: 60             # API timeout per call
   document_ai_max_retries: 2                  # Retry attempts with exponential backoff
 
+# Enterprise RAG & BigQuery Retrieval Configuration
+retrieval:
+  fraction_lists_to_search: 0.05              # Fraction of IVF lists to search (0.0 to 1.0)
+  hybrid_search_enabled: false                # Enable lexical BM25/keyword boost alongside vector search
+

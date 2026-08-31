@@ -71,6 +71,9 @@ class DocumentParser:
         sections: list[dict[str, Any]] = []
         current_heading = title
         current_level = 1
+        current_h1: Optional[str] = title
+        current_h2: Optional[str] = None
+        current_h3: Optional[str] = None
         current_lines: list[str] = []
 
         for line in content.splitlines():
@@ -83,12 +86,26 @@ class DocumentParser:
                             "level": current_level,
                             "heading": current_heading,
                             "content": sec_text,
+                            "hierarchy": {
+                                "h1": current_h1,
+                                "h2": current_h2,
+                                "h3": current_h3,
+                            },
                         })
                     current_lines = []
                 current_level = len(m.group(1))
                 current_heading = m.group(2).strip()
-                if current_level == 1 and not sections:
-                    title = current_heading
+                if current_level == 1:
+                    current_h1 = current_heading
+                    current_h2 = None
+                    current_h3 = None
+                    if not sections:
+                        title = current_heading
+                elif current_level == 2:
+                    current_h2 = current_heading
+                    current_h3 = None
+                elif current_level == 3:
+                    current_h3 = current_heading
             else:
                 current_lines.append(line)
 
@@ -99,6 +116,11 @@ class DocumentParser:
                     "level": current_level,
                     "heading": current_heading,
                     "content": sec_text,
+                    "hierarchy": {
+                        "h1": current_h1,
+                        "h2": current_h2,
+                        "h3": current_h3,
+                    },
                 })
 
         return [{
@@ -121,6 +143,9 @@ class DocumentParser:
             sections: list[dict[str, Any]] = []
             current_heading = title
             current_level = 1
+            current_h1: Optional[str] = title
+            current_h2: Optional[str] = None
+            current_h3: Optional[str] = None
             current_paras: list[str] = []
 
             for p in doc.paragraphs:
@@ -136,13 +161,27 @@ class DocumentParser:
                                 "level": current_level,
                                 "heading": current_heading,
                                 "content": sec_text,
+                                "hierarchy": {
+                                    "h1": current_h1,
+                                    "h2": current_h2,
+                                    "h3": current_h3,
+                                },
                             })
                         current_paras = []
                     m = re.search(r"\d+", style_name)
                     current_level = int(m.group(0)) if m else 1
                     current_heading = p_text
-                    if not sections:
-                        title = current_heading
+                    if current_level == 1:
+                        current_h1 = current_heading
+                        current_h2 = None
+                        current_h3 = None
+                        if not sections:
+                            title = current_heading
+                    elif current_level == 2:
+                        current_h2 = current_heading
+                        current_h3 = None
+                    elif current_level == 3:
+                        current_h3 = current_heading
                 else:
                     current_paras.append(p_text)
 
@@ -153,6 +192,11 @@ class DocumentParser:
                         "level": current_level,
                         "heading": current_heading,
                         "content": sec_text,
+                        "hierarchy": {
+                            "h1": current_h1,
+                            "h2": current_h2,
+                            "h3": current_h3,
+                        },
                     })
 
             return [{
@@ -236,6 +280,9 @@ class DocumentParser:
         sections: list[dict[str, Any]] = []
         current_heading = title
         current_level = 1
+        current_h1: Optional[str] = title
+        current_h2: Optional[str] = None
+        current_h3: Optional[str] = None
         current_content_parts: list[str] = []
 
         def get_block_type_and_text(block: Any) -> tuple[str, str]:
@@ -267,14 +314,28 @@ class DocumentParser:
                             "level": current_level,
                             "heading": current_heading,
                             "content": sec_text,
+                            "hierarchy": {
+                                "h1": current_h1,
+                                "h2": current_h2,
+                                "h3": current_h3,
+                            },
                         })
                     current_content_parts = []
                 
                 m = re.search(r"\d+", b_type)
                 current_level = int(m.group(0)) if m else 1
                 current_heading = b_text
-                if not sections and current_heading:
-                    title = current_heading
+                if current_level == 1:
+                    current_h1 = current_heading
+                    current_h2 = None
+                    current_h3 = None
+                    if not sections:
+                        title = current_heading
+                elif current_level == 2:
+                    current_h2 = current_heading
+                    current_h3 = None
+                elif current_level == 3:
+                    current_h3 = current_heading
             else:
                 current_content_parts.append(b_text)
 
@@ -285,6 +346,11 @@ class DocumentParser:
                     "level": current_level,
                     "heading": current_heading,
                     "content": sec_text,
+                    "hierarchy": {
+                        "h1": current_h1,
+                        "h2": current_h2,
+                        "h3": current_h3,
+                    },
                 })
 
         return [{
@@ -294,6 +360,7 @@ class DocumentParser:
             "file_type": ".pdf",
             "sections": sections,
         }]
+
 
     @staticmethod
     def parse_pdf(file_path: Path, doc_proc_config: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
@@ -399,15 +466,22 @@ def chunk_by_sections(
     sections: list[dict[str, Any]],
     max_chunk_size: int = 1200,
     overlap: int = 150,
-) -> list[str]:
+    return_metadata: bool = False,
+) -> Any:
     """
     Chunks document section-by-section, keeping headings attached to content.
     If a section exceeds max_chunk_size, it is recursively split within that section's scope.
     """
     chunks = []
+    chunk_meta = []
     for sec in sections:
         heading = sec.get("heading", "").strip()
         content = sec.get("content", "").strip()
+        hierarchy = sec.get("hierarchy") or {
+            "h1": heading or None,
+            "h2": None,
+            "h3": None,
+        }
         if not content:
             continue
 
@@ -416,13 +490,17 @@ def chunk_by_sections(
 
         if len(full_sec_text) <= max_chunk_size:
             chunks.append(full_sec_text)
+            chunk_meta.append(hierarchy)
         else:
             # Section exceeds max_chunk_size -> recursive split content within section scope
             sub_max_size = max(200, max_chunk_size - len(header_prefix))
             sub_chunks = chunk_text(content, max_chunk_size=sub_max_size, overlap=overlap)
             for sub in sub_chunks:
                 chunks.append(f"{header_prefix}{sub}".strip())
+                chunk_meta.append(hierarchy)
 
+    if return_metadata:
+        return [{"text": c, "hierarchy": m} for c, m in zip(chunks, chunk_meta) if c]
     return [c for c in chunks if c]
 
 
@@ -561,25 +639,33 @@ def process_document(
     max_sec_ratio = chunking_cfg.get("well_structured_max_section_ratio", 0.65)
     min_avg_len = chunking_cfg.get("well_structured_min_avg_section_length", 100)
 
+    chunk_items: list[dict[str, Any]] = []
+
     if strategy == "semantic":
         logger.info("Semantic chunking strategy flagged for system '%s' (fallback to structured/recursive)", system_clean)
         if sections and is_well_structured(sections, max_chunk_size=max_chunk_size, max_section_ratio=max_sec_ratio, min_avg_length=min_avg_len):
-            chunks = chunk_by_sections(sections, max_chunk_size=max_chunk_size, overlap=overlap)
+            chunk_items = chunk_by_sections(sections, max_chunk_size=max_chunk_size, overlap=overlap, return_metadata=True)
         else:
-            chunks = chunk_text(content, max_chunk_size=max_chunk_size, overlap=overlap)
+            raw_c = chunk_text(content, max_chunk_size=max_chunk_size, overlap=overlap)
+            chunk_items = [{"text": c, "hierarchy": {"h1": title, "h2": None, "h3": None}} for c in raw_c]
     elif strategy == "fixed":
-        chunks = chunk_text(content, max_chunk_size=max_chunk_size, overlap=overlap)
+        raw_c = chunk_text(content, max_chunk_size=max_chunk_size, overlap=overlap)
+        chunk_items = [{"text": c, "hierarchy": {"h1": title, "h2": None, "h3": None}} for c in raw_c]
     else:  # "auto"
         if sections and is_well_structured(sections, max_chunk_size=max_chunk_size, max_section_ratio=max_sec_ratio, min_avg_length=min_avg_len):
-            chunks = chunk_by_sections(sections, max_chunk_size=max_chunk_size, overlap=overlap)
+            chunk_items = chunk_by_sections(sections, max_chunk_size=max_chunk_size, overlap=overlap, return_metadata=True)
         else:
-            chunks = chunk_text(content, max_chunk_size=max_chunk_size, overlap=overlap)
+            raw_c = chunk_text(content, max_chunk_size=max_chunk_size, overlap=overlap)
+            chunk_items = [{"text": c, "hierarchy": {"h1": title, "h2": None, "h3": None}} for c in raw_c]
 
     processed_articles = []
 
-    for idx, chunk in enumerate(chunks):
+    for idx, item in enumerate(chunk_items):
+        chunk = item["text"]
+        section_hierarchy = item.get("hierarchy") or {"h1": title, "h2": None, "h3": None}
+
         # Generate deterministic ID
-        if doc_info.get("id") and len(chunks) == 1:
+        if doc_info.get("id") and len(chunk_items) == 1:
             article_id = doc_info["id"].upper()
         else:
             hasher = hashlib.sha256()
@@ -587,7 +673,7 @@ def process_document(
             short_hash = hasher.hexdigest()[:8].upper()
             article_id = f"{system_clean}-KB-{short_hash}"
 
-        chunk_title = title if len(chunks) == 1 else f"{title} (Phần {idx + 1}/{len(chunks)})"
+        chunk_title = title if len(chunk_items) == 1 else f"{title} (Phần {idx + 1}/{len(chunk_items)})"
         
         # Extract keywords if not provided
         keywords = raw_keywords.copy()
@@ -607,6 +693,7 @@ def process_document(
             "keywords": keywords,
             "source_uri": source_uri,
             "content_hash": content_hash,
+            "section_hierarchy": section_hierarchy,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         })
 
@@ -621,17 +708,18 @@ def ensure_vector_index(
     index_name: str = "knowledge_articles_vector_idx"
 ):
     """
-    Executes BigQuery CREATE VECTOR INDEX DDL if index does not exist.
+    Executes BigQuery CREATE VECTOR INDEX DDL if index does not exist with STORING clause.
     BigQuery IVF Vector Index will automatically optimize vector queries;
     if dataset has fewer than 5,000 rows, BigQuery will automatically use exact cosine search.
     """
     ddl = f"""
     CREATE VECTOR INDEX IF NOT EXISTS `{index_name}`
     ON `{project_id}.{dataset_id}.{table_name}`(embedding)
+    STORING (system, category, id, title, content, section_hierarchy)
     OPTIONS(distance_type='COSINE', index_type='IVF')
     """
     try:
-        logger.info("Verifying / Creating BigQuery Vector Index '%s'...", index_name)
+        logger.info("Verifying / Creating BigQuery Vector Index '%s' with STORING columns...", index_name)
         query_job = bq_client.query(ddl)
         query_job.result()
         logger.info("BigQuery Vector Index '%s' is verified and active.", index_name)
@@ -641,6 +729,78 @@ def ensure_vector_index(
             "(BigQuery automatically executes exact cosine search when dataset size is under 5,000 rows threshold).",
             e
         )
+
+
+def check_vector_index_coverage(
+    bq_client: Any,
+    project_id: str,
+    dataset_id: str,
+    table_name: str = "knowledge_articles",
+    index_name: str = "knowledge_articles_vector_idx"
+) -> dict[str, Any]:
+    """
+    Monitors BigQuery Vector Index status, coverage percentage, and unindexed row count via INFORMATION_SCHEMA.
+    Logs clear operational diagnostics for enterprise observability.
+    """
+    coverage_sql = f"""
+    SELECT 
+        table_name,
+        index_name,
+        index_status,
+        coverage_percentage,
+        unindexed_row_count,
+        total_row_count
+    FROM `{project_id}.{dataset_id}.INFORMATION_SCHEMA.VECTOR_INDEXES`
+    WHERE table_name = @table_name AND index_name = @index_name
+    """
+    try:
+        from google.cloud import bigquery
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("table_name", "STRING", table_name),
+                bigquery.ScalarQueryParameter("index_name", "STRING", index_name),
+            ]
+        )
+        rows = list(bq_client.query(coverage_sql, job_config=job_config).result())
+        if not rows:
+            logger.info("Vector Index '%s' does not exist yet in INFORMATION_SCHEMA or is newly scheduled.", index_name)
+            return {"index_status": "NOT_FOUND", "coverage_percentage": 0.0}
+
+        row = rows[0]
+        status = getattr(row, "index_status", "UNKNOWN")
+        coverage = getattr(row, "coverage_percentage", 0.0) or 0.0
+        unindexed = getattr(row, "unindexed_row_count", 0) or 0
+        total = getattr(row, "total_row_count", 0) or 0
+
+        if coverage == 0.0:
+            if status == "TEMPORARILY DISABLED":
+                logger.info(
+                    "Lưu ý: Vector Index '%s' có trạng thái 'TEMPORARILY DISABLED' (Coverage: 0.0%%). "
+                    "Nguyên nhân: Kích thước bảng tri thức dưới ngưỡng tối thiểu (thường < 10 MB) "
+                    "nên BigQuery tự động dùng Exact Cosine Search. Đây là hành vi bình thường cho cơ sở tri thức nhỏ của khách hàng mới.",
+                    index_name
+                )
+            else:
+                logger.warning(
+                    "CẢNH BÁO: Vector Index '%s' coverage = 0.0%% (Status: %s). "
+                    "Truy vấn sẽ thực hiện Full Table Scan cho tới khi index hoàn tất indexing.",
+                    index_name, status
+                )
+        else:
+            logger.info(
+                "Vector Index '%s' đang hoạt động tốt. Status: %s, Coverage: %.1f%%, Dòng chưa index: %d / %d tổng số dòng.",
+                index_name, status, coverage, unindexed, total
+            )
+
+        return {
+            "index_status": status,
+            "coverage_percentage": coverage,
+            "unindexed_row_count": unindexed,
+            "total_row_count": total,
+        }
+    except Exception as e:
+        logger.warning("Could not query INFORMATION_SCHEMA.VECTOR_INDEXES: %s", e)
+        return {"index_status": "ERROR", "error": str(e)}
 
 
 def ingest_articles_to_bigquery(
@@ -653,9 +813,9 @@ def ingest_articles_to_bigquery(
     Performs production-grade idempotent upsert (MERGE) into BigQuery:
     1. CDC pre-check on content_hash to skip redundant embedding API calls.
     2. Batch loads articles into a temporary staging table (zero streaming buffer locks on target).
-    3. Executes atomic SQL MERGE from staging table into target table.
+    3. Executes atomic SQL MERGE from staging table into target table with section_hierarchy.
     4. Executes DML DELETE on target table to clean up orphaned chunks for modified documents.
-    5. Drops staging table and ensures BigQuery IVF Vector Index is active.
+    5. Drops staging table, ensures BigQuery IVF Vector Index with STORING is active, and monitors coverage.
     """
     if not articles:
         logger.info("No articles to ingest.")
@@ -763,6 +923,16 @@ def ingest_articles_to_bigquery(
         bigquery.SchemaField("embedding", "FLOAT64", mode="REPEATED"),
         bigquery.SchemaField("source_uri", "STRING", mode="NULLABLE"),
         bigquery.SchemaField("content_hash", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField(
+            "section_hierarchy",
+            "RECORD",
+            mode="NULLABLE",
+            fields=[
+                bigquery.SchemaField("h1", "STRING", mode="NULLABLE"),
+                bigquery.SchemaField("h2", "STRING", mode="NULLABLE"),
+                bigquery.SchemaField("h3", "STRING", mode="NULLABLE"),
+            ]
+        ),
         bigquery.SchemaField("updated_at", "TIMESTAMP", mode="REQUIRED"),
     ]
 
@@ -799,10 +969,11 @@ def ingest_articles_to_bigquery(
             T.embedding = S.embedding,
             T.source_uri = S.source_uri,
             T.content_hash = S.content_hash,
+            T.section_hierarchy = S.section_hierarchy,
             T.updated_at = S.updated_at
         WHEN NOT MATCHED THEN
-          INSERT (id, system, title, category, content, keywords, embedding, source_uri, content_hash, updated_at)
-          VALUES (S.id, S.system, S.title, S.category, S.content, S.keywords, S.embedding, S.source_uri, S.content_hash, S.updated_at);
+          INSERT (id, system, title, category, content, keywords, embedding, source_uri, content_hash, section_hierarchy, updated_at)
+          VALUES (S.id, S.system, S.title, S.category, S.content, S.keywords, S.embedding, S.source_uri, S.content_hash, S.section_hierarchy, S.updated_at);
         """
         logger.info("Executing Atomic MERGE into %s...", full_target_table)
         merge_job = bq_client.query(merge_sql)
@@ -837,8 +1008,9 @@ def ingest_articles_to_bigquery(
         except Exception as e:
             logger.warning("Failed to drop staging table %s: %s", staging_table_name, e)
 
-    # 8. Automatically Ensure Vector Index DDL
+    # 8. Automatically Ensure Vector Index DDL & Monitor Coverage
     ensure_vector_index(bq_client, project_id, dataset_id, table_name)
+    check_vector_index_coverage(bq_client, project_id, dataset_id, table_name)
 
     return len(articles)
 

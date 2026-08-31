@@ -122,10 +122,20 @@ document_processing:
 
 ---
 
-### Bước 3: Chuẩn Bị & Nạp Dữ Liệu (Ingestion)
+### Bước 3: Cấu hình Retrieval & Vector Search
+Trong `config/systems.yaml`, cấu hình tham số tìm kiếm và mở rộng tính năng:
+```yaml
+retrieval:
+  fraction_lists_to_search: 0.05   # Tỷ lệ IVF centroid clusters cần quét (mặc định 5%)
+  hybrid_search_enabled: false      # Bật/tắt Hybrid Search kết hợp từ khóa & vector
+```
+
+---
+
+### Bước 4: Chuẩn Bị & Nạp Dữ Liệu (Ingestion)
 
 Tập hợp tài liệu tri thức của khách hàng theo định dạng hỗ trợ:
-- `.md` / `.txt` (Hỗ trợ cấu trúc heading `#`, `##`, `###`)
+- `.md` / `.txt` (Hỗ trợ cấu trúc heading `#`, `##`, `###` trích xuất `section_hierarchy`)
 - `.docx` (Hỗ trợ cấu trúc Style Heading 1, 2, 3)
 - `.pdf` (Trích xuất văn bản phẳng hoặc Document AI Layout)
 - `.jsonl` (Dữ liệu bài viết có cấu trúc sẵn)
@@ -141,6 +151,14 @@ python scripts/ingest_knowledge_base.py \
     --data-dir="/path/to/customer/docs" \
     --default-system="ERP"
 ```
+
+Quá trình nạp tự động:
+1. Trích xuất văn bản và phân cấp cây tài liệu (`section_hierarchy` gồm `h1, h2, h3`).
+2. Thực hiện CDC pre-check bỏ qua sinh vector trùng lặp.
+3. Batch load vào Staging Table và Atomic `MERGE` vào bảng đích.
+4. Tự động dọn dẹp các chunk mồ côi (orphaned chunks).
+5. Tự động kiểm tra/khởi tạo BigQuery IVF Vector Index với mệnh đề `STORING (system, category, id, title, content, section_hierarchy)`.
+6. Giám sát Vector Index Coverage qua `INFORMATION_SCHEMA.VECTOR_INDEXES`.
 
 ---
 
@@ -171,9 +189,9 @@ Khi một khách hàng đang hoạt động yêu cầu đổi chiến lược ch
 - Nếu chỉ dùng `MERGE` đơn thuần, 2 chunk cũ (`AAA`, `BBB`) vẫn tồn tại trong BigQuery, gây ô nhiễm kết quả tìm kiếm ngữ nghĩa RAG (Vector Search trả về cả phiên bản chunk cũ và mới).
 
 ### Cơ chế dọn dẹp tự động của Hệ thống:
-1. `ingest_knowledge_base.py` tự động kích hoạt hàm `cleanup_orphaned_chunks(source_uris, active_article_ids)`.
-2. Hàm sẽ thực hiện truy vấn DELETE đối với tất cả các bản ghi có `source_uri` nằm trong danh sách tài liệu vừa nạp nhưng `id` không nằm trong tập `active_article_ids` mới.
-3. **Thứ tự thực thi:** MERGE hoàn tất $\rightarrow$ Dọn dẹp Chunk mồ côi $\rightarrow$ Đảm bảo tri thức luôn nhất quán 100%.
+1. `ingest_knowledge_base.py` tự động kích hoạt truy vấn DELETE đối với tất cả các bản ghi có `source_uri` nằm trong danh sách tài liệu vừa nạp nhưng `id` không nằm trong staging table.
+2. DML DELETE được chạy sau Load Job vào staging table (không bị streaming buffer lock).
+3. **Thứ tự thực thi:** MERGE hoàn tất $\rightarrow$ Dọn dẹp Chunk mồ côi $\rightarrow$ Giám sát Vector Index Coverage $\rightarrow$ Đảm bảo tri thức luôn nhất quán 100%.
 
 ```bash
 # Lệnh chạy cập nhật lại tri thức cho khách hàng:
@@ -186,12 +204,59 @@ python scripts/ingest_knowledge_base.py \
 
 ---
 
-## 4. Bảng Kiểm Tra An Toàn Vận Hành (Operational Checklist)
+## 4. Định Cỡ Hạ Tầng & Yêu Cầu Quota Trước Khi Triển Khai (Capacity Planning)
+
+Trước khi chạy Terraform cho môi trường Production của khách hàng, Solutions Architect phải hoàn tất việc tính toán và yêu cầu Quota GCP:
+
+### 4.1. Bảng Định Cỡ Hạ Tầng Chuẩn (Sizing Matrix)
+
+| Quy Mô Khách Hàng | Tổng Nhân Sự | Peak CCU | Cloud Run Min / Max | Memorystore Redis | Vertex AI Flash Quota | Vertex AI Pro Quota |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Tier S (Vừa & Nhỏ)** | < 2.000 | 10 – 40 CCU | 1 / 8 instances | 1 GiB (Basic) | 300 RPM | 30 RPM |
+| **Tier M (Doanh nghiệp)** | 2.000 – 10.000 | 40 – 200 CCU | 2 / 40 instances | 1 – 2 GiB (STANDARD_HA) | 1.500 RPM | 150 RPM |
+| **Tier L (Tập đoàn)** | 10.000 – 50.000 | 200 – 1.000 CCU | 4 / 150 instances | 4 – 8 GiB (STANDARD_HA) | 6.000 RPM | 600 RPM |
+
+```bash
+# Cấu hình Terraform tương ứng trong terraform.tfvars
+environment                      = "production"
+redis_enabled                    = true
+redis_memory_size_gb             = 2
+min_instance_count               = 2
+max_instance_count               = 40
+max_instance_request_concurrency = 8
+l3_rate_limit_per_minute         = 10
+```
+
+### 4.2. Chạy Kiểm Thử Tải (Pre-GoLive Load Test Benchmark)
+
+Trước khi bàn giao hệ thống cho khách hàng, kỹ sư triển khai bắt buộc phải chạy bộ script benchmark để đo lường độ trễ thực tế:
+
+```bash
+# 1. Chạy bài kiểm thử tải bậc thang 10 -> 25 -> 50 -> 100 -> 200 CCU
+python scripts/load_test/run_load_test.py \
+    --url="https://helpdesk.customer.corp.com" \
+    --stages="10,25,50,100" \
+    --stage-duration=30 \
+    --output="benchmark_report.json"
+
+# 2. Hoặc chạy kiểm thử tải giao diện web qua Locust
+locust -f scripts/load_test/locustfile.py --host="https://helpdesk.customer.corp.com"
+```
+
+---
+
+## 5. Bảng Kiểm Tra An Toàn Vận Hành (Operational Checklist)
 
 | Hạng mục kiểm tra | Tiêu chuẩn đánh giá | Trạng thái |
 | :--- | :--- | :--- |
-| **Config Schema Validation** | Không chứa ký tự đặc biệt, không dùng key `ALL`. |  Bắt buộc |
+| **Config Schema Validation** | Không chứa ký tự đặc biệt, không dùng key `ALL`. Fail-closed với khối `retrieval`. |  Bắt buộc |
 | **Fail-Closed Protection** | Cấu hình sai YAML hoặc thiếu Processor ID sẽ dừng nạp ngay lập tức. |  Bắt buộc |
 | **SSO & RBAC Alignment** | Tất cả vai trò trong `systems.yaml` phải khớp với claim SSO OIDC của khách hàng. |  Bắt buộc |
-| **BigQuery Vector Index** | Bảng BigQuery có vector index `COSINE` kích hoạt trên cột `embedding`. |  Bắt buộc |
+| **BigQuery Pre-Filtering & Index** | Vector search dùng Pre-Filter subquery trong tham số 1 của `VECTOR_SEARCH` và DDL có `STORING`. |  Bắt buộc |
+| **Vector Index Coverage** | Giám sát qua `INFORMATION_SCHEMA.VECTOR_INDEXES`, cảnh báo nếu coverage = 0% trên tập dữ liệu lớn. |  Bắt buộc |
+| **Section Hierarchy** | Trường RECORD `section_hierarchy` được trích xuất và lưu trữ đầy đủ trong BigQuery. |  Bắt buộc |
 | **Deduplication & CDC** | Hash `content_hash` được cập nhật chính xác, không trùng lặp ID trong staging. |  Bắt buộc |
+| **Redis Shared State & HA** | Memorystore Redis kết nối qua Direct VPC Egress, Rate Limit Fail-Open và Cache Soft Fail-Closed. |  Bắt buộc |
+| **Load Test Benchmark** | Đạt p95 Latency < 2.5s ở bậc tải Peak CCU theo cam kết SLA. |  Bắt buộc |
+
+

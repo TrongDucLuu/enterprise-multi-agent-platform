@@ -12,6 +12,9 @@ from it_helpdesk_agent.app_utils.system_config import (
     get_all_system_roles_map,
     get_shared_admin_roles,
     get_system_instructions_prompt,
+    get_chunking_config,
+    get_document_processing_config,
+    get_retrieval_config,
     SystemConfigurationError,
 )
 
@@ -270,4 +273,62 @@ def test_invalid_overlap_exceeding_max_chunk_size_fails_closed(monkeypatch):
         if os.path.exists(temp_path):
             os.remove(temp_path)
         reload_system_config()
+
+
+def test_retrieval_config_defaults():
+    reload_system_config()
+    cfg = get_retrieval_config()
+    assert cfg["fraction_lists_to_search"] == 0.05
+    assert cfg["hybrid_search_enabled"] is False
+
+
+def test_retrieval_config_invalid_fraction_fails_closed(monkeypatch):
+    bad_yaml = {
+        "shared_admin_roles": ["admin"],
+        "systems": {
+            "ERP": {"roles": ["erp_user"]}
+        },
+        "retrieval": {
+            "fraction_lists_to_search": 1.5,  # Out of range (> 1.0)
+        }
+    }
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.dump(bad_yaml, f)
+        temp_path = f.name
+
+    try:
+        monkeypatch.setenv("SYSTEMS_CONFIG_PATH", temp_path)
+        with pytest.raises(SystemConfigurationError, match="fraction_lists_to_search"):
+            reload_system_config(temp_path)
+    finally:
+        monkeypatch.delenv("SYSTEMS_CONFIG_PATH", raising=False)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        reload_system_config()
+
+
+def test_retrieval_config_invalid_hybrid_fails_closed(monkeypatch):
+    bad_yaml = {
+        "shared_admin_roles": ["admin"],
+        "systems": {
+            "ERP": {"roles": ["erp_user"]}
+        },
+        "retrieval": {
+            "hybrid_search_enabled": "not_a_bool",
+        }
+    }
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.dump(bad_yaml, f)
+        temp_path = f.name
+
+    try:
+        monkeypatch.setenv("SYSTEMS_CONFIG_PATH", temp_path)
+        with pytest.raises(SystemConfigurationError, match="hybrid_search_enabled"):
+            reload_system_config(temp_path)
+    finally:
+        monkeypatch.delenv("SYSTEMS_CONFIG_PATH", raising=False)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        reload_system_config()
+
 

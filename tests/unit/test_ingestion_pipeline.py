@@ -571,3 +571,86 @@ def test_document_ai_parser_mapping_and_fail_closed(monkeypatch, tmp_path):
         DocumentParser.parse_pdf_document_ai(pdf_path, config)
 
 
+def test_markdown_parser_extracts_section_hierarchy(tmp_path):
+    doc_path = tmp_path / "hierarchy_guide.md"
+    doc_path.write_text(
+        "# Sổ Tay Vận Hành ERP\n\n"
+        "Tổng quan toàn bộ hệ thống hoạch định tài nguyên doanh nghiệp SAP S/4HANA cho khối tài chính và mua sắm.\n\n"
+        "## Quản Lý Đơn Mua Hàng (PO)\n\n"
+        "Quy trình tạo đơn PO trong hệ thống SAP thông qua giao dịch ME21N và quản lý trạng thái luồng phê duyệt nội bộ.\n\n"
+        "### Phê Duyệt PO Cấp Quản Lý\n\n"
+        "Chi tiết hạn mức phê duyệt đơn mua hàng PO từ cấp Giám đốc khối và các điều kiện kích hoạt workflow ngoại lệ.",
+        encoding="utf-8"
+    )
+
+    parsed = DocumentParser.parse_markdown_or_text(doc_path)
+    assert len(parsed) == 1
+    sections = parsed[0]["sections"]
+    assert len(sections) == 3
+
+    assert sections[0]["hierarchy"] == {"h1": "Sổ Tay Vận Hành ERP", "h2": None, "h3": None}
+    assert sections[1]["hierarchy"] == {"h1": "Sổ Tay Vận Hành ERP", "h2": "Quản Lý Đơn Mua Hàng (PO)", "h3": None}
+    assert sections[2]["hierarchy"] == {"h1": "Sổ Tay Vận Hành ERP", "h2": "Quản Lý Đơn Mua Hàng (PO)", "h3": "Phê Duyệt PO Cấp Quản Lý"}
+
+    articles = process_document(parsed[0])
+    assert len(articles) == 3
+    assert articles[0]["section_hierarchy"]["h1"] == "Sổ Tay Vận Hành ERP"
+    assert articles[1]["section_hierarchy"]["h2"] == "Quản Lý Đơn Mua Hàng (PO)"
+    assert articles[2]["section_hierarchy"]["h3"] == "Phê Duyệt PO Cấp Quản Lý"
+
+
+
+def test_ensure_vector_index_contains_storing_clause():
+    from scripts.ingest_knowledge_base import ensure_vector_index
+    mock_bq = MagicMock()
+
+    ensure_vector_index(mock_bq, project_id="my-proj", dataset_id="my_kb", table_name="articles")
+    assert mock_bq.query.called
+    ddl = mock_bq.query.call_args[0][0]
+    assert "STORING (system, category, id, title, content, section_hierarchy)" in ddl
+    assert "OPTIONS(distance_type='COSINE', index_type='IVF')" in ddl
+
+
+def test_check_vector_index_coverage_diagnostics(caplog):
+    from scripts.ingest_knowledge_base import check_vector_index_coverage
+    import logging
+
+    mock_bq = MagicMock()
+    
+    # Case 1: Coverage = 0% and TEMPORARILY DISABLED (< 10 MB small KB)
+    mock_row_disabled = MagicMock()
+    mock_row_disabled.table_name = "knowledge_articles"
+    mock_row_disabled.index_name = "knowledge_articles_vector_idx"
+    mock_row_disabled.index_status = "TEMPORARILY DISABLED"
+    mock_row_disabled.coverage_percentage = 0.0
+    mock_row_disabled.unindexed_row_count = 0
+    mock_row_disabled.total_row_count = 50
+
+    mock_bq.query.return_value.result.return_value = [mock_row_disabled]
+
+    with caplog.at_level(logging.INFO):
+        res1 = check_vector_index_coverage(mock_bq, "p", "d")
+        assert res1["index_status"] == "TEMPORARILY DISABLED"
+        assert "TEMPORARILY DISABLED" in caplog.text
+        assert "Exact Cosine Search" in caplog.text
+
+    # Case 2: Coverage = 100% active index
+    caplog.clear()
+    mock_row_active = MagicMock()
+    mock_row_active.table_name = "knowledge_articles"
+    mock_row_active.index_name = "knowledge_articles_vector_idx"
+    mock_row_active.index_status = "ACTIVE"
+    mock_row_active.coverage_percentage = 100.0
+    mock_row_active.unindexed_row_count = 0
+    mock_row_active.total_row_count = 10000
+
+    mock_bq.query.return_value.result.return_value = [mock_row_active]
+
+    with caplog.at_level(logging.INFO):
+        res2 = check_vector_index_coverage(mock_bq, "p", "d")
+        assert res2["index_status"] == "ACTIVE"
+        assert res2["coverage_percentage"] == 100.0
+        assert "đang hoạt động tốt" in caplog.text
+
+
+

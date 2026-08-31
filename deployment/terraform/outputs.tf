@@ -27,3 +27,13 @@ output "load_balancer_ip" {
   description = "Public IP of Global HTTPS Load Balancer (if enabled)"
   value       = var.enable_load_balancer ? google_compute_global_address.lb_ip[0].address : null
 }
+
+output "redis_host" {
+  description = "Private IP Host of Memorystore for Redis instance"
+  value       = var.redis_enabled ? google_redis_instance.cache_redis[0].host : null
+}
+
+output "redis_port" {
+  description = "Port number of Memorystore for Redis instance"
+  value       = var.redis_enabled ? google_redis_instance.cache_redis[0].port : null
+}

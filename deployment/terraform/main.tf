@@ -10,7 +10,9 @@ resource "google_project_service" "services" {
     "logging.googleapis.com",
     "bigquery.googleapis.com",
     "firestore.googleapis.com",
-    "compute.googleapis.com"
+    "compute.googleapis.com",
+    "redis.googleapis.com",
+    "servicenetworking.googleapis.com"
   ])
   service            = each.key
   disable_on_destroy = false
@@ -142,6 +144,32 @@ resource "google_bigquery_table" "knowledge_articles" {
     "type": "STRING",
     "mode": "NULLABLE",
     "description": "SHA-256 hash of raw content for CDC change detection"
+  },
+  {
+    "name": "section_hierarchy",
+    "type": "RECORD",
+    "mode": "NULLABLE",
+    "description": "Hierarchical document outline (h1, h2, h3)",
+    "fields": [
+      {
+        "name": "h1",
+        "type": "STRING",
+        "mode": "NULLABLE",
+        "description": "Top-level heading (H1)"
+      },
+      {
+        "name": "h2",
+        "type": "STRING",
+        "mode": "NULLABLE",
+        "description": "Sub-heading (H2)"
+      },
+      {
+        "name": "h3",
+        "type": "STRING",
+        "mode": "NULLABLE",
+        "description": "Sub-sub-heading (H3)"
+      }
+    ]
   },
   {
     "name": "updated_at",
@@ -317,6 +345,26 @@ resource "google_cloud_run_v2_service" "default" {
         name  = "TELEMETRY_INCLUDE_QUERY"
         value = tostring(var.telemetry_include_query)
       }
+      env {
+        name  = "RATE_LIMIT_BACKEND"
+        value = var.redis_enabled ? "redis" : "memory"
+      }
+      env {
+        name  = "SEMANTIC_CACHE_BACKEND"
+        value = var.redis_enabled ? "redis" : "memory"
+      }
+      env {
+        name  = "REDIS_HOST"
+        value = var.redis_enabled ? google_redis_instance.cache_redis[0].host : ""
+      }
+      env {
+        name  = "REDIS_PORT"
+        value = var.redis_enabled ? tostring(google_redis_instance.cache_redis[0].port) : "6379"
+      }
+      env {
+        name  = "L3_RATE_LIMIT_PER_MINUTE"
+        value = tostring(var.l3_rate_limit_per_minute)
+      }
 
       resources {
         limits = {
@@ -348,6 +396,17 @@ resource "google_cloud_run_v2_service" "default" {
       }
     }
 
+    dynamic "vpc_access" {
+      for_each = var.redis_enabled ? [1] : []
+      content {
+        network_interfaces {
+          network    = google_compute_network.app_vpc.id
+          subnetwork = google_compute_subnetwork.app_subnet.id
+        }
+        egress = "PRIVATE_RANGES_ONLY"
+      }
+    }
+
     scaling {
       min_instance_count = var.min_instance_count
       max_instance_count = var.max_instance_count
@@ -367,7 +426,8 @@ resource "google_cloud_run_v2_service" "default" {
 
   depends_on = [
     google_project_service.services,
-    google_firestore_database.database
+    google_firestore_database.database,
+    google_redis_instance.cache_redis
   ]
 }
 

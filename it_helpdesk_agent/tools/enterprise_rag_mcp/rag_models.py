@@ -11,6 +11,17 @@ except ImportError:
             return {"ERP", "HRM", "CRM", "ALL"}
 
 
+class SectionHierarchy(BaseModel):
+    """Hierarchical document section path (H1/H2/H3)."""
+    h1: Optional[str] = None
+    h2: Optional[str] = None
+    h3: Optional[str] = None
+
+    def format_path(self) -> str:
+        parts = [p.strip() for p in (self.h1, self.h2, self.h3) if p and p.strip()]
+        return " > ".join(parts) if parts else ""
+
+
 class KnowledgeArticle(BaseModel):
     id: str
     system: str
@@ -18,6 +29,7 @@ class KnowledgeArticle(BaseModel):
     category: str
     content: str
     keywords: list[str] = Field(default_factory=list)
+    section_hierarchy: Optional[SectionHierarchy] = None
 
     @field_validator("system")
     @classmethod
@@ -35,6 +47,8 @@ class SearchResult(BaseModel):
     title: str
     snippet: str
     relevance_score: float
+    section_hierarchy: Optional[SectionHierarchy] = None
+    context_path: Optional[str] = None
 
     @field_validator("system")
     @classmethod

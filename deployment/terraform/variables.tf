@@ -65,21 +65,39 @@ variable "bigquery_kb_dataset" {
 }
 
 variable "max_instance_count" {
-  description = "Maximum number of Cloud Run container instances to prevent runaway demo costs"
+  description = "Maximum number of Cloud Run container instances. Enterprise Sizing Formula: ceil(Peak_CCU / max_instance_request_concurrency) * 1.5"
   type        = number
-  default     = 5
+  default     = 10
 }
 
 variable "min_instance_count" {
-  description = "Minimum number of Cloud Run container instances (0 for scale to zero)"
+  description = "Minimum number of Cloud Run container instances (recommend >= 1 in production to eliminate cold starts)"
   type        = number
-  default     = 0
+  default     = 1
 }
 
 variable "max_instance_request_concurrency" {
   description = "Maximum concurrent requests per container instance (recommended 4-8 for LLM reasoning workloads)"
   type        = number
   default     = 8
+}
+
+variable "redis_enabled" {
+  description = "Provision Google Cloud Memorystore for Redis for cluster-wide rate limiting and semantic caching"
+  type        = bool
+  default     = true
+}
+
+variable "redis_memory_size_gb" {
+  description = "Memory capacity in GiB for Memorystore Redis instance (1 GiB supports ~50,000 active users + cache entries)"
+  type        = number
+  default     = 1
+}
+
+variable "l3_rate_limit_per_minute" {
+  description = "Rate limit threshold for expensive L3 Gemini Pro reasoning calls per user per minute"
+  type        = number
+  default     = 10
 }
 
 variable "allow_unauthenticated" {

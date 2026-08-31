@@ -8,20 +8,22 @@ from typing import Optional, Any
 logger = logging.getLogger(__name__)
 
 try:
-    from rag_models import KnowledgeArticle, SearchResult, DocumentSummary
+    from rag_models import KnowledgeArticle, SearchResult, DocumentSummary, SectionHierarchy
 except ImportError:
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle, SearchResult, DocumentSummary
+    from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle, SearchResult, DocumentSummary, SectionHierarchy
 
 try:
-    from it_helpdesk_agent.app_utils.system_config import get_valid_system_filters
+    from it_helpdesk_agent.app_utils.system_config import get_valid_system_filters, get_retrieval_config
     from it_helpdesk_agent.app_utils.embedding_utils import DEFAULT_EMBEDDING_MODEL, generate_text_embedding
 except ImportError:
     try:
-        from app_utils.system_config import get_valid_system_filters
+        from app_utils.system_config import get_valid_system_filters, get_retrieval_config
         from app_utils.embedding_utils import DEFAULT_EMBEDDING_MODEL, generate_text_embedding
     except ImportError:
         def get_valid_system_filters() -> set[str]:
             return {"ERP", "HRM", "CRM", "ALL"}
+        def get_retrieval_config() -> dict[str, Any]:
+            return {"fraction_lists_to_search": 0.05, "hybrid_search_enabled": False}
         DEFAULT_EMBEDDING_MODEL = "text-embedding-005"
         def generate_text_embedding(text: str, **kwargs) -> list[float]:
             return [0.0] * 64
@@ -46,7 +48,8 @@ ENTERPRISE_ARTICLES: list[KnowledgeArticle] = [
    - Gửi yêu cầu phê duyệt đến Trưởng bộ phận mua hàng (Procurement Manager).
    - Sau khi có phê duyệt, IT Admin gán T-code ME21N/ME22N và object M_BEST_EKO thông qua hệ thống phân quyền SAP GRC.
 3. SLA xử lý: 2 giờ làm việc kể từ khi có đủ phê duyệt.""",
-        keywords=["erp", "sap", "oracle", "purchase order", "m_best_eko", "me21n", "procurement", "phân quyền", "po"]
+        keywords=["erp", "sap", "oracle", "purchase order", "m_best_eko", "me21n", "procurement", "phân quyền", "po"],
+        section_hierarchy=SectionHierarchy(h1="Tài liệu ERP", h2="Phân quyền & Mua hàng", h3="Lỗi M_BEST_EKO")
     ),
     KnowledgeArticle(
         id="ERP-KB-002",
@@ -59,7 +62,8 @@ ENTERPRISE_ARTICLES: list[KnowledgeArticle] = [
    - Kế toán trưởng phải gửi email xác nhận mở kỳ phụ (Special Period 13-16).
    - IT ERP Team chỉ được mở tạm thời trong khung giờ 17:00 - 19:00 sau khi có ticket phê duyệt.
    - Ghi log audit thay đổi trạng thái OB52.""",
-        keywords=["erp", "kỳ kế toán", "posting period", "ob52", "mmpv", "khóa sổ", "sap", "oracle"]
+        keywords=["erp", "kỳ kế toán", "posting period", "ob52", "mmpv", "khóa sổ", "sap", "oracle"],
+        section_hierarchy=SectionHierarchy(h1="Tài liệu ERP", h2="Kế toán tài chính", h3="Khóa kỳ OB52")
     ),
     KnowledgeArticle(
         id="HRM-KB-101",
@@ -74,7 +78,8 @@ ENTERPRISE_ARTICLES: list[KnowledgeArticle] = [
    - Bước 1: Kiểm tra kết nối mạng máy chấm công tại chi nhánh qua ping IP nội bộ.
    - Bước 2: Restart cronjob sync: `systemctl restart hr-sync-agent`.
    - Bước 3: Nếu bảng công tháng đã bị 'Payroll Locked' sau ngày 25 hàng tháng, yêu cầu HR Operations gửi ticket mở khóa ngoại lệ.""",
-        keywords=["hrm", "workday", "bamboohr", "chấm công", "timesheet", "vân tay", "payroll", "bảng lương"]
+        keywords=["hrm", "workday", "bamboohr", "chấm công", "timesheet", "vân tay", "payroll", "bảng lương"],
+        section_hierarchy=SectionHierarchy(h1="Tài liệu HRM", h2="Chấm công & Bảng lương", h3="Đồng bộ Biometric")
     ),
     KnowledgeArticle(
         id="HRM-KB-102",
@@ -88,7 +93,8 @@ ENTERPRISE_ARTICLES: list[KnowledgeArticle] = [
    - Gán group bảo mật theo phòng ban và chức danh (ví dụ: `all-sales@company.com`).
    - Cấp tài khoản SSO Okta / Microsoft Entra ID.
 3. Nếu nhân viên mới không nhận được thông tin đăng nhập: Kiểm tra trạng thái 'Pending Approval' trong module Onboarding của HRM.""",
-        keywords=["hrm", "onboarding", "nhân viên mới", "cấp tài khoản", "active directory", "email", "okta"]
+        keywords=["hrm", "onboarding", "nhân viên mới", "cấp tài khoản", "active directory", "email", "okta"],
+        section_hierarchy=SectionHierarchy(h1="Tài liệu HRM", h2="Onboarding & Tuyển dụng", h3="Cấp tài khoản tự động")
     ),
     KnowledgeArticle(
         id="CRM-KB-201",
@@ -101,7 +107,8 @@ ENTERPRISE_ARTICLES: list[KnowledgeArticle] = [
    - Kiểm tra trạng thái OAuth Token của Integration User: Nếu token hết hạn, yêu cầu Admin re-authenticate.
 2. Kiểm tra Validation Rules: Các trường bắt buộc như 'Country', 'Phone Number Standard' bị từ chối do dữ liệu thô không hợp lệ.
 3. Khắc phục: Chạy lại batch error queue trong CRM Integration Manager.""",
-        keywords=["crm", "salesforce", "hubspot", "lead", "đồng bộ", "oauth", "api limit", "webhook", "sales"]
+        keywords=["crm", "salesforce", "hubspot", "lead", "đồng bộ", "oauth", "api limit", "webhook", "sales"],
+        section_hierarchy=SectionHierarchy(h1="Tài liệu CRM", h2="Sales & Marketing Sync", h3="Webhook & API Limit")
     ),
     KnowledgeArticle(
         id="CRM-KB-202",
@@ -115,7 +122,8 @@ ENTERPRISE_ARTICLES: list[KnowledgeArticle] = [
    - Chọn chuyển giao: Accounts, Open Opportunities, Open Cases, và Activity History.
    - Bỏ tích 'Transfer Closed Opportunities' nếu quy chế hoa hồng năm cũ vẫn giữ nguyên.
 3. Thông báo cho Sales Rep mới qua email tự động sau khi transfer hoàn tất.""",
-        keywords=["crm", "territory", "transfer account", "sales rep", "khách hàng", "salesforce", "hubspot"]
+        keywords=["crm", "territory", "transfer account", "sales rep", "khách hàng", "salesforce", "hubspot"],
+        section_hierarchy=SectionHierarchy(h1="Tài liệu CRM", h2="Territory Management", h3="Chuyển giao Account")
     ),
 ]
 
@@ -196,12 +204,16 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         for score, article in results[:limit]:
             snippet = article.content[:200].strip() + "..."
             relevance = min(1.0, score / 6.0)
+            sec_hier = article.section_hierarchy
+            context_path = sec_hier.format_path() if sec_hier else f"{article.system} > {article.category} > {article.title}"
             search_results.append(SearchResult(
                 article_id=article.id,
                 system=article.system,
                 title=article.title,
                 snippet=snippet,
-                relevance_score=round(relevance, 2)
+                relevance_score=round(relevance, 2),
+                section_hierarchy=sec_hier,
+                context_path=context_path,
             ))
         return search_results
 
@@ -258,7 +270,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
         allowed_systems: Optional[list[str]] = None
     ) -> list[SearchResult]:
         """
-        Searches BigQuery table using VECTOR_SEARCH with parameterized queries and SQL-level security trimming.
+        Searches BigQuery table using VECTOR_SEARCH with Pre-filtering subquery and SQL-level security trimming.
         Fails closed by raising KnowledgeStoreUnavailableError on backend failure.
         """
         if not self.bq_client:
@@ -280,56 +292,79 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 bigquery.ScalarQueryParameter("limit", "INT64", limit),
             ]
 
-            system_filter = ""
+            # 1. Construct Pre-Filter Subquery for VECTOR_SEARCH (Essential for accuracy)
             if clean_system != "ALL":
-                system_filter = "WHERE system = @system_param"
+                base_table_expr = f"(SELECT * FROM {full_table} WHERE system = @system_param)"
                 query_params.append(bigquery.ScalarQueryParameter("system_param", "STRING", clean_system))
             elif allowed_systems is not None:
                 clean_allowed = [s.upper() for s in allowed_systems if s.upper() in valid_systems and s.upper() != "ALL"]
                 if not clean_allowed:
                     return []
-                system_filter = "WHERE system IN UNNEST(@allowed_systems_param)"
+                base_table_expr = f"(SELECT * FROM {full_table} WHERE system IN UNNEST(@allowed_systems_param))"
                 query_params.append(bigquery.ArrayQueryParameter("allowed_systems_param", "STRING", clean_allowed))
+            else:
+                base_table_expr = f"(SELECT * FROM {full_table})"
 
-            # SQL with BigQuery VECTOR_SEARCH using Parameterized Query
+            # 2. Get retrieval configuration (fraction_lists_to_search)
+            retrieval_cfg = get_retrieval_config()
+            fraction_lists_to_search = retrieval_cfg.get("fraction_lists_to_search", 0.05)
+
+            # 3. SQL with BigQuery VECTOR_SEARCH Pre-Filtering & Stored Fields
             sql = f"""
             SELECT 
                 base.id, 
                 base.system, 
                 base.title, 
                 base.content, 
+                base.section_hierarchy,
                 distance
             FROM VECTOR_SEARCH(
-                TABLE {full_table},
+                {base_table_expr},
                 'embedding',
                 (SELECT @query_vector AS embedding),
                 top_k => @limit,
                 distance_type => 'COSINE',
-                options => '{{"fraction_lists_to_search": 0.05}}'
+                options => '{{"fraction_lists_to_search": {fraction_lists_to_search}}}'
             )
-            {system_filter}
             ORDER BY distance ASC
             """
 
+            bq_timeout = float(os.getenv("BIGQUERY_QUERY_TIMEOUT_SECONDS", "15.0"))
             job_config = bigquery.QueryJobConfig(query_parameters=query_params)
             query_job = self.bq_client.query(sql, job_config=job_config)
-            rows = query_job.result()
+            rows = query_job.result(timeout=bq_timeout)
 
             results = []
             for row in rows:
                 snippet = row.content[:200].strip() + "..."
                 relevance = round(max(0.0, 1.0 - (row.distance or 0.0)), 2)
+                
+                sec_hier = None
+                context_path = None
+                raw_hier = getattr(row, "section_hierarchy", None)
+                if raw_hier:
+                    hier_dict = dict(raw_hier) if hasattr(raw_hier, "items") else raw_hier
+                    if isinstance(hier_dict, dict):
+                        sec_hier = SectionHierarchy(
+                            h1=hier_dict.get("h1"),
+                            h2=hier_dict.get("h2"),
+                            h3=hier_dict.get("h3"),
+                        )
+                        context_path = sec_hier.format_path()
+
                 results.append(SearchResult(
                     article_id=row.id,
                     system=row.system,
                     title=row.title,
                     snippet=snippet,
-                    relevance_score=relevance
+                    relevance_score=relevance,
+                    section_hierarchy=sec_hier,
+                    context_path=context_path,
                 ))
             return results
         except Exception as e:
             logger.error("BigQuery vector search failed (%s). Raising KnowledgeStoreUnavailableError.", e)
-            raise KnowledgeStoreUnavailableError(f"Truy vấn BigQuery Vector Search thất bại: {e}") from e
+            raise KnowledgeStoreUnavailableError(f"Truy vấn BigQuery Vector Search thất bại hoặc quá thời gian chờ: {e}") from e
 
     def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
         """Retrieves article by ID from BigQuery table. Fails closed on failure."""
@@ -338,24 +373,36 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             raise KnowledgeStoreUnavailableError("Dịch vụ BigQuery Knowledge Store chưa được khởi tạo.")
 
         full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
-        sql = f"SELECT id, system, title, category, content, keywords FROM {full_table} WHERE UPPER(id) = @article_id LIMIT 1"
+        sql = f"SELECT id, system, title, category, content, keywords, section_hierarchy FROM {full_table} WHERE UPPER(id) = @article_id LIMIT 1"
         try:
+            bq_timeout = float(os.getenv("BIGQUERY_QUERY_TIMEOUT_SECONDS", "15.0"))
             from google.cloud import bigquery
             job_config = bigquery.QueryJobConfig(
                 query_parameters=[
                     bigquery.ScalarQueryParameter("article_id", "STRING", article_id.upper())
                 ]
             )
-            rows = list(self.bq_client.query(sql, job_config=job_config).result())
+            rows = list(self.bq_client.query(sql, job_config=job_config).result(timeout=bq_timeout))
             if rows:
                 r = rows[0]
+                sec_hier = None
+                raw_hier = getattr(r, "section_hierarchy", None)
+                if raw_hier:
+                    hier_dict = dict(raw_hier) if hasattr(raw_hier, "items") else raw_hier
+                    if isinstance(hier_dict, dict):
+                        sec_hier = SectionHierarchy(
+                            h1=hier_dict.get("h1"),
+                            h2=hier_dict.get("h2"),
+                            h3=hier_dict.get("h3"),
+                        )
                 return KnowledgeArticle(
                     id=r.id,
                     system=r.system,
                     title=r.title,
                     category=r.category,
                     content=r.content,
-                    keywords=list(r.keywords) if r.keywords else []
+                    keywords=list(r.keywords) if r.keywords else [],
+                    section_hierarchy=sec_hier,
                 )
             return None
         except Exception as e:

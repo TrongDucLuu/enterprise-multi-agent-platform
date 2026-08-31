@@ -78,15 +78,16 @@ async def semantic_cache_before_model_callback(
     user = current_sso_user.get()
     user_id = user.user_id if user else None
 
-    # 1. Protect expensive L3 Pro model with per-user rate limiting (10 req/min)
+    # 1. Protect expensive L3 Pro model with per-user rate limiting (L3_RATE_LIMIT_PER_MINUTE)
     if agent_name == "l3_deep_diagnostics_agent":
         allowed, rem, retry_after = check_l3_rate_limit(user_id)
         if not allowed:
+            l3_limit = os.getenv("L3_RATE_LIMIT_PER_MINUTE", "10")
             return LlmResponse(
                 content=types.Content(
                     role="model",
                     parts=[types.Part.from_text(
-                        text=f"⚠️ [L3 Rate Limit Exceeded] Hạn mức gọi mô hình phân tích sâu L3 (Gemini 3 Pro) của bạn đã vượt quá giới hạn (10 lượt/phút). Vui lòng thử lại sau {retry_after}s."
+                        text=f"⚠️ [L3 Rate Limit Exceeded] Hạn mức gọi mô hình phân tích sâu L3 ({REASONING_MODEL_NAME}) của bạn đã vượt quá giới hạn ({l3_limit} lượt/phút). Vui lòng thử lại sau {retry_after}s."
                     )]
                 ),
                 custom_metadata={"rate_limited": True, "tier": "L3"}

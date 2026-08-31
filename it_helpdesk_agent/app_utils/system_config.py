@@ -233,9 +233,34 @@ def load_system_config(config_path: Optional[str] = None, force_reload: bool = F
 
     validated_doc_proc = {
         "pdf_parser": pdf_parser,
-        "document_ai_processor_id": doc_ai_proc_id,
+        "document_ai_processor_id": doc_ai_proc_id or "",
         "document_ai_timeout_seconds": float(timeout_seconds),
         "document_ai_max_retries": int(max_retries),
+    }
+
+    # Validate retrieval configuration
+    raw_retrieval = data.get("retrieval", {})
+    if raw_retrieval is not None and not isinstance(raw_retrieval, dict):
+        raise SystemConfigurationError(
+            f"Trường 'retrieval' trong '{target_path}' phải là dictionary. (Fail-Closed)"
+        )
+    
+    raw_retrieval = raw_retrieval or {}
+    fraction_lists_to_search = raw_retrieval.get("fraction_lists_to_search", 0.05)
+    if not isinstance(fraction_lists_to_search, (int, float)) or not (0.0 < float(fraction_lists_to_search) <= 1.0):
+        raise SystemConfigurationError(
+            f"Trường 'retrieval.fraction_lists_to_search' ({fraction_lists_to_search}) phải là số thực trong khoảng (0.0, 1.0]. (Fail-Closed)"
+        )
+
+    hybrid_search_enabled = raw_retrieval.get("hybrid_search_enabled", False)
+    if not isinstance(hybrid_search_enabled, bool):
+        raise SystemConfigurationError(
+            f"Trường 'retrieval.hybrid_search_enabled' ({hybrid_search_enabled}) phải là boolean. (Fail-Closed)"
+        )
+
+    validated_retrieval = {
+        "fraction_lists_to_search": float(fraction_lists_to_search),
+        "hybrid_search_enabled": bool(hybrid_search_enabled),
     }
 
     parsed_config = {
@@ -243,6 +268,7 @@ def load_system_config(config_path: Optional[str] = None, force_reload: bool = F
         "systems": validated_systems,
         "chunking": validated_chunking,
         "document_processing": validated_doc_proc,
+        "retrieval": validated_retrieval,
     }
 
     _CONFIG_CACHE = parsed_config
@@ -349,5 +375,14 @@ def get_document_processing_config() -> dict[str, Any]:
         "document_ai_processor_id": None,
         "document_ai_timeout_seconds": 60.0,
         "document_ai_max_retries": 2,
+    })
+
+
+def get_retrieval_config() -> dict[str, Any]:
+    """Returns retrieval and search configuration (fraction_lists_to_search, hybrid_search_enabled)."""
+    cfg = load_system_config()
+    return cfg.get("retrieval", {
+        "fraction_lists_to_search": 0.05,
+        "hybrid_search_enabled": False,
     })
 
