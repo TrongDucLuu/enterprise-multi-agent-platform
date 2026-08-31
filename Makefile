@@ -25,3 +25,12 @@ docker-deploy:
 		--region $(REGION) \
 		--project $(PROJECT_ID) \
 		--labels component=it-helpdesk-agent
+
+# Knowledge Base Ingestion Pipeline
+ingest-kb-dry:
+	@echo "🔍 Simulating Knowledge Base Ingestion (Dry Run)..."
+	uv run python scripts/ingest_knowledge_base.py --source-dir data/knowledge_base/ --dry-run --test-query "Lỗi tạo đơn hàng SAP ME21N"
+
+ingest-kb:
+	@echo "📥 Ingesting Customer Documentation into BigQuery Vector Search..."
+	uv run python scripts/ingest_knowledge_base.py --source-dir data/knowledge_base/ --project-id $(PROJECT_ID)

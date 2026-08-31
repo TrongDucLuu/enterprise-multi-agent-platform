@@ -1,0 +1,168 @@
+import os
+import tempfile
+import pytest
+import yaml
+
+from it_helpdesk_agent.app_utils.system_config import (
+    load_system_config,
+    reload_system_config,
+    get_configured_systems,
+    get_valid_system_filters,
+    get_system_required_roles,
+    get_all_system_roles_map,
+    get_shared_admin_roles,
+    get_system_instructions_prompt,
+    SystemConfigurationError,
+)
+
+
+def test_default_config_loads_erp_hrm_crm():
+    reload_system_config()
+    systems = get_configured_systems()
+    assert "ERP" in systems
+    assert "HRM" in systems
+    assert "CRM" in systems
+
+    filters = get_valid_system_filters()
+    assert filters == {"ERP", "HRM", "CRM", "ALL"}
+
+    shared_roles = get_shared_admin_roles()
+    assert "it_admin" in shared_roles
+    assert "support_agent" in shared_roles
+
+    hrm_roles = get_system_required_roles("HRM")
+    assert "hr_specialist" in hrm_roles
+    assert "it_admin" in hrm_roles  # Merged shared admin role
+
+    all_roles = get_all_system_roles_map()
+    assert "ERP" in all_roles
+    assert "HRM" in all_roles
+    assert "CRM" in all_roles
+
+
+def test_dynamic_system_addition_without_code_changes(monkeypatch):
+    """Verifies that adding a new system (e.g. MES or HIS) is automatically picked up."""
+    custom_yaml = {
+        "shared_admin_roles": ["sysadmin", "it_support"],
+        "systems": {
+            "MES": {
+                "display_name": "Manufacturing Execution System",
+                "vendor_examples": "Siemens / Rockwell",
+                "description": "Quản lý dây chuyền sản xuất",
+                "common_issues": ["Lỗi kết nối PLC", "Tắc nghẽn SCADA"],
+                "roles": ["factory_operator", "plant_manager"],
+            },
+            "HIS": {
+                "display_name": "Hospital Information System",
+                "vendor_examples": "Epic / Cerner",
+                "description": "Quản lý bệnh án điện tử",
+                "common_issues": ["Lỗi đồng bộ hồ sơ EMR", "Lỗi phân quyền bác sĩ"],
+                "roles": ["doctor", "nurse", "chief_medical_officer"],
+            }
+        }
+    }
+
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.dump(custom_yaml, f)
+        temp_path = f.name
+
+    try:
+        monkeypatch.setenv("SYSTEMS_CONFIG_PATH", temp_path)
+        reload_system_config(temp_path)
+
+        systems = get_configured_systems()
+        assert systems == ["HIS", "MES"]
+
+        filters = get_valid_system_filters()
+        assert filters == {"HIS", "MES", "ALL"}
+
+        mes_roles = get_system_required_roles("MES")
+        assert "factory_operator" in mes_roles
+        assert "sysadmin" in mes_roles
+
+        his_roles = get_system_required_roles("HIS")
+        assert "doctor" in his_roles
+        assert "it_support" in his_roles
+
+        prompt = get_system_instructions_prompt()
+        assert "MES (Siemens / Rockwell):" in prompt
+        assert "HIS (Epic / Cerner):" in prompt
+    finally:
+        monkeypatch.delenv("SYSTEMS_CONFIG_PATH", raising=False)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        reload_system_config()
+
+
+def test_system_config_fail_closed_missing_file(monkeypatch):
+    monkeypatch.setenv("SYSTEMS_CONFIG_PATH", "/non/existent/path/to/systems.yaml")
+    with pytest.raises(SystemConfigurationError, match="Tệp cấu hình hệ thống không tồn tại"):
+        reload_system_config("/non/existent/path/to/systems.yaml")
+    monkeypatch.delenv("SYSTEMS_CONFIG_PATH", raising=False)
+    reload_system_config()
+
+
+def test_system_config_fail_closed_invalid_yaml(monkeypatch):
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        f.write("invalid: [yaml: unclosed bracket")
+        temp_path = f.name
+
+    try:
+        monkeypatch.setenv("SYSTEMS_CONFIG_PATH", temp_path)
+        with pytest.raises(SystemConfigurationError, match="Không thể đọc hoặc phân tích cú pháp YAML"):
+            reload_system_config(temp_path)
+    finally:
+        monkeypatch.delenv("SYSTEMS_CONFIG_PATH", raising=False)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        reload_system_config()
+
+
+def test_system_config_rejects_reserved_name_all(monkeypatch):
+    custom_yaml = {
+        "shared_admin_roles": ["admin"],
+        "systems": {
+            "ALL": {
+                "display_name": "Reserved Name",
+                "roles": ["user"]
+            }
+        }
+    }
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.dump(custom_yaml, f)
+        temp_path = f.name
+
+    try:
+        monkeypatch.setenv("SYSTEMS_CONFIG_PATH", temp_path)
+        with pytest.raises(SystemConfigurationError, match="vi phạm từ khóa dành riêng"):
+            reload_system_config(temp_path)
+    finally:
+        monkeypatch.delenv("SYSTEMS_CONFIG_PATH", raising=False)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        reload_system_config()
+
+
+def test_system_config_rejects_invalid_system_characters(monkeypatch):
+    custom_yaml = {
+        "shared_admin_roles": ["admin"],
+        "systems": {
+            "ERP-BAD!": {
+                "display_name": "Bad characters",
+                "roles": ["user"]
+            }
+        }
+    }
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.dump(custom_yaml, f)
+        temp_path = f.name
+
+    try:
+        monkeypatch.setenv("SYSTEMS_CONFIG_PATH", temp_path)
+        with pytest.raises(SystemConfigurationError, match="Chỉ chấp nhận ký tự chữ, số"):
+            reload_system_config(temp_path)
+    finally:
+        monkeypatch.delenv("SYSTEMS_CONFIG_PATH", raising=False)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        reload_system_config()

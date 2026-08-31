@@ -1,0 +1,54 @@
+# Enterprise Systems & RBAC Configuration
+# Customer-specific business systems, descriptions, vendors, and role requirements.
+
+shared_admin_roles:
+  - "it_admin"
+  - "sys_admin"
+  - "admin"
+  - "support_agent"
+  - "helpdesk_operator"
+  - "lead_engineer"
+
+systems:
+  ERP:
+    display_name: "Enterprise Resource Planning (ERP)"
+    vendor_examples: "SAP / Oracle"
+    description: "Hệ thống quản lý nguồn lực doanh nghiệp, phân quyền Purchase Order (PO), kỳ kế toán, đồng bộ kho vận."
+    common_issues:
+      - "Lỗi phân quyền Purchase Order (PO)"
+      - "Khóa kỳ kế toán (Fiscal Period Closure)"
+      - "Lỗi đồng bộ dữ liệu kho hàng (Inventory Sync Error)"
+    roles:
+      - "erp_user"
+      - "finance_user"
+      - "accountant"
+      - "procurement_specialist"
+      - "procurement_manager"
+
+  HRM:
+    display_name: "Human Resource Management (HRM)"
+    vendor_examples: "Workday / BambooHR"
+    description: "Hệ thống quản trị nhân sự, chấm công vân tay, bảng lương Payroll và quy trình Onboarding nhân sự."
+    common_issues:
+      - "Lỗi chấm công vân tay / Timesheet sync"
+      - "Khóa bảng lương Payroll"
+      - "Quy trình Onboarding nhân sự mới"
+    roles:
+      - "hr_specialist"
+      - "hr_manager"
+      - "payroll_admin"
+      - "hr_operations"
+
+  CRM:
+    display_name: "Customer Relationship Management (CRM)"
+    vendor_examples: "Salesforce / HubSpot"
+    description: "Hệ thống quan hệ khách hàng, phân quyền Territory, quản lý Lead/Pipeline và API limits."
+    common_issues:
+      - "Lỗi phân quyền Territory & chuyển giao Account khách hàng"
+      - "Lỗi đồng bộ Lead / Contact từ Webform"
+      - "Vượt giới hạn API Daily Limit"
+    roles:
+      - "sales_rep"
+      - "sales_manager"
+      - "marketing"
+      - "crm_admin"

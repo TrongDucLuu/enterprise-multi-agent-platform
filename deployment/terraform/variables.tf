@@ -130,4 +130,10 @@ variable "domain_name" {
   default     = ""
 }
 
+variable "use_vertex_embedding" {
+  description = "Enable Vertex AI text-embedding-005 for generating dense vector embeddings"
+  type        = bool
+  default     = true
+}
+
 

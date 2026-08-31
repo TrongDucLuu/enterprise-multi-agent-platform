@@ -333,6 +333,20 @@ def build_runbook_docx(output_path):
         "  -H \"Authorization: Bearer <VALID_OIDC_TOKEN>\""
     )
 
+    add_styled_heading(doc, "SOP-06: Quy trình Onboarding Khách Hàng Mới & Nạp Knowledge Base", 3)
+    add_body_paragraph(
+        doc,
+        "Quy trình 5 bước nạp tài liệu và cấu hình hệ thống nghiệp vụ cho khách hàng doanh nghiệp mới mà không cần sửa code:\n"
+        "1. Khai báo hệ thống nghiệp vụ trong `config/systems.yaml` (ví dụ: ERP, HRM, CRM, CORE_BANKING) và các vai trò quản trị tương ứng.\n"
+        "2. Đặt tài liệu kỹ thuật/SOP (.md, .txt, .docx, .jsonl) vào thư mục `data/knowledge_base/`.\n"
+        "3. Chạy kiểm thử mô phỏng (Dry-Run) để xác thực định dạng và phân tách đoạn (semantic chunking):\n"
+        "   `make ingest-kb-dry`\n"
+        "4. Thực hiện nạp chính thức dữ liệu và sinh vector embedding 768-dim (text-embedding-005) vào BigQuery:\n"
+        "   `make ingest-kb`\n"
+        "5. Xác minh truy vấn ngữ nghĩa với cờ `--test-query`:\n"
+        "   `python scripts/ingest_knowledge_base.py --test-query \"lỗi phân quyền SAP PO\"`"
+    )
+
     # --- MỤC 6: GIÁM SÁT, CẢNH BÁO & KHẢ NĂNG QUAN SÁT ---
     add_styled_heading(doc, "6. GIÁM SÁT, CẢNH BÁO & KHẢ NĂNG QUAN SÁT (OBSERVABILITY & MONITORING)", 1)
     

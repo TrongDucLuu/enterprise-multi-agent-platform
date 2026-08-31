@@ -117,3 +117,34 @@ def test_draft_email_response():
     assert "TICK-12345" in email["subject"]
     assert "Nguyễn Văn A" in email["body"]
     assert "Z_PROC_PURCHASER" in email["body"]
+
+
+def test_search_enterprise_knowledge_invalid_system_boundary_validation():
+    """Verify that specifying an unknown system returns a friendly validation error."""
+    res = search_enterprise_knowledge("quy trình", system="UNKNOWN_SYSTEM")
+    assert len(res) == 1
+    assert res[0]["article_id"] == "INVALID-SYSTEM"
+    assert "không hợp lệ" in res[0]["snippet"]
+    assert "ERP" in res[0]["snippet"]
+
+
+def test_mcp_tool_handles_knowledge_store_unavailable(monkeypatch):
+    """Verify that MCP tool catches KnowledgeStoreUnavailableError and returns friendly error."""
+    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStoreUnavailableError
+    from unittest.mock import MagicMock
+    import it_helpdesk_agent.tools.enterprise_rag_mcp.main as main_module
+
+    mock_store = MagicMock()
+    mock_store.search.side_effect = KnowledgeStoreUnavailableError("BigQuery down")
+    mock_store.get_article_by_id.side_effect = KnowledgeStoreUnavailableError("BigQuery down")
+    monkeypatch.setattr(main_module, "store", mock_store)
+
+    search_res = search_enterprise_knowledge("lỗi hệ thống", system="ERP")
+    assert len(search_res) == 1
+    assert search_res[0]["article_id"] == "STORE-UNAVAILABLE"
+    assert "Tạm thời Gián đoạn" in search_res[0]["title"]
+
+    manual_res = get_system_manual("ERP-KB-001")
+    assert manual_res["status"] == "error"
+    assert manual_res["error_code"] == "KNOWLEDGE_STORE_UNAVAILABLE"
+

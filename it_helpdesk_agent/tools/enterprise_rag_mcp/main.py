@@ -1,27 +1,39 @@
 import logging
 import sys
-from typing import Literal, Optional
+from typing import Optional
 from fastmcp import FastMCP
 from dotenv import load_dotenv
 
 try:
-    from knowledge_store import get_knowledge_store
+    from knowledge_store import get_knowledge_store, KnowledgeStoreUnavailableError
     from rag_models import SearchResult, DocumentSummary
 except ImportError:
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import get_knowledge_store
+    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import get_knowledge_store, KnowledgeStoreUnavailableError
     from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult, DocumentSummary
 
-# Common administrative and IT support roles authorized across all enterprise domains
-ADMIN_SUPPORT_ROLES = [
-    "it_admin", "sys_admin", "admin", "support_agent", "helpdesk_operator", "lead_engineer"
-]
+try:
+    from it_helpdesk_agent.app_utils.system_config import (
+        get_configured_systems,
+        get_valid_system_filters,
+        get_system_required_roles,
+    )
+except ImportError:
+    try:
+        from app_utils.system_config import (
+            get_configured_systems,
+            get_valid_system_filters,
+            get_system_required_roles,
+        )
+    except ImportError:
+        def get_configured_systems() -> list[str]:
+            return ["ERP", "HRM", "CRM"]
+        def get_valid_system_filters() -> set[str]:
+            return {"ERP", "HRM", "CRM", "ALL"}
+        def get_system_required_roles(system: str) -> list[str]:
+            return ["it_admin", "admin"]
 
-# Domain-specific RBAC roles for Enterprise RAG systems
-SYSTEM_REQUIRED_ROLES = {
-    "HRM": ["hr_specialist", "hr_manager", "payroll_admin", "hr_operations", *ADMIN_SUPPORT_ROLES],
-    "ERP": ["erp_user", "finance_user", "accountant", "procurement_specialist", "procurement_manager", *ADMIN_SUPPORT_ROLES],
-    "CRM": ["sales_rep", "sales_manager", "marketing", "crm_admin", *ADMIN_SUPPORT_ROLES],
-}
+
+logger = logging.getLogger(__name__)
 
 
 def _check_system_access(system: str) -> tuple[bool, Optional[str]]:
@@ -29,12 +41,16 @@ def _check_system_access(system: str) -> tuple[bool, Optional[str]]:
     Verifies if the current authenticated caller is authorized to access documentation for the specified system.
     Fails closed if SSO authorization layer cannot be resolved.
     """
-    sys_upper = system.upper()
+    sys_upper = system.upper().strip()
     if sys_upper == "ALL":
         return True, None
 
-    needed_roles = SYSTEM_REQUIRED_ROLES.get(sys_upper)
+    needed_roles = get_system_required_roles(sys_upper)
     if not needed_roles:
+        # Check if the system is known in configuration
+        configured = get_configured_systems()
+        if sys_upper not in configured:
+            return False, f"Hệ thống '{system}' không được định nghĩa trong cấu hình doanh nghiệp (Fail-Closed)."
         return True, None
 
     try:
@@ -51,9 +67,10 @@ def _check_system_access(system: str) -> tuple[bool, Optional[str]]:
 def _get_authorized_systems() -> list[str]:
     """
     Returns the list of enterprise systems the current user is authorized to access.
+    Dynamically resolves systems from configuration.
     """
     authorized = []
-    for sys_name in ("ERP", "HRM", "CRM"):
+    for sys_name in get_configured_systems():
         allowed, _ = _check_system_access(sys_name)
         if allowed:
             authorized.append(sys_name)
@@ -65,55 +82,100 @@ def _initialize_console_logging(min_level: int = logging.INFO):
     handler = logging.StreamHandler(sys.stderr)
     logging.basicConfig(level=min_level, handlers=[handler], force=True)
 
+
 store = get_knowledge_store()
 mcp = FastMCP(name="EnterpriseKnowledgeRAG")
+
 
 @mcp.tool()
 def search_enterprise_knowledge(
     query: str,
-    system: Literal["ERP", "HRM", "CRM", "ALL"] = "ALL"
+    system: str = "ALL"
 ) -> list[dict]:
     """
-    Searches enterprise knowledge base for ERP, HRM, and CRM systems.
-    - system: 'ERP', 'HRM', 'CRM', or 'ALL'
+    Searches enterprise knowledge base for technical manuals and troubleshooting procedures.
+    - query: Keyword or natural language question regarding an enterprise system issue.
+    - system: System identifier (e.g. 'ERP', 'HRM', 'CRM', or 'ALL' to search all authorized systems).
     Enforces domain-level RBAC authorization and Pre-Query Security Trimming based on authenticated user roles.
     """
-    if system != "ALL":
-        is_allowed, error_msg = _check_system_access(system)
+    clean_sys = system.upper().strip() if system else "ALL"
+    valid_systems = get_valid_system_filters()
+
+    # Explicit input boundary validation
+    if clean_sys not in valid_systems:
+        valid_names = ", ".join(sorted(list(get_configured_systems())))
+        return [{
+            "article_id": "INVALID-SYSTEM",
+            "title": f"Invalid System Specified: '{system}'",
+            "snippet": f"Hệ thống '{system}' không hợp lệ. Các hệ thống được hỗ trợ bao gồm: {valid_names}, hoặc 'ALL'.",
+            "system": system,
+            "score": 0.0,
+        }]
+
+    if clean_sys != "ALL":
+        is_allowed, error_msg = _check_system_access(clean_sys)
         if not is_allowed:
             return [{
-                "article_id": f"{system}-FORBIDDEN",
-                "title": f"Access Denied: Restricted {system} System Documentation",
-                "snippet": error_msg or f"Truy cập tài liệu {system} bị từ chối do không đủ quyền hạn.",
-                "system": system,
+                "article_id": f"{clean_sys}-FORBIDDEN",
+                "title": f"Access Denied: Restricted {clean_sys} System Documentation",
+                "snippet": error_msg or f"Truy cập tài liệu {clean_sys} bị từ chối do không đủ quyền hạn.",
+                "system": clean_sys,
                 "score": 0.0,
             }]
-        results = store.search(query=query, system=system, limit=3)
-        return [r.model_dump() for r in results]
+        try:
+            results = store.search(query=query, system=clean_sys, limit=3)
+            return [r.model_dump() for r in results]
+        except KnowledgeStoreUnavailableError as e:
+            logger.error("Knowledge store unavailable during search: %s", e)
+            return [{
+                "article_id": "STORE-UNAVAILABLE",
+                "title": "Dịch vụ Tra cứu Tri thức Tạm thời Gián đoạn",
+                "snippet": "Cơ sở dữ liệu tri thức doanh nghiệp hiện không phản hồi. Vui lòng thử lại sau.",
+                "system": clean_sys,
+                "score": 0.0,
+            }]
 
     # Pre-query Security Trimming for system == "ALL":
-    # Calculate authorized systems before querying database to avoid pulling restricted records into memory
-    # and to ensure vector search top_k slots are filled exclusively with accessible documents.
     authorized_systems = _get_authorized_systems()
     if not authorized_systems:
         return []
 
-    results = store.search(
-        query=query,
-        system="ALL",
-        limit=3,
-        allowed_systems=authorized_systems
-    )
-    return [r.model_dump() for r in results]
+    try:
+        results = store.search(
+            query=query,
+            system="ALL",
+            limit=3,
+            allowed_systems=authorized_systems
+        )
+        return [r.model_dump() for r in results]
+    except KnowledgeStoreUnavailableError as e:
+        logger.error("Knowledge store unavailable during search ALL: %s", e)
+        return [{
+            "article_id": "STORE-UNAVAILABLE",
+            "title": "Dịch vụ Tra cứu Tri thức Tạm thời Gián đoạn",
+            "snippet": "Cơ sở dữ liệu tri thức doanh nghiệp hiện không phản hồi. Vui lòng thử lại sau.",
+            "system": "ALL",
+            "score": 0.0,
+        }]
 
 
 @mcp.tool()
 def get_system_manual(article_id: str) -> dict:
     """
     Retrieves the complete technical manual or troubleshooting guide for a specific article ID.
-    Enforces domain-level RBAC for sensitive HRM, ERP, and CRM operational guides.
+    Enforces domain-level RBAC for sensitive enterprise system operational guides.
     """
-    article = store.get_article_by_id(article_id)
+    try:
+        article = store.get_article_by_id(article_id)
+    except KnowledgeStoreUnavailableError as e:
+        logger.error("Knowledge store unavailable during get_system_manual: %s", e)
+        return {
+            "status": "error",
+            "error_code": "KNOWLEDGE_STORE_UNAVAILABLE",
+            "message": "Dịch vụ cơ sở dữ liệu tri thức tạm thời gián đoạn. Vui lòng thử lại sau.",
+            "article_id": article_id
+        }
+
     if not article:
         return {"status": "error", "message": f"Article '{article_id}' not found."}
     
@@ -128,6 +190,7 @@ def get_system_manual(article_id: str) -> dict:
         }
 
     return {"status": "success", "article": article.model_dump()}
+
 
 @mcp.tool()
 def summarize_long_document(document_text: str, system_name: str = "Enterprise System") -> dict:
@@ -147,6 +210,7 @@ def summarize_long_document(document_text: str, system_name: str = "Enterprise S
             "action_items": action_items[:5] or ["Tuân thủ quy trình bảo mật IT."],
         }
     }
+
 
 @mcp.tool()
 def draft_email_response(
@@ -180,6 +244,7 @@ Trân trọng,
         "subject": email_subject,
         "body": email_body
     }
+
 
 if __name__ == "__main__":
     load_dotenv()

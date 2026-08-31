@@ -66,7 +66,7 @@ resource "google_storage_bucket_iam_member" "ai_assets_storage_user" {
   member = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-# 5. BigQuery Dataset for Enterprise Knowledge Base (Serverless Vector Storage)
+# 5. BigQuery Dataset & Vector Table for Enterprise Knowledge Base
 resource "google_bigquery_dataset" "kb_dataset" {
   project                    = var.project_id
   dataset_id                 = var.bigquery_kb_dataset
@@ -75,6 +75,78 @@ resource "google_bigquery_dataset" "kb_dataset" {
   location                   = var.region
   delete_contents_on_destroy = false
   depends_on                 = [google_project_service.services]
+}
+
+resource "google_bigquery_table" "knowledge_articles" {
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.kb_dataset.dataset_id
+  table_id            = "knowledge_articles"
+  friendly_name       = "Enterprise Knowledge Articles"
+  description         = "Knowledge base articles with 768-dimensional text-embedding-005 vectors for enterprise semantic search"
+  deletion_protection = var.environment == "production" ? true : false
+
+  clustering = ["system", "category"]
+
+  schema = <<EOF
+[
+  {
+    "name": "id",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Unique article identifier (e.g. ERP-KB-001)"
+  },
+  {
+    "name": "system",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Enterprise system identifier (e.g. ERP, HRM, CRM)"
+  },
+  {
+    "name": "title",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Article title"
+  },
+  {
+    "name": "category",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Category or topic (e.g. Finance & Procurement)"
+  },
+  {
+    "name": "content",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Full text or markdown content of the guide/troubleshooting procedure"
+  },
+  {
+    "name": "keywords",
+    "type": "STRING",
+    "mode": "REPEATED",
+    "description": "Search keywords and acronyms"
+  },
+  {
+    "name": "embedding",
+    "type": "FLOAT64",
+    "mode": "REPEATED",
+    "description": "Dense vector embedding (768 dimensions, text-embedding-005)"
+  },
+  {
+    "name": "source_uri",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Source document location (e.g. gs://bucket/docs/manual.docx)"
+  },
+  {
+    "name": "updated_at",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED",
+    "description": "Timestamp when this article was created or updated"
+  }
+]
+EOF
+
+  depends_on = [google_bigquery_dataset.kb_dataset]
 }
 
 # Scope BigQuery read-only access strictly to the KB dataset (Least Privilege)
@@ -214,6 +286,10 @@ resource "google_cloud_run_v2_service" "default" {
       env {
         name  = "OTEL_TO_CLOUD"
         value = "true"
+      }
+      env {
+        name  = "USE_VERTEX_EMBEDDING"
+        value = tostring(var.use_vertex_embedding)
       }
 
       resources {

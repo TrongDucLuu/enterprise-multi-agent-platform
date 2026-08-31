@@ -223,18 +223,27 @@ l1_selfservice_agent = Agent(
     after_agent_callback=save_session_to_memory_callback,
 )
 
+# --- Dynamic System Instruction from Configuration ---
+try:
+    from it_helpdesk_agent.app_utils.system_config import get_system_instructions_prompt, get_configured_systems
+    _systems_prompt = get_system_instructions_prompt()
+    _systems_list_str = "/".join(get_configured_systems())
+except Exception:
+    _systems_prompt = """         * **ERP (SAP / Oracle):** Lỗi phân quyền Purchase Order (PO), khóa kỳ kế toán, đồng bộ kho.
+         * **HRM (Workday / BambooHR):** Lỗi chấm công vân tay, khóa bảng lương Payroll, onboarding nhân sự.
+         * **CRM (Salesforce / HubSpot):** Lỗi đồng bộ Lead, API limits, chuyển giao Account khách hàng."""
+    _systems_list_str = "ERP/HRM/CRM"
+
 # --- LEVEL 2: Tra cứu Tài liệu (RAG) & Hệ thống Doanh nghiệp ---
 l2_enterprise_rag_agent = Agent(
     name="l2_enterprise_rag_agent",
     model=fast_model,
-    instruction="""
+    instruction=f"""
     Bạn là Chuyên gia Hỗ trợ Hệ thống Doanh nghiệp Mức 2 (L2 Enterprise Systems & RAG Specialist).
     Trách nhiệm chính của bạn:
     1. **Tra cứu Kiến thức Nội bộ (Enterprise RAG):**
        - Sử dụng công cụ `search_enterprise_knowledge` và `get_system_manual` từ Enterprise RAG MCP để tìm kiếm giải pháp cho các hệ thống:
-         * **ERP (SAP / Oracle):** Lỗi phân quyền Purchase Order (PO), khóa kỳ kế toán, đồng bộ kho.
-         * **HRM (Workday / BambooHR):** Lỗi chấm công vân tay, khóa bảng lương Payroll, onboarding nhân sự.
-         * **CRM (Salesforce / HubSpot):** Lỗi đồng bộ Lead, API limits, chuyển giao Account khách hàng.
+{_systems_prompt}
     2. **Đọc hiểu & Tóm tắt Tài liệu Dài:**
        - Sử dụng `summarize_long_document` để trích xuất các điểm mấu chốt và các bước hành động (Action Items) từ các tài liệu kỹ thuật dài.
     3. **Soạn thảo Email & Cập nhật Ticket:**
@@ -292,7 +301,7 @@ l3_deep_diagnostics_agent = Agent(
 root_orchestrator = Agent(
     name="root_triage_orchestrator",
     model=fast_model,
-    instruction="""
+    instruction=f"""
     Bạn là Trưởng nhóm Điều phối IT Helpdesk (Root Triage Orchestrator).
     Nhiệm vụ của bạn là tiếp nhận yêu cầu từ người dùng, thấu hiểu ngữ cảnh và phân loại định tuyến chính xác đến đúng Sub-agent:
     
@@ -304,7 +313,7 @@ root_orchestrator = Agent(
          * Người dùng muốn reset mật khẩu, mở khóa tài khoản.
          * Người dùng báo lỗi chung chung và cần tạo ticket ban đầu.
        - **Chuyển cho `l2_enterprise_rag_agent` khi:**
-         * Người dùng gặp sự cố nghiệp vụ trên hệ thống ERP (SAP/Oracle), HRM (Workday/BambooHR), CRM (Salesforce/HubSpot).
+         * Người dùng gặp sự cố nghiệp vụ trên hệ thống doanh nghiệp ({_systems_list_str}).
          * Cần tra cứu tài liệu hướng dẫn kỹ thuật nội bộ hoặc cần soạn thảo email giải trình/hướng dẫn gửi người dùng.
        - **Chuyển cho `l3_deep_diagnostics_agent` khi:**
          * Có log lỗi, stack trace, sập hệ thống, OOM, deadlock cần làm Root Cause Analysis (RCA).

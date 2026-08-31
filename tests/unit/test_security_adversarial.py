@@ -12,7 +12,7 @@ from it_helpdesk_agent.tools.ticketing_tool import (
 from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import (
     InMemoryKnowledgeStore,
     BigQueryVectorKnowledgeStore,
-    ALLOWED_SYSTEMS,
+    KnowledgeStoreUnavailableError,
 )
 from it_helpdesk_agent.tools.enterprise_rag_mcp.main import (
     search_enterprise_knowledge,
@@ -224,7 +224,7 @@ def test_bigquery_vector_store_parameterization():
     mock_query_job = MagicMock()
     mock_query_job.result.return_value = []
     mock_bq_client.query.return_value = mock_query_job
-    store._bq_client = mock_bq_client
+    store.bq_client = mock_bq_client
 
     # Execute search with SQL injection payload in system
     store.search(query="SAP ME21N", system="ERP' OR 1=1 --", limit=5)
@@ -250,7 +250,7 @@ def test_bigquery_vector_store_allowed_systems_parameterization():
     mock_query_job = MagicMock()
     mock_query_job.result.return_value = []
     mock_bq_client.query.return_value = mock_query_job
-    store._bq_client = mock_bq_client
+    store.bq_client = mock_bq_client
 
     # Search with allowed_systems list
     store.search(query="quy trình nghỉ phép", system="ALL", limit=3, allowed_systems=["HRM", "CRM"])
@@ -267,21 +267,19 @@ def test_bigquery_vector_store_allowed_systems_parameterization():
 
 
 def test_bigquery_fallback_logging_error(caplog):
-    """Verify that BigQuery failure logs error for Cloud Monitoring alerting."""
+    """Verify that BigQuery failure raises KnowledgeStoreUnavailableError (Fail-Closed) and logs error."""
     import logging
     store = BigQueryVectorKnowledgeStore(project_id="test-proj")
     
     mock_bq_client = MagicMock()
     mock_bq_client.query.side_effect = Exception("BigQuery Connection Timeout")
-    store._bq_client = mock_bq_client
+    store.bq_client = mock_bq_client
 
     with caplog.at_level(logging.ERROR):
-        results = store.search(query="SAP PO", system="ERP", limit=1)
-        # Verify graceful fallback to in-memory
-        assert len(results) > 0
-        assert results[0].system == "ERP"
+        with pytest.raises(KnowledgeStoreUnavailableError, match="Truy vấn BigQuery Vector Search thất bại"):
+            store.search(query="SAP PO", system="ERP", limit=1)
 
-    # Verify ERROR log was emitted
+    # Verify ERROR log was emitted for Cloud Monitoring alerting
     assert any(
         record.levelno == logging.ERROR and "BigQuery vector search failed" in record.message 
         for record in caplog.records

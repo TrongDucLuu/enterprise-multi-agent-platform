@@ -12,6 +12,25 @@ try:
 except ImportError:
     from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle, SearchResult, DocumentSummary
 
+try:
+    from it_helpdesk_agent.app_utils.system_config import get_valid_system_filters
+    from it_helpdesk_agent.app_utils.embedding_utils import DEFAULT_EMBEDDING_MODEL, generate_text_embedding
+except ImportError:
+    try:
+        from app_utils.system_config import get_valid_system_filters
+        from app_utils.embedding_utils import DEFAULT_EMBEDDING_MODEL, generate_text_embedding
+    except ImportError:
+        def get_valid_system_filters() -> set[str]:
+            return {"ERP", "HRM", "CRM", "ALL"}
+        DEFAULT_EMBEDDING_MODEL = "text-embedding-005"
+        def generate_text_embedding(text: str, **kwargs) -> list[float]:
+            return [0.0] * 64
+
+
+class KnowledgeStoreUnavailableError(Exception):
+    """Raised when the primary enterprise knowledge store backend (e.g. BigQuery) fails or is unreachable."""
+    pass
+
 
 # Built-in Enterprise Knowledge Base for Local Development & Testing
 ENTERPRISE_ARTICLES: list[KnowledgeArticle] = [
@@ -101,9 +120,6 @@ ENTERPRISE_ARTICLES: list[KnowledgeArticle] = [
 ]
 
 
-ALLOWED_SYSTEMS = {"ERP", "HRM", "CRM", "ALL"}
-
-
 class BaseKnowledgeStore(ABC):
     """Abstract Base Class for Enterprise Knowledge Stores (Adapter Pattern)."""
 
@@ -141,8 +157,9 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         allowed_systems: Optional[list[str]] = None
     ) -> list[SearchResult]:
         """Search knowledge articles by query keywords, system filter, and authorized systems."""
+        valid_systems = get_valid_system_filters()
         clean_system = system.upper().strip() if system else "ALL"
-        if clean_system not in ALLOWED_SYSTEMS:
+        if clean_system not in valid_systems:
             clean_system = "ALL"
 
         allowed_upper = set(s.upper() for s in allowed_systems) if allowed_systems is not None else None
@@ -178,76 +195,60 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         search_results = []
         for score, article in results[:limit]:
             snippet = article.content[:200].strip() + "..."
+            relevance = min(1.0, score / 6.0)
             search_results.append(SearchResult(
                 article_id=article.id,
                 system=article.system,
                 title=article.title,
                 snippet=snippet,
-                relevance_score=round(score, 2)
+                relevance_score=round(relevance, 2)
             ))
         return search_results
 
     def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
-        """Retrieves the full content of an article by its unique ID."""
-        for art in self.articles:
-            if art.id.upper() == article_id.upper():
-                return art
+        """Retrieves an article by its unique ID."""
+        for article in self.articles:
+            if article.id.upper() == article_id.upper():
+                return article
         return None
 
 
 class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
     """
-    Production-ready BigQuery Vector Search Knowledge Store.
-    Leverages BigQuery's VECTOR_SEARCH or COSINE_DISTANCE functions for serverless, cost-efficient RAG.
-    Zero fixed-cost per month for datasets under 100k vectors.
+    Production-grade Knowledge Store using BigQuery Vector Search and Vertex AI Embeddings.
+    Fails closed when BigQuery is unreachable rather than serving mismatched mock data.
     """
 
     def __init__(
         self,
         project_id: Optional[str] = None,
-        dataset_id: str = "it_helpdesk_kb",
+        dataset_id: Optional[str] = None,
         table_name: str = "knowledge_articles",
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         bq_client: Optional[Any] = None,
-        embedding_fn: Optional[Any] = None
+        embedding_fn: Optional[Any] = None,
     ):
-        self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "default-project")
-        self.dataset_id = os.getenv("BIGQUERY_KB_DATASET", dataset_id)
+        self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "it-helpdesk-prod")
+        self.dataset_id = dataset_id or os.getenv("BIGQUERY_KB_DATASET", "it_helpdesk_kb")
         self.table_name = table_name
-        self._bq_client = bq_client
-        self._embedding_fn = embedding_fn
+        self.embedding_model = embedding_model
+        self.embedding_fn = embedding_fn
 
-    @property
-    def bq_client(self):
-        if self._bq_client is None:
+        if bq_client is not None:
+            self.bq_client = bq_client
+        else:
             try:
                 from google.cloud import bigquery
-                self._bq_client = bigquery.Client(project=self.project_id)
+                self.bq_client = bigquery.Client(project=self.project_id)
             except Exception as e:
-                # Severity-aware error logging when BigQuery client fails to initialize (alerts SRE/DevOps)
-                logger.error("BigQuery client initialization failed (%s). Operating in fallback mode.", e)
-                self._bq_client = None
-        return self._bq_client
+                logger.error("Failed to initialize BigQuery Client for Vector Search (%s).", e)
+                self.bq_client = None
 
     def _generate_embedding(self, text: str) -> list[float]:
-        """Generates embedding vector for a query text."""
-        if self._embedding_fn:
-            return self._embedding_fn(text)
-        if os.getenv("USE_VERTEX_EMBEDDING", "false").lower() in ("true", "1"):
-            try:
-                from vertexai.language_models import TextEmbeddingModel
-                model = TextEmbeddingModel.from_pretrained("text-embedding-005")
-                embeddings = model.get_embeddings([text])
-                return embeddings[0].values
-            except Exception as e:
-                logger.info("Vertex AI embedding unavailable (%s), falling back to local embedding.", e)
-
-        # Fallback simple deterministic pseudo-vector for offline simulation
-        words = text.lower().split()
-        vec = [0.0] * 64
-        for i, w in enumerate(words[:64]):
-            vec[i] = float(len(w)) / 10.0
-        norm = math.sqrt(sum(x*x for x in vec)) or 1.0
-        return [x / norm for x in vec]
+        """Generates embedding using the shared enterprise embedding model or injected function."""
+        if self.embedding_fn is not None:
+            return self.embedding_fn(text)
+        return generate_text_embedding(text, model_name=self.embedding_model)
 
     def search(
         self,
@@ -258,14 +259,15 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
     ) -> list[SearchResult]:
         """
         Searches BigQuery table using VECTOR_SEARCH with parameterized queries and SQL-level security trimming.
-        Pushes system filtering into SQL BEFORE fetching to minimize scan cost and eliminate memory leakage.
+        Fails closed by raising KnowledgeStoreUnavailableError on backend failure.
         """
         if not self.bq_client:
-            # Fallback to in-memory store if BigQuery is unavailable
-            return InMemoryKnowledgeStore().search(query, system, limit, allowed_systems=allowed_systems)
+            logger.error("BigQuery client is not initialized. Raising KnowledgeStoreUnavailableError.")
+            raise KnowledgeStoreUnavailableError("Dịch vụ BigQuery Knowledge Store chưa được khởi tạo.")
 
+        valid_systems = get_valid_system_filters()
         clean_system = system.upper().strip() if system else "ALL"
-        if clean_system not in ALLOWED_SYSTEMS:
+        if clean_system not in valid_systems:
             clean_system = "ALL"
 
         query_vec = self._generate_embedding(query)
@@ -283,7 +285,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 system_filter = "WHERE system = @system_param"
                 query_params.append(bigquery.ScalarQueryParameter("system_param", "STRING", clean_system))
             elif allowed_systems is not None:
-                clean_allowed = [s.upper() for s in allowed_systems if s.upper() in ALLOWED_SYSTEMS and s.upper() != "ALL"]
+                clean_allowed = [s.upper() for s in allowed_systems if s.upper() in valid_systems and s.upper() != "ALL"]
                 if not clean_allowed:
                     return []
                 system_filter = "WHERE system IN UNNEST(@allowed_systems_param)"
@@ -316,7 +318,6 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             results = []
             for row in rows:
                 snippet = row.content[:200].strip() + "..."
-                # Distance in cosine is 0 (identical) to 2. Relevance score = 1 - distance
                 relevance = round(max(0.0, 1.0 - (row.distance or 0.0)), 2)
                 results.append(SearchResult(
                     article_id=row.id,
@@ -327,14 +328,14 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 ))
             return results
         except Exception as e:
-            # Severity-aware error for BigQuery fallback to enable Cloud Logging incident alerting
-            logger.error("BigQuery vector search failed (%s). Falling back to in-memory store.", e)
-            return InMemoryKnowledgeStore().search(query, system, limit, allowed_systems=allowed_systems)
+            logger.error("BigQuery vector search failed (%s). Raising KnowledgeStoreUnavailableError.", e)
+            raise KnowledgeStoreUnavailableError(f"Truy vấn BigQuery Vector Search thất bại: {e}") from e
 
     def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
-        """Retrieves article by ID from BigQuery table."""
+        """Retrieves article by ID from BigQuery table. Fails closed on failure."""
         if not self.bq_client:
-            return InMemoryKnowledgeStore().get_article_by_id(article_id)
+            logger.error("BigQuery client is not initialized for get_article_by_id.")
+            raise KnowledgeStoreUnavailableError("Dịch vụ BigQuery Knowledge Store chưa được khởi tạo.")
 
         full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
         sql = f"SELECT id, system, title, category, content, keywords FROM {full_table} WHERE UPPER(id) = @article_id LIMIT 1"
@@ -356,9 +357,10 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                     content=r.content,
                     keywords=list(r.keywords) if r.keywords else []
                 )
+            return None
         except Exception as e:
-            logger.error("BigQuery get_article_by_id failed (%s). Falling back to in-memory store.", e)
-        return InMemoryKnowledgeStore().get_article_by_id(article_id)
+            logger.error("BigQuery get_article_by_id failed (%s). Raising KnowledgeStoreUnavailableError.", e)
+            raise KnowledgeStoreUnavailableError(f"Truy xuất bài viết BigQuery thất bại: {e}") from e
 
 
 def get_knowledge_store() -> BaseKnowledgeStore:
@@ -376,4 +378,3 @@ def get_knowledge_store() -> BaseKnowledgeStore:
 
 # Backward compatibility alias
 KnowledgeStore = InMemoryKnowledgeStore
-
