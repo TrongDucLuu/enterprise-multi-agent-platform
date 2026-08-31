@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """
-Enterprise Knowledge Base Data Ingestion Pipeline.
-
-Parses multi-format customer documents (.md, .txt, .docx, .jsonl), validates enterprise system
-tags against systems.yaml config, splits documents into semantic chunks, generates 768-dimensional
-dense vector embeddings using text-embedding-005, and performs idempotent upsert (MERGE) into BigQuery.
-
-Usage:
-    # Dry-run parsing and embedding simulation:
-    python scripts/ingest_knowledge_base.py --source-dir data/knowledge_base/ --dry-run
-
-    # Production ingestion into BigQuery:
-    python scripts/ingest_knowledge_base.py --source-dir data/knowledge_base/ --project-id my-project --dataset-id it_helpdesk_kb
-
-    # Ingest single document and run test query:
-    python scripts/ingest_knowledge_base.py --file docs/sap_procurement_guide.docx --system ERP --test-query "lỗi phân quyền ME21N"
-"""
+# Enterprise Knowledge Base Data Ingestion Pipeline.
+# 
+# Parses multi-format customer documents (.md, .txt, .docx, .jsonl), validates enterprise system
+# tags against systems.yaml config, splits documents into semantic chunks, generates 768-dimensional
+# dense vector embeddings using text-embedding-005, and performs append-only streaming insert
+# (chạy lại trên tài liệu không đổi sẽ tạo dòng trùng ID; xem roadmap về MERGE và Orphaned Chunks cleanup).
+# 
+# Usage:
+#     # Dry-run parsing and embedding simulation:
+#     python scripts/ingest_knowledge_base.py --source-dir data/knowledge_base/ --dry-run
+# 
+#     # Production ingestion into BigQuery:
+#     python scripts/ingest_knowledge_base.py --source-dir data/knowledge_base/ --project-id my-project --dataset-id it_helpdesk_kb
+# 
+#     # Ingest single document and run test query:
+#     python scripts/ingest_knowledge_base.py --file docs/sap_procurement_guide.docx --system ERP --test-query "lỗi phân quyền ME21N"
+# """
 
 import os
 import sys
@@ -148,7 +149,7 @@ def process_document(
 ) -> list[dict[str, Any]]:
     """
     Validates, chunks, and prepares a document for embedding and ingestion.
-    Generates deterministic article IDs.
+    Generates deterministic article IDs based on SHA-256(system:source_uri:title:idx).
     """
     valid_systems = get_valid_system_filters()
     configured_systems = get_configured_systems()
@@ -244,6 +245,45 @@ def ensure_vector_index(
         )
 
 
+def cleanup_orphaned_chunks(
+    bq_client: Any,
+    project_id: str,
+    dataset_id: str,
+    table_name: str,
+    source_uri: str,
+    current_chunk_ids: list[str]
+) -> int:
+    """
+    Removes obsolete/orphaned chunks for a given source_uri when a document is updated and shrinks in chunk count.
+    Ensures outdated knowledge chunks from previous versions do not persist in BigQuery.
+    """
+    if not source_uri or not current_chunk_ids:
+        return 0
+
+    try:
+        from google.cloud import bigquery
+        delete_sql = f"""
+        DELETE FROM `{project_id}.{dataset_id}.{table_name}`
+        WHERE source_uri = @source_uri
+          AND id NOT IN UNNEST(@current_chunk_ids)
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("source_uri", "STRING", source_uri),
+                bigquery.ArrayQueryParameter("current_chunk_ids", "STRING", current_chunk_ids),
+            ]
+        )
+        query_job = bq_client.query(delete_sql, job_config=job_config)
+        query_job.result()
+        deleted_count = query_job.num_dml_affected_rows or 0
+        if deleted_count > 0:
+            logger.info("Đã dọn dẹp %d orphaned chunks lỗi thời cho tài liệu: %s", deleted_count, source_uri)
+        return deleted_count
+    except Exception as e:
+        logger.warning("Không thể dọn dẹp orphaned chunks cho '%s': %s", source_uri, e)
+        return 0
+
+
 def ingest_articles_to_bigquery(
     articles: list[dict[str, Any]],
     project_id: str,
@@ -251,7 +291,9 @@ def ingest_articles_to_bigquery(
     table_name: str = "knowledge_articles"
 ) -> int:
     """
-    Performs batch upsert (MERGE) into BigQuery table with 768-dim embeddings and ensures Vector Index exists.
+    Performs append-only streaming insert into BigQuery table with 768-dim embeddings,
+    cleans up orphaned chunks for modified source_uris, and ensures Vector Index exists.
+    Lưu ý: Chạy lại trên tài liệu không đổi sẽ tạo dòng trùng ID; xem roadmap về MERGE.
     """
     try:
         from google.cloud import bigquery
@@ -262,6 +304,33 @@ def ingest_articles_to_bigquery(
     bq_client = bigquery.Client(project=project_id)
     full_table = f"`{project_id}.{dataset_id}.{table_name}`"
 
+    # Pre-check for existing source_uris to warn operators of potential duplicate rows before full MERGE
+    try:
+        source_uris = list({a["source_uri"] for a in articles if a.get("source_uri")})
+        if source_uris:
+            check_sql = f"""
+            SELECT DISTINCT source_uri 
+            FROM `{project_id}.{dataset_id}.{table_name}`
+            WHERE source_uri IN UNNEST(@source_uris)
+            """
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ArrayQueryParameter("source_uris", "STRING", source_uris)
+                ]
+            )
+            existing_rows = list(bq_client.query(check_sql, job_config=job_config).result())
+            existing_uris = [row.source_uri for row in existing_rows]
+            if existing_uris:
+                logger.warning(
+                    "CẢNH BÁO TRÙNG LẶP DỮ LIỆU: Phát hiện %d source_uri đã tồn tại trong BigQuery (%s). "
+                    "Lượt streaming insert này sẽ tạo các dòng trùng ID do chưa có MERGE tự động. "
+                    "Vui lòng lưu ý khi re-ingest tài liệu cũ.",
+                    len(existing_uris),
+                    ", ".join(existing_uris[:3])
+                )
+    except Exception as e:
+        logger.debug("Bỏ qua pre-check duplicate source_uri: %s", e)
+
     logger.info("Generating embeddings for %d chunks using %s...", len(articles), DEFAULT_EMBEDDING_MODEL)
     texts_to_embed = [f"{a['title']}\n{a['category']}\n{a['content']}" for a in articles]
     embeddings = generate_batch_embeddings(texts_to_embed, model_name=DEFAULT_EMBEDDING_MODEL)
@@ -269,8 +338,8 @@ def ingest_articles_to_bigquery(
     for a, emb in zip(articles, embeddings):
         a["embedding"] = emb
 
-    # Prepare rows for BigQuery streaming / MERGE
-    logger.info("Upserting %d articles into BigQuery %s...", len(articles), full_table)
+    # Prepare rows for BigQuery streaming insert
+    logger.info("Appending %d articles (streaming insert — không idempotent, xem roadmap MERGE) into BigQuery %s...", len(articles), full_table)
     
     errors = bq_client.insert_rows_json(
         f"{project_id}.{dataset_id}.{table_name}",
@@ -281,6 +350,16 @@ def ingest_articles_to_bigquery(
         raise RuntimeError(f"BigQuery insertion failed: {errors}")
 
     logger.info("Successfully ingested %d articles into BigQuery.", len(articles))
+
+    # Clean up orphaned chunks when documents shrink
+    source_uri_to_ids: dict[str, list[str]] = {}
+    for a in articles:
+        uri = a.get("source_uri")
+        if uri:
+            source_uri_to_ids.setdefault(uri, []).append(a["id"])
+
+    for uri, chunk_ids in source_uri_to_ids.items():
+        cleanup_orphaned_chunks(bq_client, project_id, dataset_id, table_name, uri, chunk_ids)
 
     # Automatically ensure Vector Index DDL
     ensure_vector_index(bq_client, project_id, dataset_id, table_name)
