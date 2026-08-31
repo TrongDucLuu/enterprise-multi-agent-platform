@@ -694,7 +694,8 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
 
         search_results = []
         for score, article in results[:limit]:
-            snippet = article.content[:200].strip() + "..."
+            raw_snippet = article.content[:200].strip() + "..."
+            snippet = f'<retrieved_document id="{article.id}" system="{article.system}" title="{article.title}">\n{raw_snippet}\n</retrieved_document>'
             relevance = min(1.0, score / 6.0)
             sec_hier = article.section_hierarchy
             context_path = sec_hier.format_path() if sec_hier else f"{article.system} > {article.category} > {article.title}"
@@ -933,10 +934,16 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                         return val
                     return False
 
+                art_id = _extract_str(row.id) or str(row.id)
+                art_sys = _extract_str(row.system) or str(row.system)
+                art_title = _extract_str(row.title) or str(row.title)
+                raw_snippet = content_str[:200].strip() + "..."
+                snippet = f'<retrieved_document id="{art_id}" system="{art_sys}" title="{art_title}">\n{raw_snippet}\n</retrieved_document>'
+
                 results.append(SearchResult(
-                    article_id=_extract_str(row.id) or str(row.id),
-                    system=_extract_str(row.system) or str(row.system),
-                    title=_extract_str(row.title) or str(row.title),
+                    article_id=art_id,
+                    system=art_sys,
+                    title=art_title,
                     snippet=snippet,
                     relevance_score=relevance,
                     section_hierarchy=sec_hier,

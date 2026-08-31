@@ -189,7 +189,10 @@ def get_system_manual(article_id: str) -> dict:
             "system": article.system,
         }
 
-    return {"status": "success", "article": article.model_dump()}
+    art_dict = article.model_dump()
+    raw_content = art_dict.get("content", "")
+    art_dict["content"] = f'<retrieved_document id="{article.id}" system="{article.system}" title="{article.title}">\n{raw_content}\n</retrieved_document>'
+    return {"status": "success", "article": art_dict}
 
 
 @mcp.tool()

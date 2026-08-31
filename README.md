@@ -19,7 +19,7 @@ Hệ thống **IT Helpdesk Multi-Agent AI** thông minh, phân cấp 3 mức đ�
                                                  │
                                                  ▼
                                   ┌─────────────────────────────┐
-                                  │    Semantic Cache Layer     │ ──[ HIT (Sim >= 0.92) ]──► [ Trả lời tức thì < 50ms ]
+                                  │    Semantic Cache Layer     │ ──[ HIT (Sim >= 0.92) ]──► [ Trả lời tức thì ]
                                   │    (Vector Cosine Match)    │                             (Tiết kiệm 100% Token)
                                   └──────────────┬──────────────┘
                                                  │ [ MISS ]
@@ -128,7 +128,7 @@ Khác với các PoC demo LLM thông thường, hệ thống này được xây 
 
 ### 2. Kiểm Soát Chi Phí Tối Ưu Cho Vertex AI (Cost Governance)
 - **Định Tuyến Phân Tầng 3-Tier:** Hơn $70\%$ lưu lượng Helpdesk hàng ngày (FAQ, tra cứu chính sách, mở khóa tài khoản) được xử lý nhanh bởi **Gemini 3 Flash** hoặc trả lời trực tiếp mà không cần kích hoạt **Gemini 3 Pro**.
-- **Bộ Nhớ Đệm Ngữ Nghĩa Cụm (Distributed Semantic Cache):** Tích hợp Redis Memorystore trên VPC private egress, so khớp ngữ nghĩa Cosine Similarity ($\ge 0.92$), phản hồi $< 10\text{ms}$ và **tiết kiệm $100\%$ chi phí token** cho các câu hỏi trùng lặp.
+- **Bộ Nhớ Đệm Ngữ Nghĩa Cụm (Distributed Semantic Cache):** Tích hợp Redis Memorystore trên VPC private egress, so khớp ngữ nghĩa Cosine Similarity ($\ge 0.92$), phản hồi ở mức mili-giây (xem số liệu benchmark thực tế tại [Mục 2.A](#a-redis-vector-semantic-cache-semantic_cachepy)) và **tiết kiệm $100\%$ chi phí token** cho các câu hỏi trùng lặp.
 - **Kiểm Soát Quota Mức 3 (L3 Rate Limiter with Soft Warning):** Giới hạn tần suất gọi mô hình chuyên sâu L3 theo từng người dùng (Sliding Window), tự động gửi thông báo cảnh báo mềm khi người dùng chạm ngưỡng $\ge 80\%$ quota trong chu kỳ.
 
 ### 3. Khả Năng Tự Phục Hồi & Giảm Tải Mềm (Graceful Degradation)
@@ -210,7 +210,7 @@ uv run python scripts/eval_harness.py
 ```bash
 uv run python scripts/benchmark_semantic_cache.py
 ```
-*(Đo lường trên 1.000 entry vector: InMemory p50=7.19ms, Redis Candidate Scan p50=21.19ms — nhanh gấp 57x–167x so với LLM)*
+*(Đo lường trên 1.000 entry vector: xem số liệu benchmark chi tiết tại [Mục 2.A](#a-redis-vector-semantic-cache-semantic_cachepy) — nhanh gấp 50x–100x+ so với LLM)*
 
 ### Bước 5: Chạy Tải Giả Lập CCU (Locust Benchmark)
 ```bash
