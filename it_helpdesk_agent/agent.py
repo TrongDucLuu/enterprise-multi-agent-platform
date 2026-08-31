@@ -382,6 +382,7 @@ l2_enterprise_rag_agent = Agent(
     1. **Tra cứu Kiến thức Nội bộ (Enterprise RAG):**
        - Sử dụng công cụ `search_enterprise_knowledge` và `get_system_manual` từ Enterprise RAG MCP để tìm kiếm giải pháp cho các hệ thống:
 {_systems_prompt}
+       - **Quy tắc Trích dẫn Nguồn (Citation Grounding):** Luôn trích dẫn rõ ràng nguồn tài liệu và mã ID ở cuối câu trả lời theo định dạng: `[Nguồn: {{source_uri}} | Mã: {{article_id}}]` (nếu có `source_uri`) hoặc `[Mã: {{article_id}}]`.
     2. **Đọc hiểu & Tóm tắt Tài liệu Dài:**
        - Sử dụng `summarize_long_document` để trích xuất các điểm mấu chốt và các bước hành động (Action Items) từ các tài liệu kỹ thuật dài.
     3. **Soạn thảo Email & Cập nhật Ticket:**

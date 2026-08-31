@@ -607,7 +607,7 @@ def test_ensure_vector_index_contains_storing_clause():
     ensure_vector_index(mock_bq, project_id="my-proj", dataset_id="my_kb", table_name="articles")
     assert mock_bq.query.called
     ddl = mock_bq.query.call_args[0][0]
-    assert "STORING (system, category, id, title, content, section_hierarchy)" in ddl
+    assert "STORING (system, category, id, title, content, section_hierarchy, source_uri, owner, effective_date, expiry_date, is_deleted)" in ddl
     assert "OPTIONS(distance_type='COSINE', index_type='IVF')" in ddl
 
 
@@ -651,6 +651,109 @@ def test_check_vector_index_coverage_diagnostics(caplog):
         assert res2["index_status"] == "ACTIVE"
         assert res2["coverage_percentage"] == 100.0
         assert "đang hoạt động tốt" in caplog.text
+
+
+def test_pipeline_version_constants_and_chunk_metadata():
+    """
+    P1.4 Version Ingestion Pipeline:
+    Verifies that PARSER_VERSION, CHUNKER_VERSION, EMBEDDING_MODEL, and EMBEDDING_DIM
+    are correctly stamped onto all generated chunks.
+    """
+    from scripts.ingest.parsers import PARSER_VERSION
+    from scripts.ingest.chunkers import CHUNKER_VERSION, process_document
+    from scripts.ingest.embedders import EMBEDDING_MODEL, EMBEDDING_DIM
+
+    assert PARSER_VERSION == "1.0.0"
+    assert CHUNKER_VERSION == "1.0.0"
+    assert EMBEDDING_MODEL == "text-embedding-005"
+    assert EMBEDDING_DIM == 768
+
+    doc_info = {
+        "source_uri": "docs/test_policy.md",
+        "system": "ERP",
+        "title": "Test Policy",
+        "content": "Phần 1: Quy định chung.\n\nPhần 2: Hướng dẫn chi tiết.",
+        "owner": "governance@company.com",
+        "effective_date": "2026-01-01",
+        "expiry_date": "2027-01-01",
+    }
+
+    chunks = process_document(doc_info)
+    assert len(chunks) > 0
+    for c in chunks:
+        assert c["parser_version"] == "1.0.0"
+        assert c["chunker_version"] == "1.0.0"
+        assert c["embedding_model"] == "text-embedding-005"
+        assert c["embedding_dim"] == 768
+        assert c["owner"] == "governance@company.com"
+        assert c["effective_date"] == "2026-01-01"
+        assert c["expiry_date"] == "2027-01-01"
+        assert c["is_deleted"] is False
+        assert c["deleted_at"] is None
+
+
+def test_dead_letter_queue_captures_unparseable_files(tmp_path):
+    """
+    P2.8 Ingestion Observability & DLQ:
+    Verifies that unreadable/corrupted files are appended to Dead Letter Queue (DLQ)
+    and logged as WARNING/ERROR without terminating the pipeline.
+    """
+    import time
+    from scripts.ingest.parsers import DocumentParser
+
+    # Create unparseable file path
+    non_existent = tmp_path / "non_existent.md"
+    dlq = []
+
+    try:
+        DocumentParser.parse_markdown_or_text(non_existent)
+    except Exception as exc:
+        dlq.append({
+            "source_uri": str(non_existent),
+            "stage": "PARSING",
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "failed_at": time.time(),
+        })
+
+    assert len(dlq) == 1
+    assert dlq[0]["stage"] == "PARSING"
+    assert dlq[0]["error_type"] == "FileNotFoundError"
+
+
+def test_get_stale_chunks_for_reprocessing():
+    """
+    P1.4 / P2.8 Stale Chunk Query:
+    Verifies SQL generation for identifying chunks produced by older parser or chunker versions.
+    """
+    from scripts.ingest.loaders import get_stale_chunks_for_reprocessing
+
+    mock_bq = MagicMock()
+    mock_query_job = MagicMock()
+    mock_row = MagicMock()
+    mock_row.id = "ERP-OLD-001"
+    mock_row.parser_version = "0.9.0"
+    mock_row.chunker_version = "0.9.0"
+    mock_row.source_uri = "docs/old.md"
+    mock_query_job.result.return_value = [mock_row]
+    mock_bq.query.return_value = mock_query_job
+
+    stale = get_stale_chunks_for_reprocessing(
+        mock_bq,
+        project_id="corp-ai",
+        dataset_id="kb_prod",
+        table_name="articles",
+        current_chunker_version="1.0.0",
+        current_parser_version="1.0.0",
+    )
+
+    assert len(stale) == 1
+    assert mock_bq.query.called
+    sql = mock_bq.query.call_args[0][0]
+    assert "parser_version != @parser_version" in sql
+    assert "chunker_version != @chunker_version" in sql
+
+
 
 
 

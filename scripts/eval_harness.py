@@ -42,6 +42,7 @@ EVAL_DATASET = [
         "expected_intent": "PASSWORD_POLICY",
         "expected_system": "ALL",
         "ground_truth_keywords": ["12 ký tự", "đặc biệt", "chữ hoa", "mật khẩu"],
+        "expected_source_ids": [],
         "is_unanswerable": False,
     },
     {
@@ -52,6 +53,7 @@ EVAL_DATASET = [
         "expected_intent": "WIFI_SETUP",
         "expected_system": "ALL",
         "ground_truth_keywords": ["Enterprise-Secure", "WPA3", "chứng chỉ", "SSO"],
+        "expected_source_ids": [],
         "is_unanswerable": False,
     },
     {
@@ -62,6 +64,7 @@ EVAL_DATASET = [
         "expected_intent": "UNLOCK_ACCOUNT",
         "expected_system": "ALL",
         "ground_truth_keywords": ["Active Directory", "mở khóa", "tự phục vụ", "SSO"],
+        "expected_source_ids": [],
         "is_unanswerable": False,
     },
 
@@ -74,6 +77,7 @@ EVAL_DATASET = [
         "expected_intent": "PO_CREATION",
         "expected_system": "ERP",
         "ground_truth_keywords": ["ME21N", "Purchase Order", "M_BEST_EKO", "phân quyền"],
+        "expected_source_ids": ["ERP-KB-001"],
         "is_unanswerable": False,
     },
     {
@@ -84,6 +88,7 @@ EVAL_DATASET = [
         "expected_intent": "FISCAL_PERIOD_UNLOCK",
         "expected_system": "ERP",
         "ground_truth_keywords": ["kỳ kế toán", "OB52", "khóa", "Kế toán trưởng"],
+        "expected_source_ids": ["ERP-KB-002"],
         "is_unanswerable": False,
     },
     {
@@ -94,6 +99,7 @@ EVAL_DATASET = [
         "expected_intent": "TIMESHEET_SYNC",
         "expected_system": "HRM",
         "ground_truth_keywords": ["chấm công", "Workday", "vân tay", "Payroll Locked", "đồng bộ"],
+        "expected_source_ids": ["HRM-KB-101"],
         "is_unanswerable": False,
     },
     {
@@ -104,6 +110,7 @@ EVAL_DATASET = [
         "expected_intent": "HR_ONBOARDING",
         "expected_system": "HRM",
         "ground_truth_keywords": ["Active Directory", "onboarding", "nhân sự", "tài khoản", "email"],
+        "expected_source_ids": ["HRM-KB-102"],
         "is_unanswerable": False,
     },
     {
@@ -114,6 +121,7 @@ EVAL_DATASET = [
         "expected_intent": "LEAD_SYNC_ERROR",
         "expected_system": "CRM",
         "ground_truth_keywords": ["Salesforce", "Lead", "đồng bộ", "API", "Webhook"],
+        "expected_source_ids": ["CRM-KB-201"],
         "is_unanswerable": False,
     },
     {
@@ -124,6 +132,7 @@ EVAL_DATASET = [
         "expected_intent": "API_LIMIT_REACHED",
         "expected_system": "CRM",
         "ground_truth_keywords": ["HubSpot", "API Limits", "Daily Limit", "OAuth", "CRM"],
+        "expected_source_ids": ["CRM-KB-201"],
         "is_unanswerable": False,
     },
 
@@ -136,6 +145,7 @@ EVAL_DATASET = [
         "expected_intent": "RCA_NULL_POINTER",
         "expected_system": "ALL",
         "ground_truth_keywords": ["Root Cause", "NullPointerException", "connection pool", "workaround"],
+        "expected_source_ids": [],
         "is_unanswerable": False,
     },
     {
@@ -146,6 +156,7 @@ EVAL_DATASET = [
         "expected_intent": "SLA_COMPLIANCE_REVIEW",
         "expected_system": "ALL",
         "ground_truth_keywords": ["99.9%", "Service Credits", "SLA", "bồi thường"],
+        "expected_source_ids": [],
         "is_unanswerable": False,
     },
 
@@ -158,6 +169,7 @@ EVAL_DATASET = [
         "expected_intent": "REFUSAL_OUT_OF_SCOPE",
         "expected_system": "NONE",
         "ground_truth_keywords": ["không tìm thấy", "ngoài phạm vi", "chỉ hỗ trợ IT"],
+        "expected_source_ids": [],
         "is_unanswerable": True,
     },
     {
@@ -168,6 +180,7 @@ EVAL_DATASET = [
         "expected_intent": "REFUSAL_OUT_OF_SCOPE",
         "expected_system": "NONE",
         "ground_truth_keywords": ["ngoài phạm vi", "hành chính", "không tìm thấy"],
+        "expected_source_ids": [],
         "is_unanswerable": True,
     },
     {
@@ -178,6 +191,7 @@ EVAL_DATASET = [
         "expected_intent": "REFUSAL_NOT_IN_KB",
         "expected_system": "NONE",
         "ground_truth_keywords": ["không có thông tin", "không tìm thấy", "liên hệ HR"],
+        "expected_source_ids": [],
         "is_unanswerable": True,
     },
     {
@@ -188,6 +202,7 @@ EVAL_DATASET = [
         "expected_intent": "REFUSAL_SECURITY_VIOLATION",
         "expected_system": "NONE",
         "ground_truth_keywords": ["từ chối", "không thể hỗ trợ", "vi phạm chính sách"],
+        "expected_source_ids": [],
         "is_unanswerable": True,
     },
     {
@@ -198,6 +213,7 @@ EVAL_DATASET = [
         "expected_intent": "REFUSAL_NOT_IN_KB",
         "expected_system": "NONE",
         "ground_truth_keywords": ["không tồn tại", "không có thông tin", "không tìm thấy"],
+        "expected_source_ids": [],
         "is_unanswerable": True,
     },
 ]
@@ -326,6 +342,34 @@ def evaluate_l2_groundedness(test_case: Dict[str, Any], store: KnowledgeStore) -
     }
 
 
+def evaluate_retrieval_precision_at_k(test_case: Dict[str, Any], store: KnowledgeStore, k: int = 3) -> Dict[str, Any]:
+    """
+    Evaluates Retrieval Precision@k.
+    Verifies that the retrieved chunks include the expected ground truth article IDs.
+    """
+    expected_ids = test_case.get("expected_source_ids", [])
+    if not expected_ids:
+        return {"applicable": False}
+
+    system = test_case["expected_system"] if test_case.get("expected_system") not in ("ALL", "NONE") else None
+    results = store.search(query=test_case["query"], system=system, limit=k)
+
+    retrieved_ids = [getattr(r, "article_id", None) for r in results]
+    matched_ids = [aid for aid in expected_ids if aid in retrieved_ids]
+    hit = len(matched_ids) > 0
+    precision = len(matched_ids) / len(results) if results else 0.0
+
+    return {
+        "applicable": True,
+        "hit": hit,
+        "precision_at_k": round(precision, 3),
+        "expected_ids": expected_ids,
+        "retrieved_ids": retrieved_ids,
+        "matched_ids": matched_ids,
+        "sources": [getattr(r, "source_uri", None) for r in results],
+    }
+
+
 def evaluate_trap_refusal(test_case: Dict[str, Any], store: KnowledgeStore) -> Dict[str, Any]:
     """
     Evaluates Unanswerable / Trap queries against the system's triage and refusal engine.
@@ -376,6 +420,9 @@ def run_eval_suite() -> Tuple[Dict[str, Any], bool]:
     l2_score_sum = 0.0
     trap_total = 0
     trap_refused = 0
+    retrieval_total = 0
+    retrieval_hits = 0
+    retrieval_precision_sum = 0.0
 
     detailed_results = []
 
@@ -405,12 +452,21 @@ def run_eval_suite() -> Tuple[Dict[str, Any], bool]:
             if trap_res["refused_correctly"]:
                 trap_refused += 1
 
+        # 4. Retrieval Precision Check
+        retrieval_res = evaluate_retrieval_precision_at_k(case, store, k=3)
+        if retrieval_res.get("applicable"):
+            retrieval_total += 1
+            if retrieval_res["hit"]:
+                retrieval_hits += 1
+            retrieval_precision_sum += retrieval_res["precision_at_k"]
+
         detailed_results.append({
             "id": cid,
             "tier": tier,
             "query": query,
             "intent_pass": is_intent_ok,
             "groundedness": groundedness_res if groundedness_res.get("applicable") else None,
+            "retrieval_precision": retrieval_res if retrieval_res.get("applicable") else None,
             "trap_refusal": trap_res if trap_res.get("applicable") else None,
         })
 
@@ -419,16 +475,19 @@ def run_eval_suite() -> Tuple[Dict[str, Any], bool]:
     l2_groundedness_pct = round((l2_grounded / l2_total) * 100, 2) if l2_total > 0 else 100.0
     l2_avg_score = round(l2_score_sum / l2_total, 3) if l2_total > 0 else 1.0
     trap_refusal_pct = round((trap_refused / trap_total) * 100, 2) if trap_total > 0 else 100.0
+    retrieval_precision_pct = round((retrieval_hits / retrieval_total) * 100, 2) if retrieval_total > 0 else 100.0
 
     # Production-Ready Quality Gates
     GATE_INTENT_ACC = 85.0
     GATE_GROUNDEDNESS = 80.0
     GATE_REFUSAL = 90.0
+    GATE_RETRIEVAL_PRECISION = 80.0
 
     all_passed = (
         intent_acc_pct >= GATE_INTENT_ACC
         and l2_groundedness_pct >= GATE_GROUNDEDNESS
         and trap_refusal_pct >= GATE_REFUSAL
+        and retrieval_precision_pct >= GATE_RETRIEVAL_PRECISION
     )
 
     summary = {
@@ -440,12 +499,15 @@ def run_eval_suite() -> Tuple[Dict[str, Any], bool]:
             "l2_groundedness_rate_percent": l2_groundedness_pct,
             "l2_avg_faithfulness_score": l2_avg_score,
             "l2_grounded_count": f"{l2_grounded}/{l2_total}",
+            "retrieval_precision_at_k_percent": retrieval_precision_pct,
+            "retrieval_precision_count": f"{retrieval_hits}/{retrieval_total}",
             "unanswerable_refusal_rate_percent": trap_refusal_pct,
             "trap_refusal_count": f"{trap_refused}/{trap_total}",
         },
         "quality_gates": {
             "intent_accuracy_target": f">={GATE_INTENT_ACC}%",
             "groundedness_target": f">={GATE_GROUNDEDNESS}%",
+            "retrieval_precision_target": f">={GATE_RETRIEVAL_PRECISION}%",
             "refusal_rate_target": f">={GATE_REFUSAL}%",
             "overall_status": "PASSED" if all_passed else "FAILED",
         },
@@ -472,6 +534,7 @@ def print_markdown_report(summary: Dict[str, Any]) -> None:
     print(f"| Intent & Routing Accuracy | **{m['intent_accuracy_percent']}%** ({m['intent_pass_count']}) | {q['intent_accuracy_target']} | {'✅ PASS' if m['intent_accuracy_percent'] >= 85 else '❌ FAIL'} |")
     print(f"| L2 RAG Groundedness Rate | **{m['l2_groundedness_rate_percent']}%** ({m['l2_grounded_count']}) | {q['groundedness_target']} | {'✅ PASS' if m['l2_groundedness_rate_percent'] >= 80 else '❌ FAIL'} |")
     print(f"| L2 Average Faithfulness Score | **{m['l2_avg_faithfulness_score']}** / 1.0 | N/A | ℹ️ INFO |")
+    print(f"| Retrieval Precision@k | **{m['retrieval_precision_at_k_percent']}%** ({m['retrieval_precision_count']}) | {q['retrieval_precision_target']} | {'✅ PASS' if m['retrieval_precision_at_k_percent'] >= 80 else '❌ FAIL'} |")
     print(f"| Trap Question Refusal Rate | **{m['unanswerable_refusal_rate_percent']}%** ({m['trap_refusal_count']}) | {q['refusal_rate_target']} | {'✅ PASS' if m['unanswerable_refusal_rate_percent'] >= 90 else '❌ FAIL'} |")
     print("-" * 80 + "\n")
 

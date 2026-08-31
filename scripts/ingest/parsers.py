@@ -12,6 +12,8 @@ from typing import Optional, Any
 
 from it_helpdesk_agent.app_utils.system_config import get_document_processing_config
 
+PARSER_VERSION = "1.0.0"
+
 logger = logging.getLogger("ingest.parsers")
 
 
@@ -24,6 +26,30 @@ class DocumentParser:
             content = f.read()
 
         title = file_path.stem.replace("_", " ").title()
+        owner: Optional[str] = None
+        effective_date: Optional[str] = None
+        expiry_date: Optional[str] = None
+
+        # Check for optional YAML frontmatter
+        if content.startswith("---"):
+            fm_match = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)$", content, re.DOTALL)
+            if fm_match:
+                fm_text = fm_match.group(1)
+                content = fm_match.group(2)
+                for line in fm_text.splitlines():
+                    if ":" in line:
+                        k, v = line.split(":", 1)
+                        k_clean = k.strip().lower()
+                        v_clean = v.strip().strip("'\"")
+                        if k_clean == "title" and v_clean:
+                            title = v_clean
+                        elif k_clean == "owner" and v_clean:
+                            owner = v_clean
+                        elif k_clean == "effective_date" and v_clean:
+                            effective_date = v_clean
+                        elif k_clean == "expiry_date" and v_clean:
+                            expiry_date = v_clean
+
         heading_pattern = re.compile(r"^(#{1,3})\s+(.+)$")
 
         sections: list[dict[str, Any]] = []
@@ -87,6 +113,9 @@ class DocumentParser:
             "source_uri": str(file_path),
             "file_type": file_path.suffix.lower(),
             "sections": sections,
+            "owner": owner,
+            "effective_date": effective_date,
+            "expiry_date": expiry_date,
         }]
 
     @staticmethod
@@ -381,6 +410,9 @@ class DocumentParser:
                         "source_uri": source_uri,
                         "file_type": ".jsonl",
                         "sections": [],
+                        "owner": data.get("owner"),
+                        "effective_date": data.get("effective_date"),
+                        "expiry_date": data.get("expiry_date"),
                     })
                 except json.JSONDecodeError as e:
                     logger.warning("Invalid JSON at line %d in %s: %s", line_no, file_path, e)

@@ -33,7 +33,7 @@ def ensure_vector_index(
     ddl = f"""
     CREATE VECTOR INDEX IF NOT EXISTS `{index_name}`
     ON `{project_id}.{dataset_id}.{table_name}`(embedding)
-    STORING (system, category, id, title, content, section_hierarchy)
+    STORING (system, category, id, title, content, section_hierarchy, source_uri, owner, effective_date, expiry_date, is_deleted)
     OPTIONS(distance_type='COSINE', index_type='IVF')
     """
     try:
@@ -240,6 +240,15 @@ def ingest_articles_to_bigquery(
         bigquery.SchemaField("keywords", "STRING", mode="REPEATED"),
         bigquery.SchemaField("embedding", "FLOAT64", mode="REPEATED"),
         bigquery.SchemaField("source_uri", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("owner", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("effective_date", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("expiry_date", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("is_deleted", "BOOLEAN", mode="NULLABLE"),
+        bigquery.SchemaField("deleted_at", "TIMESTAMP", mode="NULLABLE"),
+        bigquery.SchemaField("parser_version", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("chunker_version", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("embedding_model", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("embedding_dim", "INTEGER", mode="NULLABLE"),
         bigquery.SchemaField("content_hash", "STRING", mode="NULLABLE"),
         bigquery.SchemaField(
             "section_hierarchy",
@@ -286,12 +295,31 @@ def ingest_articles_to_bigquery(
             T.keywords = S.keywords,
             T.embedding = S.embedding,
             T.source_uri = S.source_uri,
+            T.owner = S.owner,
+            T.effective_date = S.effective_date,
+            T.expiry_date = S.expiry_date,
+            T.is_deleted = S.is_deleted,
+            T.deleted_at = S.deleted_at,
+            T.parser_version = S.parser_version,
+            T.chunker_version = S.chunker_version,
+            T.embedding_model = S.embedding_model,
+            T.embedding_dim = S.embedding_dim,
             T.content_hash = S.content_hash,
             T.section_hierarchy = S.section_hierarchy,
             T.updated_at = S.updated_at
         WHEN NOT MATCHED THEN
-          INSERT (id, system, title, category, content, keywords, embedding, source_uri, content_hash, section_hierarchy, updated_at)
-          VALUES (S.id, S.system, S.title, S.category, S.content, S.keywords, S.embedding, S.source_uri, S.content_hash, S.section_hierarchy, S.updated_at);
+          INSERT (
+            id, system, title, category, content, keywords, embedding, source_uri,
+            owner, effective_date, expiry_date, is_deleted, deleted_at,
+            parser_version, chunker_version, embedding_model, embedding_dim,
+            content_hash, section_hierarchy, updated_at
+          )
+          VALUES (
+            S.id, S.system, S.title, S.category, S.content, S.keywords, S.embedding, S.source_uri,
+            S.owner, S.effective_date, S.expiry_date, S.is_deleted, S.deleted_at,
+            S.parser_version, S.chunker_version, S.embedding_model, S.embedding_dim,
+            S.content_hash, S.section_hierarchy, S.updated_at
+          );
         """
         logger.info("Executing Atomic MERGE into %s...", full_target_table)
         merge_job = bq_client.query(merge_sql)
@@ -331,6 +359,133 @@ def ingest_articles_to_bigquery(
     check_vector_index_coverage(bq_client, project_id, dataset_id, table_name)
 
     return len(articles)
+
+
+def reconcile_deleted_documents(
+    bq_client: Any,
+    project_id: str,
+    dataset_id: str,
+    table_name: str = "knowledge_articles",
+    active_source_uris: Optional[list[str]] = None
+) -> int:
+    """
+    Reconciliation Step: Soft-deletes (tombstones) documents that exist in BigQuery but are no longer present
+    in the source directory/bucket.
+    Ensures compliance by preventing removed SOPs/manuals from being cited by the agent.
+    """
+    if active_source_uris is None:
+        logger.info("No active source URIs provided for reconciliation; skipping.")
+        return 0
+
+    full_target_table = f"`{project_id}.{dataset_id}.{table_name}`"
+    from google.cloud import bigquery
+
+    if not active_source_uris:
+        # If active_source_uris is empty list, tombstone all currently active documents
+        tombstone_sql = f"""
+        UPDATE {full_target_table}
+        SET is_deleted = TRUE, deleted_at = CURRENT_TIMESTAMP()
+        WHERE (is_deleted IS NOT TRUE OR is_deleted = FALSE)
+        """
+        job_config = bigquery.QueryJobConfig()
+    else:
+        tombstone_sql = f"""
+        UPDATE {full_target_table}
+        SET is_deleted = TRUE, deleted_at = CURRENT_TIMESTAMP()
+        WHERE (is_deleted IS NOT TRUE OR is_deleted = FALSE)
+          AND source_uri NOT IN UNNEST(@active_source_uris)
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ArrayQueryParameter("active_source_uris", "STRING", active_source_uris)
+            ]
+        )
+
+    try:
+        logger.info("Reconciling deleted documents against %d active source URIs...", len(active_source_uris))
+        job = bq_client.query(tombstone_sql, job_config=job_config)
+        job.result()
+        affected = getattr(job, "num_dml_affected_rows", 0) or 0
+        if affected > 0:
+            logger.warning("Tombstoned %d chunks corresponding to deleted source documents.", affected)
+        else:
+            logger.info("Reconciliation complete: 0 documents required tombstoning.")
+        return int(affected)
+    except Exception as e:
+        logger.error("Failed to reconcile deleted documents: %s", e)
+        raise
+
+
+def purge_tombstoned_chunks(
+    bq_client: Any,
+    project_id: str,
+    dataset_id: str,
+    table_name: str = "knowledge_articles",
+    older_than_days: int = 30
+) -> int:
+    """
+    Hard-deletes tombstoned chunks that have been soft-deleted for longer than older_than_days.
+    Executed on a scheduled maintenance cycle.
+    """
+    full_target_table = f"`{project_id}.{dataset_id}.{table_name}`"
+    from google.cloud import bigquery
+
+    purge_sql = f"""
+    DELETE FROM {full_target_table}
+    WHERE is_deleted = TRUE
+      AND deleted_at < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @older_than_days DAY)
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("older_than_days", "INT64", older_than_days)
+        ]
+    )
+    try:
+        logger.info("Purging tombstoned chunks older than %d days...", older_than_days)
+        job = bq_client.query(purge_sql, job_config=job_config)
+        job.result()
+        affected = getattr(job, "num_dml_affected_rows", 0) or 0
+        logger.info("Hard purged %d expired tombstone chunks.", affected)
+        return int(affected)
+    except Exception as e:
+        logger.error("Failed to purge tombstoned chunks: %s", e)
+        raise
+
+
+def get_stale_chunks_for_reprocessing(
+    bq_client: Any,
+    project_id: str,
+    dataset_id: str,
+    table_name: str = "knowledge_articles",
+    current_chunker_version: str = "1.0.0",
+    current_parser_version: str = "1.0.0"
+) -> list[dict[str, Any]]:
+    """
+    Identifies chunks that were produced with older parser or chunker versions for replay ingestion.
+    """
+    full_target_table = f"`{project_id}.{dataset_id}.{table_name}`"
+    from google.cloud import bigquery
+
+    stale_sql = f"""
+    SELECT id, source_uri, parser_version, chunker_version, embedding_model, embedding_dim
+    FROM {full_target_table}
+    WHERE (parser_version != @parser_version OR parser_version IS NULL)
+       OR (chunker_version != @chunker_version OR chunker_version IS NULL)
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("parser_version", "STRING", current_parser_version),
+            bigquery.ScalarQueryParameter("chunker_version", "STRING", current_chunker_version),
+        ]
+    )
+    try:
+        rows = list(bq_client.query(stale_sql, job_config=job_config).result())
+        stale_list = [dict(r) for r in rows]
+        logger.info("Found %d stale chunks requiring reprocessing.", len(stale_list))
+        return stale_list
+    except Exception as e:
+        logger.warning("Could not query stale chunks: %s", e)
+        return []
 
 
 def run_test_query(

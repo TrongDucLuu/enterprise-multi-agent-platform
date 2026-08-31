@@ -13,6 +13,10 @@ from it_helpdesk_agent.app_utils.system_config import (
     get_valid_system_filters,
     get_chunking_config,
 )
+from scripts.ingest.parsers import PARSER_VERSION
+from scripts.ingest.embedders import EMBEDDING_MODEL, EMBEDDING_DIM
+
+CHUNKER_VERSION = "1.0.0"
 
 logger = logging.getLogger("ingest.chunkers")
 
@@ -214,6 +218,9 @@ def process_document(
     category = doc_info.get("category", "Operations")
     content = doc_info.get("content", "")
     source_uri = doc_info.get("source_uri", "")
+    owner = doc_info.get("owner")
+    effective_date = doc_info.get("effective_date")
+    expiry_date = doc_info.get("expiry_date")
     raw_keywords = doc_info.get("keywords", [])
     sections = doc_info.get("sections", [])
 
@@ -278,6 +285,15 @@ def process_document(
             "content": chunk,
             "keywords": keywords,
             "source_uri": source_uri,
+            "owner": owner,
+            "effective_date": effective_date,
+            "expiry_date": expiry_date,
+            "is_deleted": False,
+            "deleted_at": None,
+            "parser_version": PARSER_VERSION,
+            "chunker_version": CHUNKER_VERSION,
+            "embedding_model": EMBEDDING_MODEL,
+            "embedding_dim": EMBEDDING_DIM,
             "content_hash": content_hash,
             "section_hierarchy": section_hierarchy,
             "updated_at": datetime.now(timezone.utc).isoformat(),

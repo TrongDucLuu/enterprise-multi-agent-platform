@@ -30,6 +30,12 @@ class KnowledgeArticle(BaseModel):
     content: str
     keywords: list[str] = Field(default_factory=list)
     section_hierarchy: Optional[SectionHierarchy] = None
+    source_uri: Optional[str] = None
+    owner: Optional[str] = None
+    effective_date: Optional[str] = None
+    expiry_date: Optional[str] = None
+    is_deleted: bool = False
+    deleted_at: Optional[str] = None
 
     @field_validator("system")
     @classmethod
@@ -49,6 +55,13 @@ class SearchResult(BaseModel):
     relevance_score: float
     section_hierarchy: Optional[SectionHierarchy] = None
     context_path: Optional[str] = None
+    source_uri: Optional[str] = None
+    category: Optional[str] = None
+    keywords: list[str] = Field(default_factory=list)
+    owner: Optional[str] = None
+    effective_date: Optional[str] = None
+    expiry_date: Optional[str] = None
+    is_deleted: bool = False
 
     @field_validator("system")
     @classmethod
