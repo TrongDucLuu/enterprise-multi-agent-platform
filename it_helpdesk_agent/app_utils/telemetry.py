@@ -23,8 +23,35 @@ logger = logging.getLogger("it_helpdesk_telemetry")
 _METRICS_BUFFER: deque = deque(maxlen=1000)
 
 
+import hashlib
+
+# Configuration for sensitive/regulated environments (Banking, Pharma, Healthcare)
+TELEMETRY_ANONYMIZE_USERS = os.getenv("TELEMETRY_ANONYMIZE_USERS", "false").lower() in ("true", "1", "yes")
+TELEMETRY_INCLUDE_QUERY = os.getenv("TELEMETRY_INCLUDE_QUERY", "true").lower() in ("true", "1", "yes")
+
+
 class ProductMetricsCollector:
     """Collects and aggregates business and operational metrics for the Helpdesk Agent."""
+
+    @staticmethod
+    def infer_system(query: str, tools_called: Optional[list[str]] = None) -> str:
+        """Infers target enterprise system (ERP, HRM, CRM) from query or tool invocation."""
+        q_upper = query.upper() if query else ""
+        if "SAP" in q_upper or "ERP" in q_upper or "ME21N" in q_upper or "PO" in q_upper:
+            return "ERP"
+        if "HRM" in q_upper or "WORKDAY" in q_upper or "PHÉP" in q_upper or "BHXH" in q_upper:
+            return "HRM"
+        if "CRM" in q_upper or "SALESFORCE" in q_upper or "LEAD" in q_upper:
+            return "CRM"
+        if tools_called:
+            for t in tools_called:
+                if "rag" in t.lower():
+                    return "ENTERPRISE_RAG"
+                if "ticket" in t.lower():
+                    return "TICKETING"
+                if "log" in t.lower():
+                    return "LOG_ANALYZER"
+        return "GENERAL"
 
     @staticmethod
     def record_interaction(
@@ -33,7 +60,7 @@ class ProductMetricsCollector:
         domain: str,
         query: str,
         tier_invoked: str,
-        system: str = "GENERAL",
+        system: Optional[str] = None,
         cache_hit: bool = False,
         latency_ms: float = 0.0,
         resolution_status: str = "RESOLVED",
@@ -41,17 +68,32 @@ class ProductMetricsCollector:
     ) -> dict[str, Any]:
         """
         Records a single conversation turn metric.
-        Logs structured JSON to Cloud Logging and buffers in memory.
+        Applies privacy hashing/redaction if configured, logs structured JSON to Cloud Logging,
+        and buffers event in memory for quick summary dashboard view.
         """
         now = datetime.now(timezone.utc).isoformat()
+
+        # Privacy protection for regulated enterprises
+        safe_user_id = (
+            f"anon_{hashlib.sha256(user_id.encode('utf-8')).hexdigest()[:12]}"
+            if TELEMETRY_ANONYMIZE_USERS and user_id
+            else user_id
+        )
+
+        safe_query_snippet = (
+            query[:100] if (TELEMETRY_INCLUDE_QUERY and query) else "[REDACTED_PRIVACY]"
+        )
+
+        detected_system = system or ProductMetricsCollector.infer_system(query, tools_called)
+
         event = {
             "timestamp": now,
             "session_id": session_id,
-            "user_id": user_id,
+            "user_id": safe_user_id,
             "domain": domain,
-            "query_snippet": query[:100] if query else "",
+            "query_snippet": safe_query_snippet,
             "tier_invoked": tier_invoked.upper(),
-            "system": system.upper(),
+            "system": detected_system.upper(),
             "cache_hit": bool(cache_hit),
             "latency_ms": round(latency_ms, 2),
             "resolution_status": resolution_status.upper(),
@@ -61,7 +103,7 @@ class ProductMetricsCollector:
         # 1. Append to rolling memory buffer
         _METRICS_BUFFER.append(event)
 
-        # 2. Structured Cloud Logging Output
+        # 2. Structured Cloud Logging Output (Source of Truth for Multi-Instance aggregation)
         try:
             logger.info("PRODUCT_METRIC: %s", json.dumps(event, ensure_ascii=False))
         except Exception:

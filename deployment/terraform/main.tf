@@ -303,6 +303,14 @@ resource "google_cloud_run_v2_service" "default" {
         name  = "REASONING_MODEL_NAME"
         value = var.reasoning_model_name
       }
+      env {
+        name  = "TELEMETRY_ANONYMIZE_USERS"
+        value = tostring(var.telemetry_anonymize_users)
+      }
+      env {
+        name  = "TELEMETRY_INCLUDE_QUERY"
+        value = tostring(var.telemetry_include_query)
+      }
 
       resources {
         limits = {

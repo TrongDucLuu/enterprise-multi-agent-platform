@@ -1,4 +1,5 @@
 import os
+import logging
 from typing import Optional
 from google.adk.agents import Agent
 from google.adk.apps import App
@@ -10,6 +11,7 @@ from it_helpdesk_agent.app_utils.env import init_environment
 from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
 from it_helpdesk_agent.app_utils.rate_limiter import check_l3_rate_limit
 from it_helpdesk_agent.app_utils.sso_auth import current_sso_user
+from it_helpdesk_agent.app_utils.telemetry import ProductMetricsCollector
 from it_helpdesk_agent.tools.mcp_config import get_enterprise_rag_mcp_toolset
 from it_helpdesk_agent.tools.ticketing_tool import (
     create_helpdesk_ticket,
@@ -110,6 +112,24 @@ async def semantic_cache_before_model_callback(
     cache = get_semantic_cache()
     cached = cache.get(query=query_text, user_id=user_id)
     if cached:
+        # Record cache hit in product metrics telemetry
+        try:
+            session_id = getattr(getattr(inv_ctx, "session", None), "id", "sess_unknown")
+            user_inst = current_sso_user.get()
+            domain = user_inst.hosted_domain or (user_inst.email.split("@")[-1] if user_inst and user_inst.email else "unknown") if user_inst else "unknown"
+            ProductMetricsCollector.record_interaction(
+                session_id=session_id,
+                user_id=user_id or "anonymous",
+                domain=domain,
+                query=query_text,
+                tier_invoked=agent_name or "L1",
+                cache_hit=True,
+                latency_ms=10.0,
+                resolution_status="RESOLVED_CACHE"
+            )
+        except Exception as e:
+            logging.getLogger("it_helpdesk_agent").debug("Failed to record cache hit telemetry: %s", e)
+
         return LlmResponse(
             content=types.Content(
                 role="model",
@@ -125,34 +145,21 @@ async def semantic_cache_after_model_callback(
     llm_response: LlmResponse
 ) -> Optional[LlmResponse]:
     """
-    Persists successful conversational text responses into Semantic Cache for subsequent queries.
+    1. Records live conversational telemetry (tier, system, latency, resolution status) to ProductMetricsCollector.
+    2. Persists successful conversational text responses into Semantic Cache for subsequent queries.
     Enforces strict Fail-Closed multi-tenant isolation: Never cache unauthenticated/missing user context.
     """
-    if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
-        return None
-
-    if not llm_response or getattr(llm_response, "error_code", None):
-        return None
-
-    if llm_response.custom_metadata and (
-        llm_response.custom_metadata.get("cached") or llm_response.custom_metadata.get("rate_limited")
-    ):
-        return None
-
-    if not llm_response.content or not getattr(llm_response.content, "parts", None):
-        return None
-
-    # Skip caching if response contains function/tool calls
-    for p in llm_response.content.parts:
-        if hasattr(p, "function_call") and p.function_call:
-            return None
-
-    response_parts = [p.text for p in llm_response.content.parts if hasattr(p, "text") and p.text]
-    response_text = " ".join(response_parts).strip()
-    if not response_text:
+    if not llm_response:
         return None
 
     inv_ctx = getattr(callback_context, "_invocation_context", None)
+    agent_name = inv_ctx.agent.name if inv_ctx and hasattr(inv_ctx, "agent") else "root"
+    session_id = getattr(getattr(inv_ctx, "session", None), "id", "sess_unknown")
+    user = current_sso_user.get()
+    user_id = user.user_id if user else "anonymous"
+    domain = user.hosted_domain or (user.email.split("@")[-1] if user and user.email else "unknown") if user else "unknown"
+
+    # Extract user question from invocation events or session
     user_query = ""
     if inv_ctx:
         events = inv_ctx._get_events(current_invocation=True) if hasattr(inv_ctx, "_get_events") else []
@@ -175,13 +182,56 @@ async def semantic_cache_after_model_callback(
                     if user_query:
                         break
 
+    # Extract tools called if any
+    tools_called = []
+    if llm_response.content and getattr(llm_response.content, "parts", None):
+        for p in llm_response.content.parts:
+            if hasattr(p, "function_call") and p.function_call and hasattr(p.function_call, "name"):
+                tools_called.append(p.function_call.name)
+
+    # 1. Always record telemetry for model interactions (unless already recorded as cache hit or rate-limited)
+    is_cached = bool(llm_response.custom_metadata and llm_response.custom_metadata.get("cached"))
+    is_rate_limited = bool(llm_response.custom_metadata and llm_response.custom_metadata.get("rate_limited"))
+
+    if not is_cached and not is_rate_limited:
+        try:
+            res_status = "INVOKED_TOOLS" if tools_called else "RESOLVED_MODEL"
+            if getattr(llm_response, "error_code", None):
+                res_status = "ERROR"
+
+            ProductMetricsCollector.record_interaction(
+                session_id=session_id,
+                user_id=user_id,
+                domain=domain,
+                query=user_query,
+                tier_invoked=agent_name,
+                cache_hit=False,
+                latency_ms=0.0,
+                resolution_status=res_status,
+                tools_called=tools_called,
+            )
+        except Exception as e:
+            logging.getLogger("it_helpdesk_agent").debug("Failed to record model interaction telemetry: %s", e)
+
+    # 2. Persist to Semantic Cache if eligible
+    if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
+        return None
+
+    if is_cached or is_rate_limited or getattr(llm_response, "error_code", None):
+        return None
+
+    if tools_called or not llm_response.content or not getattr(llm_response.content, "parts", None):
+        return None
+
+    response_parts = [p.text for p in llm_response.content.parts if hasattr(p, "text") and p.text]
+    response_text = " ".join(response_parts).strip()
+    if not response_text:
+        return None
+
     if user_query and len(user_query) >= 3:
-        user = current_sso_user.get()
         # Fail-Closed: If user context is missing (unauthenticated or lost contextvar), do NOT cache
         if not user or not user.user_id:
             return None
-
-        agent_name = inv_ctx.agent.name if inv_ctx and hasattr(inv_ctx, "agent") else "root"
 
         # Multi-tenant isolation: always store with is_public=False scoped strictly to user.user_id
         cache = get_semantic_cache()

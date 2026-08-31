@@ -154,4 +154,16 @@ variable "reasoning_model_name" {
   default     = "gemini-3-pro-preview"
 }
 
+variable "telemetry_anonymize_users" {
+  description = "Hash user IDs (SHA-256) in telemetry logs for GDPR/HIPAA/Banking compliance"
+  type        = bool
+  default     = false
+}
+
+variable "telemetry_include_query" {
+  description = "Include query snippets in telemetry logs (set to false in highly sensitive environments)"
+  type        = bool
+  default     = true
+}
+
 
