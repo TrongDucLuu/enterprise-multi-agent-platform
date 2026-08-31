@@ -19,6 +19,7 @@ dependencies = [
     "google-cloud-secret-manager>=2.26.0",
     "pydantic>=2.0.0",
     "python-docx>=1.2.0",
+    "pypdf>=4.0.0",
     "pyyaml>=6.0.1",
 ]
 

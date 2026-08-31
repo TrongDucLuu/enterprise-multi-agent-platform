@@ -1,30 +1,31 @@
 #!/usr/bin/env python3
 """
-# Enterprise Knowledge Base Data Ingestion Pipeline.
-# 
-# Parses multi-format customer documents (.md, .txt, .docx, .jsonl), validates enterprise system
-# tags against systems.yaml config, splits documents into semantic chunks, generates 768-dimensional
-# dense vector embeddings using text-embedding-005, and performs append-only streaming insert
-# (chạy lại trên tài liệu không đổi sẽ tạo dòng trùng ID; xem roadmap về MERGE và Orphaned Chunks cleanup).
-# 
-# Usage:
-#     # Dry-run parsing and embedding simulation:
-#     python scripts/ingest_knowledge_base.py --source-dir data/knowledge_base/ --dry-run
-# 
-#     # Production ingestion into BigQuery:
-#     python scripts/ingest_knowledge_base.py --source-dir data/knowledge_base/ --project-id my-project --dataset-id it_helpdesk_kb
-# 
-#     # Ingest single document and run test query:
-#     python scripts/ingest_knowledge_base.py --file docs/sap_procurement_guide.docx --system ERP --test-query "lỗi phân quyền ME21N"
-# """
+Enterprise Knowledge Base Data Ingestion Pipeline.
+
+Parses multi-format customer documents (.md, .txt, .docx, .pdf, .jsonl), validates enterprise system
+tags against systems.yaml config, splits documents into semantic chunks, generates 768-dimensional
+dense vector embeddings using text-embedding-005, and performs idempotent upsert (MERGE) with
+orphaned chunks cleanup via temporary Staging Table into BigQuery.
+
+Usage:
+    # Dry-run parsing and embedding simulation:
+    python scripts/ingest_knowledge_base.py --source-dir data/knowledge_base/ --dry-run
+
+    # Production ingestion into BigQuery:
+    python scripts/ingest_knowledge_base.py --source-dir data/knowledge_base/ --project-id my-project --dataset-id it_helpdesk_kb
+
+    # Ingest single document and run test query:
+    python scripts/ingest_knowledge_base.py --file docs/sap_procurement_guide.pdf --system ERP --test-query "lỗi phân quyền ME21N"
+"""
 
 import os
 import sys
 import json
+import uuid
 import hashlib
 import argparse
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional, Any
 
@@ -88,8 +89,40 @@ class DocumentParser:
                 "source_uri": str(file_path),
                 "file_type": ".docx",
             }]
+        except ImportError:
+            logger.warning("python-docx is not installed. To parse DOCX files, install python-docx (`pip install python-docx`).")
+            return []
         except Exception as e:
             logger.error("Failed to parse docx file %s: %s", file_path, e)
+            return []
+
+    @staticmethod
+    def parse_pdf(file_path: Path) -> list[dict[str, Any]]:
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(str(file_path))
+            pages_text = []
+            for i, page in enumerate(reader.pages):
+                text = page.extract_text() or ""
+                if text.strip():
+                    pages_text.append(text.strip())
+            content = "\n\n".join(pages_text)
+            title = file_path.stem.replace("_", " ").title()
+            if pages_text:
+                first_lines = [l.strip() for l in pages_text[0].splitlines() if l.strip()]
+                if first_lines:
+                    title = first_lines[0][:100]
+            return [{
+                "title": title,
+                "content": content,
+                "source_uri": str(file_path),
+                "file_type": ".pdf",
+            }]
+        except ImportError:
+            logger.warning("pypdf is not installed. To parse PDF files, install pypdf (`pip install pypdf`).")
+            return []
+        except Exception as e:
+            logger.error("Failed to parse pdf file %s: %s", file_path, e)
             return []
 
     @staticmethod
@@ -149,7 +182,8 @@ def process_document(
 ) -> list[dict[str, Any]]:
     """
     Validates, chunks, and prepares a document for embedding and ingestion.
-    Generates deterministic article IDs based on SHA-256(system:source_uri:title:idx).
+    Generates deterministic article IDs based on SHA-256(system:source_uri:title:idx)
+    and computes content_hash for CDC change tracking.
     """
     valid_systems = get_valid_system_filters()
     configured_systems = get_configured_systems()
@@ -201,6 +235,9 @@ def process_document(
             words = [w.strip(".,;:()") for w in chunk_title.lower().split() if len(w) > 2]
             keywords = list(set(words))[:8]
 
+        # Compute content_hash for Change Data Capture (CDC)
+        content_hash = hashlib.sha256(chunk.encode("utf-8")).hexdigest()
+
         processed_articles.append({
             "id": article_id,
             "system": system_clean,
@@ -209,6 +246,7 @@ def process_document(
             "content": chunk,
             "keywords": keywords,
             "source_uri": source_uri,
+            "content_hash": content_hash,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         })
 
@@ -245,45 +283,6 @@ def ensure_vector_index(
         )
 
 
-def cleanup_orphaned_chunks(
-    bq_client: Any,
-    project_id: str,
-    dataset_id: str,
-    table_name: str,
-    source_uri: str,
-    current_chunk_ids: list[str]
-) -> int:
-    """
-    Removes obsolete/orphaned chunks for a given source_uri when a document is updated and shrinks in chunk count.
-    Ensures outdated knowledge chunks from previous versions do not persist in BigQuery.
-    """
-    if not source_uri or not current_chunk_ids:
-        return 0
-
-    try:
-        from google.cloud import bigquery
-        delete_sql = f"""
-        DELETE FROM `{project_id}.{dataset_id}.{table_name}`
-        WHERE source_uri = @source_uri
-          AND id NOT IN UNNEST(@current_chunk_ids)
-        """
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("source_uri", "STRING", source_uri),
-                bigquery.ArrayQueryParameter("current_chunk_ids", "STRING", current_chunk_ids),
-            ]
-        )
-        query_job = bq_client.query(delete_sql, job_config=job_config)
-        query_job.result()
-        deleted_count = query_job.num_dml_affected_rows or 0
-        if deleted_count > 0:
-            logger.info("Đã dọn dẹp %d orphaned chunks lỗi thời cho tài liệu: %s", deleted_count, source_uri)
-        return deleted_count
-    except Exception as e:
-        logger.warning("Không thể dọn dẹp orphaned chunks cho '%s': %s", source_uri, e)
-        return 0
-
-
 def ingest_articles_to_bigquery(
     articles: list[dict[str, Any]],
     project_id: str,
@@ -291,10 +290,17 @@ def ingest_articles_to_bigquery(
     table_name: str = "knowledge_articles"
 ) -> int:
     """
-    Performs append-only streaming insert into BigQuery table with 768-dim embeddings,
-    cleans up orphaned chunks for modified source_uris, and ensures Vector Index exists.
-    Lưu ý: Chạy lại trên tài liệu không đổi sẽ tạo dòng trùng ID; xem roadmap về MERGE.
+    Performs production-grade idempotent upsert (MERGE) into BigQuery:
+    1. CDC pre-check on content_hash to skip redundant embedding API calls.
+    2. Batch loads articles into a temporary staging table (zero streaming buffer locks on target).
+    3. Executes atomic SQL MERGE from staging table into target table.
+    4. Executes DML DELETE on target table to clean up orphaned chunks for modified documents.
+    5. Drops staging table and ensures BigQuery IVF Vector Index is active.
     """
+    if not articles:
+        logger.info("No articles to ingest.")
+        return 0
+
     try:
         from google.cloud import bigquery
     except ImportError:
@@ -302,15 +308,18 @@ def ingest_articles_to_bigquery(
         raise
 
     bq_client = bigquery.Client(project=project_id)
-    full_table = f"`{project_id}.{dataset_id}.{table_name}`"
+    full_target_table = f"`{project_id}.{dataset_id}.{table_name}`"
 
-    # Pre-check for existing source_uris to warn operators of potential duplicate rows before full MERGE
-    try:
-        source_uris = list({a["source_uri"] for a in articles if a.get("source_uri")})
-        if source_uris:
-            check_sql = f"""
-            SELECT DISTINCT source_uri 
-            FROM `{project_id}.{dataset_id}.{table_name}`
+    # 1. CDC Pre-Check: Retrieve existing content hashes to avoid redundant embedding generation
+    source_uris = list({a["source_uri"] for a in articles if a.get("source_uri")})
+    existing_hashes: dict[str, str] = {}
+    existing_embeddings: dict[str, list[float]] = {}
+
+    if source_uris:
+        try:
+            cdc_sql = f"""
+            SELECT id, content_hash, embedding
+            FROM {full_target_table}
             WHERE source_uri IN UNNEST(@source_uris)
             """
             job_config = bigquery.QueryJobConfig(
@@ -318,50 +327,130 @@ def ingest_articles_to_bigquery(
                     bigquery.ArrayQueryParameter("source_uris", "STRING", source_uris)
                 ]
             )
-            existing_rows = list(bq_client.query(check_sql, job_config=job_config).result())
-            existing_uris = [row.source_uri for row in existing_rows]
-            if existing_uris:
-                logger.warning(
-                    "CẢNH BÁO TRÙNG LẶP DỮ LIỆU: Phát hiện %d source_uri đã tồn tại trong BigQuery (%s). "
-                    "Lượt streaming insert này sẽ tạo các dòng trùng ID do chưa có MERGE tự động. "
-                    "Vui lòng lưu ý khi re-ingest tài liệu cũ.",
-                    len(existing_uris),
-                    ", ".join(existing_uris[:3])
-                )
-    except Exception as e:
-        logger.debug("Bỏ qua pre-check duplicate source_uri: %s", e)
+            cdc_rows = list(bq_client.query(cdc_sql, job_config=job_config).result())
+            for r in cdc_rows:
+                if hasattr(r, "id") and hasattr(r, "content_hash") and r.id and r.content_hash:
+                    existing_hashes[r.id] = r.content_hash
+                    if hasattr(r, "embedding") and r.embedding:
+                        existing_embeddings[r.id] = list(r.embedding)
+        except Exception as e:
+            logger.debug("CDC pre-check bypassed (table may be newly initialized): %s", e)
 
-    logger.info("Generating embeddings for %d chunks using %s...", len(articles), DEFAULT_EMBEDDING_MODEL)
-    texts_to_embed = [f"{a['title']}\n{a['category']}\n{a['content']}" for a in articles]
-    embeddings = generate_batch_embeddings(texts_to_embed, model_name=DEFAULT_EMBEDDING_MODEL)
+    # 2. Selective Embedding Generation
+    chunks_to_embed_indices: list[int] = []
+    texts_to_embed: list[str] = []
 
-    for a, emb in zip(articles, embeddings):
-        a["embedding"] = emb
+    for idx, a in enumerate(articles):
+        art_id = a.get("id")
+        content_hash = a.get("content_hash")
+        # Reuse existing vector if content is unchanged
+        if art_id and art_id in existing_hashes and existing_hashes[art_id] == content_hash and art_id in existing_embeddings:
+            a["embedding"] = existing_embeddings[art_id]
+        elif a.get("embedding"):
+            # Already has embedding (e.g. injected or dry-run)
+            pass
+        else:
+            chunks_to_embed_indices.append(idx)
+            texts_to_embed.append(f"{a['title']}\n{a['category']}\n{a['content']}")
 
-    # Prepare rows for BigQuery streaming insert
-    logger.info("Appending %d articles (streaming insert — không idempotent, xem roadmap MERGE) into BigQuery %s...", len(articles), full_table)
-    
-    errors = bq_client.insert_rows_json(
-        f"{project_id}.{dataset_id}.{table_name}",
-        articles
-    )
-    if errors:
-        logger.error("BigQuery insert_rows_json encountered errors: %s", errors)
-        raise RuntimeError(f"BigQuery insertion failed: {errors}")
+    reused_count = len(articles) - len(chunks_to_embed_indices)
+    if reused_count > 0:
+        logger.info("CDC Optimization: Reused %d existing embeddings (content unchanged).", reused_count)
 
-    logger.info("Successfully ingested %d articles into BigQuery.", len(articles))
+    if chunks_to_embed_indices:
+        logger.info("Generating embeddings for %d new/modified chunks using %s...", len(chunks_to_embed_indices), DEFAULT_EMBEDDING_MODEL)
+        new_embeddings = generate_batch_embeddings(texts_to_embed, model_name=DEFAULT_EMBEDDING_MODEL)
+        for idx, emb in zip(chunks_to_embed_indices, new_embeddings):
+            articles[idx]["embedding"] = emb
 
-    # Clean up orphaned chunks when documents shrink
-    source_uri_to_ids: dict[str, list[str]] = {}
-    for a in articles:
-        uri = a.get("source_uri")
-        if uri:
-            source_uri_to_ids.setdefault(uri, []).append(a["id"])
+    # 3. Create Temporary Staging Table
+    staging_suffix = uuid.uuid4().hex[:8]
+    staging_table_name = f"{table_name}_staging_{staging_suffix}"
+    staging_table_id = f"{project_id}.{dataset_id}.{staging_table_name}"
+    full_staging_table = f"`{project_id}.{dataset_id}.{staging_table_name}`"
 
-    for uri, chunk_ids in source_uri_to_ids.items():
-        cleanup_orphaned_chunks(bq_client, project_id, dataset_id, table_name, uri, chunk_ids)
+    schema = [
+        bigquery.SchemaField("id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("system", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("title", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("category", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("content", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("keywords", "STRING", mode="REPEATED"),
+        bigquery.SchemaField("embedding", "FLOAT64", mode="REPEATED"),
+        bigquery.SchemaField("source_uri", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("content_hash", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("updated_at", "TIMESTAMP", mode="REQUIRED"),
+    ]
 
-    # Automatically ensure Vector Index DDL
+    staging_table = bigquery.Table(staging_table_id, schema=schema)
+    staging_table.expires = datetime.now(timezone.utc) + timedelta(hours=1)
+    bq_client.create_table(staging_table, exists_ok=True)
+    logger.info("Created temporary staging table %s", staging_table_name)
+
+    try:
+        # 4. Batch Load Articles into Staging Table (Load Job - Free of streaming buffer locks)
+        load_job_config = bigquery.LoadJobConfig(
+            schema=schema,
+            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        )
+        load_job = bq_client.load_table_from_json(articles, staging_table_id, job_config=load_job_config)
+        load_job.result()
+        logger.info("Loaded %d articles into staging table.", len(articles))
+
+        # 5. Execute Atomic SQL MERGE from Staging into Target Table
+        merge_sql = f"""
+        MERGE {full_target_table} T
+        USING {full_staging_table} S
+        ON T.id = S.id
+        WHEN MATCHED AND (T.content_hash != S.content_hash OR T.content_hash IS NULL) THEN
+          UPDATE SET
+            T.system = S.system,
+            T.title = S.title,
+            T.category = S.category,
+            T.content = S.content,
+            T.keywords = S.keywords,
+            T.embedding = S.embedding,
+            T.source_uri = S.source_uri,
+            T.content_hash = S.content_hash,
+            T.updated_at = S.updated_at
+        WHEN NOT MATCHED THEN
+          INSERT (id, system, title, category, content, keywords, embedding, source_uri, content_hash, updated_at)
+          VALUES (S.id, S.system, S.title, S.category, S.content, S.keywords, S.embedding, S.source_uri, S.content_hash, S.updated_at);
+        """
+        logger.info("Executing Atomic MERGE into %s...", full_target_table)
+        merge_job = bq_client.query(merge_sql)
+        merge_job.result()
+        logger.info("Atomic MERGE completed successfully.")
+
+        # 6. Execute Orphaned Chunks Cleanup via DML on Target Table (No streaming buffer lock on target!)
+        if source_uris:
+            cleanup_sql = f"""
+            DELETE FROM {full_target_table}
+            WHERE source_uri IN UNNEST(@source_uris)
+              AND id NOT IN (
+                SELECT id FROM {full_staging_table}
+              )
+            """
+            cleanup_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ArrayQueryParameter("source_uris", "STRING", source_uris)
+                ]
+            )
+            cleanup_job = bq_client.query(cleanup_sql, job_config=cleanup_config)
+            cleanup_job.result()
+            deleted_count = getattr(cleanup_job, "num_dml_affected_rows", 0)
+            if isinstance(deleted_count, (int, float)) and deleted_count > 0:
+                logger.info("Cleaned up %d orphaned chunks for updated documents.", int(deleted_count))
+
+    finally:
+        # 7. Drop Temporary Staging Table
+        try:
+            bq_client.delete_table(staging_table_id, not_found_ok=True)
+            logger.info("Cleaned up temporary staging table %s", staging_table_name)
+        except Exception as e:
+            logger.warning("Failed to drop staging table %s: %s", staging_table_name, e)
+
+    # 8. Automatically Ensure Vector Index DDL
     ensure_vector_index(bq_client, project_id, dataset_id, table_name)
 
     return len(articles)
@@ -407,7 +496,7 @@ def run_test_query(
 
 def main():
     parser = argparse.ArgumentParser(description="Ingest customer documentation into Enterprise Knowledge Base")
-    parser.add_argument("--source-dir", type=str, help="Directory containing documents (.md, .txt, .docx, .jsonl)")
+    parser.add_argument("--source-dir", type=str, help="Directory containing documents (.md, .txt, .docx, .pdf, .jsonl)")
     parser.add_argument("--file", type=str, help="Single document file to ingest")
     parser.add_argument("--system", type=str, help="Default enterprise system (e.g. ERP, HRM, CRM)")
     parser.add_argument("--project-id", type=str, default=os.getenv("GOOGLE_CLOUD_PROJECT", ""), help="Google Cloud Project ID")
@@ -430,13 +519,13 @@ def main():
         if not p.exists():
             logger.error("Directory not found: %s", p)
             sys.exit(1)
-        for ext in ("*.md", "*.txt", "*.docx", "*.jsonl"):
+        for ext in ("*.md", "*.txt", "*.docx", "*.pdf", "*.jsonl"):
             files_to_process.extend(p.glob(ext))
     else:
         # Default to data/knowledge_base if present
         default_data_dir = BASE_DIR / "data" / "knowledge_base"
         if default_data_dir.exists():
-            for ext in ("*.md", "*.txt", "*.docx", "*.jsonl"):
+            for ext in ("*.md", "*.txt", "*.docx", "*.pdf", "*.jsonl"):
                 files_to_process.extend(default_data_dir.glob(ext))
         else:
             logger.error("Please specify --source-dir or --file")
@@ -455,6 +544,8 @@ def main():
             docs = DocumentParser.parse_markdown_or_text(fp)
         elif fp.suffix.lower() == ".docx":
             docs = DocumentParser.parse_docx(fp)
+        elif fp.suffix.lower() == ".pdf":
+            docs = DocumentParser.parse_pdf(fp)
         elif fp.suffix.lower() == ".jsonl":
             docs = DocumentParser.parse_jsonl(fp)
         else:

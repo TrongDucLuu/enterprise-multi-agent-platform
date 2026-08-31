@@ -3,7 +3,9 @@ Unit tests for Enterprise Knowledge Base Data Ingestion Pipeline.
 """
 
 import os
+import sys
 import json
+import hashlib
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -25,6 +27,29 @@ def test_parse_markdown_document(tmp_path):
     assert parsed[0]["title"] == "Hướng Dẫn Kỹ Thuật ERP"
     assert "Nội dung chi tiết" in parsed[0]["content"]
     assert parsed[0]["file_type"] == ".md"
+
+
+def test_parse_pdf_document_with_mock(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "manual.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 dummy pdf binary")
+
+    mock_pypdf = MagicMock()
+    mock_reader = MagicMock()
+    mock_page_1 = MagicMock()
+    mock_page_1.extract_text.return_value = "Tiêu Đề Hướng Dẫn PDF\nNội dung trang 1."
+    mock_page_2 = MagicMock()
+    mock_page_2.extract_text.return_value = "Nội dung trang 2 chi tiết."
+    mock_reader.pages = [mock_page_1, mock_page_2]
+    mock_pypdf.PdfReader.return_value = mock_reader
+
+    monkeypatch.setitem(sys.modules, "pypdf", mock_pypdf)
+
+    parsed = DocumentParser.parse_pdf(pdf_path)
+    assert len(parsed) == 1
+    assert parsed[0]["title"] == "Tiêu Đề Hướng Dẫn PDF"
+    assert "Nội dung trang 1." in parsed[0]["content"]
+    assert "Nội dung trang 2" in parsed[0]["content"]
+    assert parsed[0]["file_type"] == ".pdf"
 
 
 def test_parse_jsonl_document(tmp_path):
@@ -59,12 +84,12 @@ def test_chunk_text_splits_long_content():
         assert len(c) > 0
 
 
-def test_process_document_generates_deterministic_ids():
+def test_process_document_generates_deterministic_ids_and_content_hash():
     doc = {
         "title": "Hướng dẫn SAP MM",
         "system": "ERP",
         "category": "Procurement",
-        "content": "Nội dung tài liệu...",
+        "content": "Nội dung tài liệu kiểm thử quy trình mua sắm hàng hóa...",
         "source_uri": "gs://bucket/sap.md"
     }
 
@@ -75,6 +100,9 @@ def test_process_document_generates_deterministic_ids():
     assert articles_1[0]["id"].startswith("ERP-KB-")
     assert articles_1[0]["id"] == articles_2[0]["id"]
     assert articles_1[0]["system"] == "ERP"
+    assert "content_hash" in articles_1[0]
+    expected_hash = hashlib.sha256(doc["content"].encode("utf-8")).hexdigest()
+    assert articles_1[0]["content_hash"] == expected_hash
 
 
 def test_process_document_rejects_unconfigured_system():
@@ -97,10 +125,24 @@ def test_process_document_rejects_reserved_keyword_all():
         process_document(doc)
 
 
-def test_ingest_articles_to_bigquery_with_mock(monkeypatch):
+def test_ingest_articles_staging_table_and_merge(monkeypatch):
+    """
+    Verifies that ingest_articles_to_bigquery:
+    1. Loads articles into a temporary staging table (batch load).
+    2. Executes Atomic SQL MERGE from staging to target table.
+    3. Cleans up orphaned chunks on target table.
+    4. Deletes temporary staging table.
+    """
     mock_bq_module = MagicMock()
     mock_client = MagicMock()
-    mock_client.insert_rows_json.return_value = []  # No errors
+    
+    mock_load_job = MagicMock()
+    mock_client.load_table_from_json.return_value = mock_load_job
+    
+    mock_query_job = MagicMock()
+    mock_query_job.num_dml_affected_rows = 1
+    mock_client.query.return_value = mock_query_job
+    
     mock_bq_module.Client.return_value = mock_client
     monkeypatch.setattr("google.cloud.bigquery", mock_bq_module, raising=False)
 
@@ -112,6 +154,7 @@ def test_ingest_articles_to_bigquery_with_mock(monkeypatch):
         "content": "Chi tiết lỗi và giải pháp...",
         "keywords": ["sap", "po"],
         "source_uri": "data/sample.md",
+        "content_hash": hashlib.sha256(b"Chi tiet loi").hexdigest(),
         "updated_at": "2026-08-31T00:00:00Z"
     }]
 
@@ -123,53 +166,75 @@ def test_ingest_articles_to_bigquery_with_mock(monkeypatch):
     )
 
     assert count == 1
-    assert mock_client.insert_rows_json.called
-    inserted_rows = mock_client.insert_rows_json.call_args[0][1]
-    assert len(inserted_rows) == 1
-    assert "embedding" in inserted_rows[0]
-    assert len(inserted_rows[0]["embedding"]) == 768
+    # 1. Staging table was created
+    assert mock_client.create_table.called
+    # 2. Batch load into staging table
+    assert mock_client.load_table_from_json.called
+    # 3. MERGE query executed
+    all_queries = [c[0][0] for c in mock_client.query.call_args_list]
+    assert any("MERGE `test-proj.test_kb.knowledge_articles` T" in q for q in all_queries)
+    # 4. Staging table deleted
+    assert mock_client.delete_table.called
 
 
-def test_cleanup_orphaned_chunks_executes_dml_delete(monkeypatch):
-    """Verify that cleanup_orphaned_chunks runs parameterized BigQuery DELETE DML."""
-    from scripts.ingest_knowledge_base import cleanup_orphaned_chunks
-
+def test_cdc_reuses_existing_embeddings_when_content_hash_matches(monkeypatch):
+    """
+    Verifies CDC (Change Data Capture) pre-check:
+    When an article's content_hash matches existing row in BigQuery, its embedding is reused
+    without calling Vertex AI Embedding API again.
+    """
     mock_bq_module = MagicMock()
     mock_client = MagicMock()
-    mock_query_job = MagicMock()
-    mock_query_job.num_dml_affected_rows = 2
-    mock_client.query.return_value = mock_query_job
+
+    content_str = "Quy trình xin nghỉ phép qua phần mềm HRM."
+    curr_hash = hashlib.sha256(content_str.encode("utf-8")).hexdigest()
+    pre_existing_vector = [0.123] * 768
+
+    # Mock CDC query returning existing hash & vector
+    mock_cdc_row = MagicMock()
+    mock_cdc_row.id = "HRM-KB-111"
+    mock_cdc_row.content_hash = curr_hash
+    mock_cdc_row.embedding = pre_existing_vector
+
+    mock_cdc_job = MagicMock()
+    mock_cdc_job.result.return_value = [mock_cdc_row]
+    
+    # Return CDC result on first query, and general jobs for subsequent queries
+    mock_client.query.return_value = mock_cdc_job
     mock_bq_module.Client.return_value = mock_client
     monkeypatch.setattr("google.cloud.bigquery", mock_bq_module, raising=False)
 
-    source_uri = "docs/sap_guide.md"
-    current_ids = ["ERP-KB-CHUNK1", "ERP-KB-CHUNK2", "ERP-KB-CHUNK3"]
+    articles = [{
+        "id": "HRM-KB-111",
+        "system": "HRM",
+        "title": "Nghỉ phép HRM",
+        "category": "TimeOff",
+        "content": content_str,
+        "keywords": ["nghỉ", "phép"],
+        "source_uri": "docs/hrm_leave.md",
+        "content_hash": curr_hash,
+        "updated_at": "2026-08-31T00:00:00Z"
+    }]
 
-    deleted = cleanup_orphaned_chunks(
-        mock_client,
+    count = ingest_articles_to_bigquery(
+        articles,
         project_id="test-proj",
         dataset_id="test_kb",
-        table_name="knowledge_articles",
-        source_uri=source_uri,
-        current_chunk_ids=current_ids
+        table_name="knowledge_articles"
     )
 
-    assert deleted == 2
-    assert mock_client.query.called
-    query_str = mock_client.query.call_args[0][0]
-    assert "DELETE FROM `test-proj.test_kb.knowledge_articles`" in query_str
-    assert "WHERE source_uri = @source_uri" in query_str
-    assert "AND id NOT IN UNNEST(@current_chunk_ids)" in query_str
+    assert count == 1
+    # Verify embedding was reused from pre-existing vector without re-calling Vertex AI
+    assert articles[0]["embedding"] == pre_existing_vector
 
 
 def test_document_shrinks_triggers_orphaned_chunk_cleanup(monkeypatch):
     """
     Simulates document update shrinking from 7 chunks to 5 chunks:
-    Verifies that ingest_articles_to_bigquery triggers cleanup for the remaining 5 chunk IDs.
+    Verifies that ingest_articles_to_bigquery triggers DELETE DML referencing staging table IDs.
     """
     mock_bq_module = MagicMock()
     mock_client = MagicMock()
-    mock_client.insert_rows_json.return_value = []
     mock_query_job = MagicMock()
     mock_query_job.num_dml_affected_rows = 2  # 2 old orphaned chunks deleted
     mock_client.query.return_value = mock_query_job
@@ -186,6 +251,7 @@ def test_document_shrinks_triggers_orphaned_chunk_cleanup(monkeypatch):
             "content": f"Nội dung mới phần {i}...",
             "keywords": ["sap"],
             "source_uri": "docs/procurement_v2.md",
+            "content_hash": hashlib.sha256(f"Nội dung mới phần {i}".encode()).hexdigest(),
             "updated_at": "2026-08-31T00:00:00Z"
         }
         for i in range(1, 6)
@@ -202,6 +268,5 @@ def test_document_shrinks_triggers_orphaned_chunk_cleanup(monkeypatch):
     assert mock_client.query.called
     all_queries = [c[0][0] for c in mock_client.query.call_args_list]
     assert any("DELETE FROM `test-proj.test_kb.knowledge_articles`" in q for q in all_queries)
-    assert any("WHERE source_uri = @source_uri" in q for q in all_queries)
-    assert any("AND id NOT IN UNNEST(@current_chunk_ids)" in q for q in all_queries)
-
+    assert any("WHERE source_uri IN UNNEST(@source_uris)" in q for q in all_queries)
+    assert any("NOT IN (\n                SELECT id FROM `test-proj.test_kb.knowledge_articles_staging_" in q or "SELECT id FROM" in q for q in all_queries)

@@ -138,6 +138,12 @@ resource "google_bigquery_table" "knowledge_articles" {
     "description": "Source document location (e.g. gs://bucket/docs/manual.docx)"
   },
   {
+    "name": "content_hash",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "SHA-256 hash of raw content for CDC change detection"
+  },
+  {
     "name": "updated_at",
     "type": "TIMESTAMP",
     "mode": "REQUIRED",
