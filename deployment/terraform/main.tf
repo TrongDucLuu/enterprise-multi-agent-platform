@@ -88,7 +88,7 @@ resource "google_bigquery_dataset_iam_member" "kb_dataset_viewer" {
 # 6. Firestore Database for Persistent Helpdesk Ticketing
 resource "google_firestore_database" "database" {
   project     = var.project_id
-  name        = "(default)"
+  name        = var.firestore_database_name
   location_id = var.region
   type        = "FIRESTORE_NATIVE"
   
@@ -202,6 +202,10 @@ resource "google_cloud_run_v2_service" "default" {
       env {
         name  = "AGENT_ENGINE_RESOURCE_NAME"
         value = var.agent_engine_resource_name
+      }
+      env {
+        name  = "BEHIND_LOAD_BALANCER"
+        value = tostring(var.enable_load_balancer)
       }
       env {
         name  = "SEMANTIC_CACHE_ENABLED"

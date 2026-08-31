@@ -202,11 +202,12 @@ def test_route_ticket_to_tier_rate_limits_by_caller_not_owner():
     assert remaining == 9  # Consumed this check call, confirming full quota was untouched
 
 
-def test_rate_limiter_middleware_leftmost_ip_extraction():
+def test_rate_limiter_direct_cloud_run_ip_extraction(monkeypatch):
     """
-    Validates that RateLimitMiddleware extracts the leftmost IP (the actual client)
-    from X-Forwarded-For when behind a Load Balancer / reverse proxy.
+    Validates that in direct Cloud Run mode (BEHIND_LOAD_BALANCER=false),
+    RateLimitMiddleware extracts the rightmost IP (ips[-1]) appended by Cloud Run.
     """
+    monkeypatch.setenv("BEHIND_LOAD_BALANCER", "false")
     app = FastAPI()
     limiter = InMemoryRateLimiter(requests_per_minute=2)
     app.add_middleware(RateLimitMiddleware, limiter=limiter)
@@ -217,29 +218,70 @@ def test_rate_limiter_middleware_leftmost_ip_extraction():
 
     client = TestClient(app)
 
-    # Client IP: 198.51.100.10, Proxies: 10.0.0.1, 10.0.0.2
-    headers = {"X-Forwarded-For": "198.51.100.10, 10.0.0.1, 10.0.0.2"}
+    # In direct Cloud Run: header is "spoofed_ip, 203.0.113.195 (real client)"
+    headers = {"X-Forwarded-For": "1.2.3.4, 203.0.113.195"}
 
-    # 1st and 2nd requests from client 198.51.100.10 should succeed
+    # 1st and 2nd requests from client 203.0.113.195 should succeed
     r1 = client.get("/api/data", headers=headers)
     assert r1.status_code == 200
 
     r2 = client.get("/api/data", headers=headers)
     assert r2.status_code == 200
 
-    # 3rd request from 198.51.100.10 should be rate limited (429)
-    r3 = client.get("/api/data", headers=headers)
+    # 3rd request from 203.0.113.195 should be rate limited (429)
+    # Even if attacker alters spoofed_ip to "9.9.9.9", Cloud Run still appends "203.0.113.195" at ips[-1]
+    spoofed_headers = {"X-Forwarded-For": "9.9.9.9, 203.0.113.195"}
+    r3 = client.get("/api/data", headers=spoofed_headers)
     assert r3.status_code == 429
 
-    # Another client IP: 203.0.113.50 passing through the SAME proxies should NOT be blocked!
-    headers2 = {"X-Forwarded-For": "203.0.113.50, 10.0.0.1, 10.0.0.2"}
-    r4 = client.get("/api/data", headers=headers2)
+    # Different real client 198.51.100.20 has its own separate bucket
+    other_client_headers = {"X-Forwarded-For": "1.2.3.4, 198.51.100.20"}
+    r4 = client.get("/api/data", headers=other_client_headers)
+    assert r4.status_code == 200
+
+
+def test_rate_limiter_behind_load_balancer_ip_extraction(monkeypatch):
+    """
+    Validates that in Load Balancer mode (BEHIND_LOAD_BALANCER=true),
+    RateLimitMiddleware extracts ips[-2] (the verified client IP preceding the LB IP).
+    Prevents attackers from spoofing leftmost IP (ips[0]).
+    """
+    monkeypatch.setenv("BEHIND_LOAD_BALANCER", "true")
+    app = FastAPI()
+    limiter = InMemoryRateLimiter(requests_per_minute=2)
+    app.add_middleware(RateLimitMiddleware, limiter=limiter)
+
+    @app.get("/api/data")
+    def get_data():
+        return {"ok": True}
+
+    client = TestClient(app)
+
+    # In GCP External HTTPS LB: header is "spoofed_ip, 203.0.113.195 (real client), 34.120.50.1 (gfe lb)"
+    headers = {"X-Forwarded-For": "1.2.3.4, 203.0.113.195, 34.120.50.1"}
+
+    # 1st and 2nd requests from 203.0.113.195 should succeed
+    r1 = client.get("/api/data", headers=headers)
+    assert r1.status_code == 200
+
+    r2 = client.get("/api/data", headers=headers)
+    assert r2.status_code == 200
+
+    # 3rd request with altered spoofed_ip "8.8.8.8" MUST still be blocked (429) because ips[-2] is tracked
+    spoofed_attack = {"X-Forwarded-For": "8.8.8.8, 203.0.113.195, 34.120.50.1"}
+    r3 = client.get("/api/data", headers=spoofed_attack)
+    assert r3.status_code == 429
+
+    # Another distinct client 198.51.100.55 behind the same LB should NOT be blocked
+    other_client = {"X-Forwarded-For": "8.8.8.8, 198.51.100.55, 34.120.50.1"}
+    r4 = client.get("/api/data", headers=other_client)
     assert r4.status_code == 200
 
 
 def test_healthz_and_readyz_endpoints():
     """
-    Validates that /healthz and /readyz endpoints return HTTP 200 without authentication.
+    Validates that /healthz and /readyz endpoints return HTTP 200 without authentication
+    and do not leak internal system cache details.
     """
     from it_helpdesk_agent.fast_api_app import app
     client = TestClient(app)
@@ -255,5 +297,7 @@ def test_healthz_and_readyz_endpoints():
     r_readyz = client.get("/readyz")
     assert r_readyz.status_code == 200
     assert r_readyz.json()["status"] == "ready"
+    assert "cache_entries" not in r_readyz.json()
+
 
 

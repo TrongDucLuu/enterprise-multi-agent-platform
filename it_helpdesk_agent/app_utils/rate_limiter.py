@@ -109,14 +109,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Safely extract client IP from trusted proxy or client host
+        is_behind_lb = os.getenv("BEHIND_LOAD_BALANCER", "false").lower() in ("true", "1", "yes")
         forwarded = request.headers.get("X-Forwarded-For", "").strip()
         if forwarded:
-            # Under Google Cloud Load Balancer / Proxy, the originating client IP is the FIRST element (ips[0]).
-            # Using ips[-1] would mistakenly take the Load Balancer IP, collapsing all users into a single bucket.
             ips = [ip.strip()[:45] for ip in forwarded.split(",") if ip.strip()]
-            client_ip = ips[0] if ips else "unknown"
-        elif request.headers.get("X-Real-IP"):
-            client_ip = request.headers.get("X-Real-IP", "").strip()[:45]
+            if is_behind_lb:
+                # With Google Cloud External HTTPS Load Balancer, X-Forwarded-For appends:
+                # [client_supplied_header_ips..., real_client_ip, gfe_lb_ip]
+                # ips[-1] is the Google Front End (GFE) LB IP.
+                # ips[-2] is the verified originating client IP.
+                # ips[0] is user-controlled and untrusted if attacker sent custom X-Forwarded-For.
+                client_ip = ips[-2] if len(ips) >= 2 else ips[-1]
+            else:
+                # Direct Cloud Run deployment (without Load Balancer):
+                # Cloud Run appends the verified client IP to the end of X-Forwarded-For (ips[-1]).
+                client_ip = ips[-1] if ips else "unknown"
         elif request.client and request.client.host:
             client_ip = request.client.host[:45]
         else:

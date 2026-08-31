@@ -112,14 +112,20 @@ variable "agent_engine_resource_name" {
   default     = ""
 }
 
+variable "firestore_database_name" {
+  description = "Name of the Firestore database instance ('(default)' or custom named database)"
+  type        = string
+  default     = "(default)"
+}
+
 variable "enable_load_balancer" {
-  description = "Provision a Google Cloud Global HTTPS Load Balancer with Cloud Armor WAF"
+  description = "Provision a Google Cloud Global HTTPS Load Balancer with Cloud Armor WAF and SSL"
   type        = bool
   default     = false
 }
 
 variable "domain_name" {
-  description = "Custom domain name for the Load Balancer (e.g., helpdesk.corp.internal)"
+  description = "Custom domain name for Google-managed SSL Certificate (e.g., helpdesk.corp.example.com)"
   type        = string
   default     = ""
 }

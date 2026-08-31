@@ -90,12 +90,10 @@ async def health_check():
 
 @app.get("/readyz", tags=["Health"])
 async def readiness_check():
-    """Readiness probe endpoint confirming system and semantic cache readiness."""
-    cache = get_semantic_cache()
+    """Readiness probe endpoint confirming system readiness."""
     return {
         "status": "ready",
-        "service": "it-helpdesk-agent",
-        "cache_entries": len(cache._entries)
+        "service": "it-helpdesk-agent"
     }
 
 
