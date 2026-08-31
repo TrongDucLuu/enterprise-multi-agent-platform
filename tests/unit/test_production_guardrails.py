@@ -9,9 +9,12 @@ Tests P0, P1, P2 backlog requirements:
 """
 
 import os
+import time
 import pytest
 import logging
 from unittest.mock import MagicMock, patch
+
+from google.adk.models import LlmResponse
 
 from it_helpdesk_agent.app_utils.semantic_cache import (
     InMemorySemanticCache,
@@ -198,9 +201,57 @@ class TestRedisCircuitBreakerAndAlerting:
         assert cache._consecutive_redis_failures == 0
         assert cache._circuit_breaker_tripped is False
 
+    def test_redis_circuit_breaker_half_open_auto_recovery_flow(self, monkeypatch):
+        mock_redis = MagicMock()
+        mock_redis.smembers.side_effect = ConnectionError("Redis down")
+
+        cache = RedisSemanticCache(redis_client=mock_redis, cooldown_seconds=10.0)
+        cache._failure_threshold = 3
+
+        # 1. Cause 3 failures to trip circuit breaker into OPEN state
+        for _ in range(3):
+            assert cache.get("test") is None
+
+        assert cache._circuit_breaker_tripped is True
+        trip_time = cache._last_failure_time
+
+        # 2. While cooldown is active (<10s), get() must NOT touch Redis (fast bypass)
+        mock_redis.smembers.reset_mock()
+        assert cache.get("test") is None
+        mock_redis.smembers.assert_not_called()
+
+        # 3. Simulate cooldown expiration (cooldown >= 10s) -> HALF_OPEN state allows a probe
+        cache._last_failure_time = time.time() - 15.0  # 15s ago
+        # Simulate Redis back online
+        mock_redis.smembers.side_effect = None
+        mock_redis.smembers.return_value = set()
+
+        # Probe request
+        assert cache.get("test") is None
+        mock_redis.smembers.assert_called_once()
+
+        # Circuit breaker should now be CLOSED and healthy
+        assert cache._circuit_breaker_tripped is False
+        assert cache._consecutive_redis_failures == 0
+
+    def test_redis_circuit_breaker_probe_failure_remains_open(self):
+        mock_redis = MagicMock()
+        mock_redis.smembers.side_effect = ConnectionError("Redis down")
+
+        cache = RedisSemanticCache(redis_client=mock_redis, cooldown_seconds=10.0)
+        cache._consecutive_redis_failures = 5
+        cache._circuit_breaker_tripped = True
+        cache._last_failure_time = time.time() - 20.0  # Cooldown elapsed
+
+        # Probe fails
+        assert cache.get("test") is None
+        assert cache._circuit_breaker_tripped is True
+        # Timestamp updated to now
+        assert cache._last_failure_time > time.time() - 5.0
+
 
 # ==============================================================================
-# 4. P2.7 — L3 RATE LIMIT SOFT WARNING AT 80% QUOTA
+# 4. P2.7 — L3 RATE LIMIT SOFT WARNING AT 80% QUOTA & DELIVERED TO USER
 # ==============================================================================
 
 class TestL3RateLimitSoftWarning:
@@ -242,3 +293,73 @@ class TestL3RateLimitSoftWarning:
         # Call 11: Exceeded -> blocked
         allowed, rem, retry_after, is_soft, msg = check_l3_rate_limit_with_warning(user_id)
         assert allowed is False
+
+    @pytest.mark.asyncio
+    async def test_l3_soft_warning_attached_to_user_response(self, monkeypatch):
+        """
+        Verifies that when an L3 request hits >= 80% quota, the soft warning message
+        is prepended to the actual response text returned to the user and in custom_metadata.
+        """
+        import asyncio
+        from google.genai import types
+        from it_helpdesk_agent.agent import (
+            semantic_cache_before_model_callback,
+            semantic_cache_after_model_callback,
+            _current_l3_soft_warning
+        )
+        from it_helpdesk_agent.app_utils.sso_auth import current_sso_user, SSOUser
+
+        monkeypatch.setenv("L3_RATE_LIMIT_PER_MINUTE", "10")
+        monkeypatch.setenv("RATE_LIMITER_BACKEND", "memory")
+        reset_rate_limiters()
+
+        user = SSOUser(
+            user_id="user_quota_warn",
+            email="warn@company.com",
+            name="Warn User",
+            roles=["Employee"]
+        )
+        current_sso_user.set(user)
+
+        # Consume 7 requests so next call is 8th (80% quota)
+        for _ in range(7):
+            check_l3_rate_limit_with_warning(user.user_id)
+
+        # Mock callback context for L3 Agent
+        mock_agent = MagicMock()
+        mock_agent.name = "l3_deep_diagnostics_agent"
+        mock_inv_ctx = MagicMock()
+        mock_inv_ctx.agent = mock_agent
+        mock_inv_ctx.session.id = "sess_l3_warn"
+        mock_inv_ctx.session.events = []
+        mock_cb_ctx = MagicMock()
+        mock_cb_ctx._invocation_context = mock_inv_ctx
+
+        mock_req = MagicMock()
+        mock_req.contents = [
+            types.Content(role="user", parts=[types.Part.from_text(text="Phân tích lỗi OOM")])
+        ]
+
+        # 1. Run before_model_callback -> should allow request and set soft warning contextvar
+        resp_before = await semantic_cache_before_model_callback(mock_cb_ctx, mock_req)
+        assert resp_before is None  # Allowed to proceed to model
+        assert _current_l3_soft_warning.get() is not None
+        assert "L3 Quota Soft Warning" in _current_l3_soft_warning.get()
+
+        # 2. Simulate model response
+        original_llm_resp = LlmResponse(
+            content=types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Đây là kết quả phân tích Root Cause OOM.")]
+            ),
+            custom_metadata={}
+        )
+
+        # 3. Run after_model_callback -> should enrich response with soft warning
+        final_resp = await semantic_cache_after_model_callback(mock_cb_ctx, original_llm_resp)
+
+        assert final_resp is not None
+        final_text = final_resp.content.parts[0].text
+        assert "⚠️ [L3 Quota Soft Warning]" in final_text
+        assert "Đây là kết quả phân tích Root Cause OOM." in final_text
+        assert final_resp.custom_metadata.get("soft_warning") is not None

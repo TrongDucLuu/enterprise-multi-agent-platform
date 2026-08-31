@@ -172,7 +172,21 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
 
         allowed_upper = set(s.upper() for s in allowed_systems) if allowed_systems is not None else None
 
-        terms = re.findall(r'\w+', query.lower())
+        # Common Vietnamese and English stop words to prevent false positive keyword collisions
+        STOP_WORDS = {
+            "và", "các", "cho", "của", "là", "ở", "trong", "trên", "được", "với", "tại",
+            "để", "khi", "có", "này", "đó", "ra", "vào", "lại", "nào", "gì", "sao",
+            "làm", "như", "thế", "theo", "từ", "bị", "đã", "sẽ", "phải", "về", "hãy",
+            "giúp", "tôi", "bạn", "cách", "hướng", "dẫn", "quy", "định", "bao", "nhiêu",
+            "mục", "nằm", "sau", "đến", "hoặc", "một", "hai", "ba", "bốn", "năm",
+            "the", "a", "an", "in", "on", "at", "to", "for", "of", "and", "or", "is", "are"
+        }
+
+        raw_terms = re.findall(r'\w+', query.lower())
+        terms = [t for t in raw_terms if t not in STOP_WORDS and len(t) > 1]
+        if not terms:
+            terms = raw_terms
+
         results: list[tuple[float, KnowledgeArticle]] = []
 
         for article in self.articles:
@@ -184,17 +198,19 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
 
             score = 0.0
             article_text = f"{article.title} {article.category} {article.content}".lower()
+            article_keywords = [k.lower() for k in article.keywords]
 
             # Match keywords
             for term in terms:
                 if term in article.title.lower():
                     score += 3.0
-                elif term in [k.lower() for k in article.keywords]:
+                elif term in article_keywords:
                     score += 2.0
                 elif term in article_text:
-                    score += 1.0
+                    score += 0.5
 
-            if score > 0:
+            # Minimum relevance threshold: require at least a meaningful keyword match
+            if score >= 2.0:
                 results.append((score, article))
 
         # Sort by relevance score descending

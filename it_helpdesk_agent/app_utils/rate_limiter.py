@@ -221,10 +221,10 @@ def check_l3_rate_limit(user_id: Optional[str] = None) -> Tuple[bool, int, float
     """
     Verifies if the current user/session is permitted to execute high-cost L3 reasoning.
     Limits L3 reasoning calls to L3_RATE_LIMIT_PER_MINUTE (default: 10 req/min).
+    Delegates directly to check_l3_rate_limit_with_warning to eliminate logic duplication.
     """
-    l3_rpm = int(os.getenv("L3_RATE_LIMIT_PER_MINUTE", "10"))
-    key = f"l3_user:{user_id}" if user_id else "l3_user:anonymous"
-    return get_l3_rate_limiter().is_allowed(key, max_requests=l3_rpm)
+    allowed, remaining, reset_after, _, _ = check_l3_rate_limit_with_warning(user_id=user_id)
+    return allowed, remaining, reset_after
 
 
 def check_l3_rate_limit_with_warning(

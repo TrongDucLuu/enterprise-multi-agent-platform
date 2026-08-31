@@ -315,6 +315,7 @@ class RedisSemanticCache(BaseSemanticCache):
         similarity_threshold: float = 0.92,
         default_ttl_seconds: int = 86400,
         socket_timeout: float = 2.0,
+        cooldown_seconds: float = 30.0,
         embedding_fn: Optional[Callable[[str], list[float]]] = None,
     ):
         self.similarity_threshold = float(
@@ -333,26 +334,59 @@ class RedisSemanticCache(BaseSemanticCache):
         self._local_lookups = 0
         self._local_hits = 0
 
-        # Circuit Breaker & Consecutive Failure Tracker
+        # Circuit Breaker, State Machine & Cooldown Recovery Tracker
         self._consecutive_redis_failures = 0
         self._circuit_breaker_tripped = False
         self._failure_threshold = 10
+        self._cooldown_seconds = float(
+            os.getenv("REDIS_CIRCUIT_COOLDOWN_SECONDS", str(cooldown_seconds))
+        )
+        self._last_failure_time = 0.0
 
         if self._redis is None:
             self._init_redis()
 
+    def _allow_request(self) -> bool:
+        """
+        Determines whether a Redis operation should be attempted.
+        Implements Circuit Breaker State Machine:
+        - CLOSED: Normal operation.
+        - OPEN: Cooldown period active, bypass Redis immediately.
+        - HALF_OPEN: Cooldown elapsed, permits a single probe request to test Redis recovery.
+        """
+        if not self._circuit_breaker_tripped:
+            return True
+
+        now = time.time()
+        if (now - self._last_failure_time) >= self._cooldown_seconds:
+            logger.info(
+                "RedisSemanticCache cooldown (%.1fs) elapsed. Transitioning circuit breaker to HALF_OPEN to probe Redis.",
+                self._cooldown_seconds
+            )
+            return True
+        return False
+
     def _record_redis_failure(self, error: Exception, context: str) -> None:
-        """Records a Redis failure, trips circuit breaker, and emits alert if threshold reached."""
+        """Records a Redis failure, trips circuit breaker, and updates last failure timestamp."""
         self._consecutive_redis_failures += 1
+        self._last_failure_time = time.time()
         if self._consecutive_redis_failures >= self._failure_threshold:
             if not self._circuit_breaker_tripped:
                 self._circuit_breaker_tripped = True
                 logger.critical(
                     "REDIS_CIRCUIT_BREAKER_ALERT: Redis semantic cache failed %d consecutive times! "
-                    "Last error in %s: %s. Circuit breaker TRIPPED. Bypassing Redis cache to protect application latency.",
+                    "Last error in %s: %s. Circuit breaker TRIPPED (OPEN). Bypassing Redis cache for %.1fs.",
                     self._consecutive_redis_failures,
                     context,
                     error,
+                    self._cooldown_seconds,
+                )
+            else:
+                logger.warning(
+                    "RedisSemanticCache probe failed in HALF_OPEN state (%s: %s). Circuit breaker remains OPEN for %.1fs.",
+                    context,
+                    error,
+                    self._cooldown_seconds,
                 )
         else:
             logger.warning(
@@ -364,11 +398,15 @@ class RedisSemanticCache(BaseSemanticCache):
             )
 
     def _record_redis_success(self) -> None:
-        """Resets failure counter and clears circuit breaker upon successful Redis operation."""
+        """Resets failure counter, clears failure timestamp, and restores circuit breaker to CLOSED."""
         if self._consecutive_redis_failures > 0 or self._circuit_breaker_tripped:
-            logger.info("RedisSemanticCache recovered after %d failures. Circuit breaker reset.", self._consecutive_redis_failures)
+            logger.info(
+                "RedisSemanticCache recovered after %d failures. Circuit breaker reset to CLOSED.",
+                self._consecutive_redis_failures
+            )
             self._consecutive_redis_failures = 0
             self._circuit_breaker_tripped = False
+            self._last_failure_time = 0.0
 
     def _init_redis(self) -> None:
         try:
@@ -443,8 +481,8 @@ class RedisSemanticCache(BaseSemanticCache):
         if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
             return None
 
-        if self._circuit_breaker_tripped:
-            logger.debug("RedisSemanticCache circuit breaker is TRIPPED. Fast bypassing get().")
+        if not self._allow_request():
+            logger.debug("RedisSemanticCache circuit breaker is OPEN. Fast bypassing get().")
             return None
 
         query_emb = self._generate_embedding(query)
@@ -565,8 +603,8 @@ class RedisSemanticCache(BaseSemanticCache):
         Persists query, embedding, and response into Redis with TTL.
         Soft Fail-Closed: Silently logs warning on error without interrupting flow.
         """
-        if self._circuit_breaker_tripped:
-            logger.debug("RedisSemanticCache circuit breaker is TRIPPED. Fast bypassing set().")
+        if not self._allow_request():
+            logger.debug("RedisSemanticCache circuit breaker is OPEN. Fast bypassing set().")
             return None
 
         query_emb = self._generate_embedding(query)
@@ -620,6 +658,8 @@ class RedisSemanticCache(BaseSemanticCache):
 
     def clear(self) -> None:
         """Clears all semantic cache entries from Redis."""
+        if not self._allow_request():
+            return
         if self._redis is None:
             return
         try:

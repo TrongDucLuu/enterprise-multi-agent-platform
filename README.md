@@ -163,7 +163,7 @@ cp .env.example .env
 | `RATE_LIMITER_BACKEND` | Không | `memory` | Backend cho Rate Limiter (`memory` hoặc `redis`). |
 | `SEMANTIC_CACHE_BACKEND` | Không | `memory` | Backend cho Semantic Cache (`memory` hoặc `redis`). |
 | `REDIS_HOST` / `REDIS_PORT` | Không | `localhost:6379` | Địa chỉ kết nối Redis / Google Cloud Memorystore. |
-| `L3_RATE_LIMIT_PER_MINUTE` | Không | `5` | Hạn mức gọi chẩn đoán sâu L3 cho mỗi user/phút (cảnh báo tại 80%). |
+| `L3_RATE_LIMIT_PER_MINUTE` | Không | `10` | Hạn mức gọi chẩn đoán sâu L3 cho mỗi user/phút (cảnh báo tại 80%). |
 | `ALLOW_LOCAL_DEV_SSO` | Không | `false` | Bật tạo/kiểm tra mock token cho local dev (luôn bị tắt trong Prod). |
 | `USE_FIRESTORE_TICKETS`| Không | `false` | Bật Firestore backend cho ticket storage (tự động bật trên Cloud Run). |
 | `KNOWLEDGE_BACKEND` | Không | `in_memory` | Backend cho RAG (`in_memory` hoặc `bigquery`). |

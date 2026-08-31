@@ -52,6 +52,9 @@ high_reasoning_model = Gemini(
     retry_options=types.HttpRetryOptions(attempts=2),
 )
 
+from contextvars import ContextVar
+_current_l3_soft_warning: ContextVar[Optional[str]] = ContextVar("_current_l3_soft_warning", default=None)
+
 async def save_session_to_memory_callback(*args, **kwargs) -> None:
     """
     Defensively persists user session context and resolution history to Vertex AI Memory Bank.
@@ -94,7 +97,10 @@ async def semantic_cache_before_model_callback(
                 custom_metadata={"rate_limited": True, "tier": "L3"}
             )
         if is_soft_warning and warn_msg:
+            _current_l3_soft_warning.set(warn_msg)
             logging.getLogger("it_helpdesk_agent").info("User %s soft quota reached: %s", user_id, warn_msg)
+        else:
+            _current_l3_soft_warning.set(None)
 
     # 2. Check semantic cache
     if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
@@ -217,25 +223,50 @@ async def semantic_cache_after_model_callback(
         except Exception as e:
             logging.getLogger("it_helpdesk_agent").debug("Failed to record model interaction telemetry: %s", e)
 
-    # 2. Persist to Semantic Cache if eligible
+    # 2. Check if there is an active L3 soft warning to deliver to the user
+    soft_warn = _current_l3_soft_warning.get()
+    modified_response = None
+    if soft_warn:
+        _current_l3_soft_warning.set(None)
+        if llm_response.content and getattr(llm_response.content, "parts", None):
+            new_parts = []
+            warn_inserted = False
+            for p in llm_response.content.parts:
+                if hasattr(p, "text") and p.text and not warn_inserted:
+                    new_parts.append(types.Part.from_text(text=f"{soft_warn}\n\n{p.text}"))
+                    warn_inserted = True
+                else:
+                    new_parts.append(p)
+            if not warn_inserted:
+                new_parts.insert(0, types.Part.from_text(text=soft_warn))
+
+            meta = dict(llm_response.custom_metadata or {})
+            meta["soft_warning"] = soft_warn
+
+            modified_response = LlmResponse(
+                content=types.Content(role=llm_response.content.role, parts=new_parts),
+                custom_metadata=meta
+            )
+
+    # 3. Persist to Semantic Cache if eligible
     if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
-        return None
+        return modified_response
 
     if is_cached or is_rate_limited or getattr(llm_response, "error_code", None):
-        return None
+        return modified_response
 
     if tools_called or not llm_response.content or not getattr(llm_response.content, "parts", None):
-        return None
+        return modified_response
 
     response_parts = [p.text for p in llm_response.content.parts if hasattr(p, "text") and p.text]
     response_text = " ".join(response_parts).strip()
     if not response_text:
-        return None
+        return modified_response
 
     if user_query and len(user_query) >= 3:
         # Fail-Closed: If user context is missing (unauthenticated or lost contextvar), do NOT cache
         if not user or not user.user_id:
-            return None
+            return modified_response
 
         # Multi-tenant isolation: always store with is_public=False scoped strictly to user.user_id
         cache = get_semantic_cache()
@@ -247,7 +278,7 @@ async def semantic_cache_after_model_callback(
             tier=agent_name
         )
 
-    return None
+    return modified_response
 
 # Singleton Toolsets
 rag_mcp = get_enterprise_rag_mcp_toolset()

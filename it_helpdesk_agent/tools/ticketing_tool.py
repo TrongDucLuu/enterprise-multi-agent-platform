@@ -229,8 +229,9 @@ def route_ticket_to_tier(
     if err_resp:
         return err_resp
 
+    soft_warning_msg = None
     if target_tier in ["L3_Deep_Diagnostics", "L3"]:
-        from it_helpdesk_agent.app_utils.rate_limiter import check_l3_rate_limit
+        from it_helpdesk_agent.app_utils.rate_limiter import check_l3_rate_limit_with_warning
         # Rate limit based on the caller (not the ticket owner) - consistent with
         # semantic_cache_before_model_callback in agent.py. If checked against ticket.user_id,
         # an admin escalating another employee's ticket would deplete that employee's L3 quota.
@@ -241,14 +242,17 @@ def route_ticket_to_tier(
         except Exception:
             caller_id = None
 
-        allowed, rem, retry_after = check_l3_rate_limit(caller_id)
+        allowed, rem, retry_after, is_soft_warning, warn_msg = check_l3_rate_limit_with_warning(caller_id)
         if not allowed:
+            l3_rpm = int(os.getenv("L3_RATE_LIMIT_PER_MINUTE", "10"))
             return {
                 "status": "error",
                 "error_code": "L3_RATE_LIMIT_EXCEEDED",
-                "message": f"Hạn mức leo thang lên L3 phân tích chuyên sâu đã vượt quá giới hạn (10 lượt/phút). Vui lòng thử lại sau {retry_after}s.",
+                "message": f"Hạn mức leo thang lên L3 phân tích chuyên sâu đã vượt quá giới hạn ({l3_rpm} lượt/phút). Vui lòng thử lại sau {retry_after}s.",
                 "ticket_id": ticket.id
             }
+        if is_soft_warning and warn_msg:
+            soft_warning_msg = warn_msg
     
     ticket.assigned_tier = target_tier
     if target_tier in ["L2_Enterprise_RAG", "L3_Deep_Diagnostics", "Human_Ops"]:
@@ -256,11 +260,15 @@ def route_ticket_to_tier(
     ticket.updated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
     _persist_ticket_to_storage(ticket)
     
-    return {
+    resp = {
         "status": "success",
         "message": f"Ticket {ticket.id} routed to '{target_tier}'. Reason: {reason}",
         "ticket": ticket.model_dump()
     }
+    if soft_warning_msg:
+        resp["soft_warning"] = soft_warning_msg
+        resp["message"] += f"\n{soft_warning_msg}"
+    return resp
 
 
 def list_user_tickets(user_id: str) -> dict:
