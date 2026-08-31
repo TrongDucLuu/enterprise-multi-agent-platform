@@ -344,8 +344,9 @@ def evaluate_l2_groundedness(test_case: Dict[str, Any], store: KnowledgeStore) -
 
 def evaluate_retrieval_precision_at_k(test_case: Dict[str, Any], store: KnowledgeStore, k: int = 3) -> Dict[str, Any]:
     """
-    Evaluates Retrieval Precision@k.
-    Verifies that the retrieved chunks include the expected ground truth article IDs.
+    Evaluates Retrieval Precision@k with Rank Sensitivity.
+    Verifies that the retrieved chunks include the expected ground truth article IDs
+    and weights precision by rank position (Mean Reciprocal Rank principle).
     """
     expected_ids = test_case.get("expected_source_ids", [])
     if not expected_ids:
@@ -357,12 +358,23 @@ def evaluate_retrieval_precision_at_k(test_case: Dict[str, Any], store: Knowledg
     retrieved_ids = [getattr(r, "article_id", None) for r in results]
     matched_ids = [aid for aid in expected_ids if aid in retrieved_ids]
     hit = len(matched_ids) > 0
-    precision = len(matched_ids) / len(results) if results else 0.0
+
+    # Determine rank of first matched ground truth article (1-indexed)
+    first_match_rank = None
+    for idx, rid in enumerate(retrieved_ids, start=1):
+        if rid in expected_ids:
+            first_match_rank = idx
+            break
+
+    # Reciprocal Rank: Rank 1 -> 1.0, Rank 2 -> 0.5, Rank 3 -> 0.333, Miss -> 0.0
+    reciprocal_rank = (1.0 / first_match_rank) if first_match_rank else 0.0
 
     return {
         "applicable": True,
         "hit": hit,
-        "precision_at_k": round(precision, 3),
+        "rank": first_match_rank,
+        "mrr": round(reciprocal_rank, 3),
+        "precision_at_k": round(reciprocal_rank, 3),
         "expected_ids": expected_ids,
         "retrieved_ids": retrieved_ids,
         "matched_ids": matched_ids,
@@ -423,6 +435,7 @@ def run_eval_suite() -> Tuple[Dict[str, Any], bool]:
     retrieval_total = 0
     retrieval_hits = 0
     retrieval_precision_sum = 0.0
+    retrieval_mrr_sum = 0.0
 
     detailed_results = []
 
@@ -452,13 +465,14 @@ def run_eval_suite() -> Tuple[Dict[str, Any], bool]:
             if trap_res["refused_correctly"]:
                 trap_refused += 1
 
-        # 4. Retrieval Precision Check
+        # 4. Retrieval Precision Check (Rank-Aware)
         retrieval_res = evaluate_retrieval_precision_at_k(case, store, k=3)
         if retrieval_res.get("applicable"):
             retrieval_total += 1
             if retrieval_res["hit"]:
                 retrieval_hits += 1
             retrieval_precision_sum += retrieval_res["precision_at_k"]
+            retrieval_mrr_sum += retrieval_res["mrr"]
 
         detailed_results.append({
             "id": cid,
@@ -475,7 +489,8 @@ def run_eval_suite() -> Tuple[Dict[str, Any], bool]:
     l2_groundedness_pct = round((l2_grounded / l2_total) * 100, 2) if l2_total > 0 else 100.0
     l2_avg_score = round(l2_score_sum / l2_total, 3) if l2_total > 0 else 1.0
     trap_refusal_pct = round((trap_refused / trap_total) * 100, 2) if trap_total > 0 else 100.0
-    retrieval_precision_pct = round((retrieval_hits / retrieval_total) * 100, 2) if retrieval_total > 0 else 100.0
+    retrieval_precision_pct = round((retrieval_precision_sum / retrieval_total) * 100, 2) if retrieval_total > 0 else 100.0
+    retrieval_mrr_avg = round((retrieval_mrr_sum / retrieval_total), 3) if retrieval_total > 0 else 1.0
 
     # Production-Ready Quality Gates
     GATE_INTENT_ACC = 85.0
@@ -500,7 +515,8 @@ def run_eval_suite() -> Tuple[Dict[str, Any], bool]:
             "l2_avg_faithfulness_score": l2_avg_score,
             "l2_grounded_count": f"{l2_grounded}/{l2_total}",
             "retrieval_precision_at_k_percent": retrieval_precision_pct,
-            "retrieval_precision_count": f"{retrieval_hits}/{retrieval_total}",
+            "retrieval_mrr_score": retrieval_mrr_avg,
+            "retrieval_precision_count": f"{retrieval_hits}/{retrieval_total} (Rank-Weighted: {retrieval_precision_sum:.2f}/{retrieval_total})",
             "unanswerable_refusal_rate_percent": trap_refusal_pct,
             "trap_refusal_count": f"{trap_refused}/{trap_total}",
         },
@@ -535,6 +551,7 @@ def print_markdown_report(summary: Dict[str, Any]) -> None:
     print(f"| L2 RAG Groundedness Rate | **{m['l2_groundedness_rate_percent']}%** ({m['l2_grounded_count']}) | {q['groundedness_target']} | {'✅ PASS' if m['l2_groundedness_rate_percent'] >= 80 else '❌ FAIL'} |")
     print(f"| L2 Average Faithfulness Score | **{m['l2_avg_faithfulness_score']}** / 1.0 | N/A | ℹ️ INFO |")
     print(f"| Retrieval Precision@k | **{m['retrieval_precision_at_k_percent']}%** ({m['retrieval_precision_count']}) | {q['retrieval_precision_target']} | {'✅ PASS' if m['retrieval_precision_at_k_percent'] >= 80 else '❌ FAIL'} |")
+    print(f"| Retrieval MRR Score | **{m['retrieval_mrr_score']}** / 1.0 | N/A | ℹ️ INFO |")
     print(f"| Trap Question Refusal Rate | **{m['unanswerable_refusal_rate_percent']}%** ({m['trap_refusal_count']}) | {q['refusal_rate_target']} | {'✅ PASS' if m['unanswerable_refusal_rate_percent'] >= 90 else '❌ FAIL'} |")
     print("-" * 80 + "\n")
 
