@@ -63,3 +63,16 @@ variable "bigquery_kb_dataset" {
   type        = string
   default     = "it_helpdesk_kb"
 }
+
+variable "max_instance_count" {
+  description = "Maximum number of Cloud Run container instances to prevent runaway demo costs"
+  type        = number
+  default     = 5
+}
+
+variable "min_instance_count" {
+  description = "Minimum number of Cloud Run container instances (0 for scale to zero)"
+  type        = number
+  default     = 0
+}
+

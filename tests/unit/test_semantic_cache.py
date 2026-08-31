@@ -102,3 +102,56 @@ def test_semantic_cache_lru_eviction():
 
     stats = cache.get_stats()
     assert stats["total_entries"] == 2
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_callbacks_roundtrip():
+    from unittest.mock import MagicMock
+    from google.genai import types
+    from google.adk.models import LlmRequest, LlmResponse
+    from it_helpdesk_agent.agent import (
+        semantic_cache_before_model_callback,
+        semantic_cache_after_model_callback
+    )
+
+    cache = get_semantic_cache()
+    cache.clear()
+
+    # 1. Setup mock context and query
+    mock_ctx = MagicMock()
+    mock_ctx._invocation_context.agent.name = "l1_selfservice_agent"
+    
+    mock_user_event = MagicMock()
+    mock_user_event.author = "user"
+    mock_user_event.content.parts = [types.Part.from_text(text="Hướng dẫn cài đặt VPN FortiClient trên macOS")]
+    mock_ctx._invocation_context._get_events.return_value = [mock_user_event]
+
+    req = LlmRequest(
+        contents=[
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text="Hướng dẫn cài đặt VPN FortiClient trên macOS")]
+            )
+        ]
+    )
+
+    # 2. Before callback should miss initially
+    res_before = await semantic_cache_before_model_callback(mock_ctx, req)
+    assert res_before is None
+
+    # 3. Simulate Gemini responding and calling after_model_callback
+    simulated_resp = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[types.Part.from_text(text="Để cài FortiClient trên macOS: 1. Tải DMG từ portal. 2. Cấp quyền System Extension trong Security Settings.")]
+        )
+    )
+
+    await semantic_cache_after_model_callback(mock_ctx, simulated_resp)
+
+    # 4. Now before callback should hit directly without calling Gemini!
+    cached_res = await semantic_cache_before_model_callback(mock_ctx, req)
+    assert cached_res is not None
+    assert cached_res.custom_metadata.get("cached") is True
+    assert "Để cài FortiClient trên macOS" in cached_res.content.parts[0].text
+

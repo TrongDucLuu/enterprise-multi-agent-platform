@@ -266,8 +266,8 @@ def test_bigquery_vector_store_allowed_systems_parameterization():
     assert "allowed_systems_param" in param_names
 
 
-def test_bigquery_fallback_logging_warning(caplog):
-    """Verify that BigQuery failure logs warning for Cloud Monitoring alerting."""
+def test_bigquery_fallback_logging_error(caplog):
+    """Verify that BigQuery failure logs error for Cloud Monitoring alerting."""
     import logging
     store = BigQueryVectorKnowledgeStore(project_id="test-proj")
     
@@ -275,14 +275,17 @@ def test_bigquery_fallback_logging_warning(caplog):
     mock_bq_client.query.side_effect = Exception("BigQuery Connection Timeout")
     store._bq_client = mock_bq_client
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.ERROR):
         results = store.search(query="SAP PO", system="ERP", limit=1)
         # Verify graceful fallback to in-memory
         assert len(results) > 0
         assert results[0].system == "ERP"
 
-    # Verify warning log was emitted
-    assert any("BigQuery vector search failed" in record.message for record in caplog.records)
+    # Verify ERROR log was emitted
+    assert any(
+        record.levelno == logging.ERROR and "BigQuery vector search failed" in record.message 
+        for record in caplog.records
+    )
 
 
 

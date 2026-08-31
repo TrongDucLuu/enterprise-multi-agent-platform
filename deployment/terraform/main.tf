@@ -38,12 +38,6 @@ resource "google_project_iam_member" "vertex_ai_user" {
   member  = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-resource "google_project_iam_member" "bigquery_data_editor" {
-  project = var.project_id
-  role    = "roles/bigquery.dataEditor"
-  member  = "serviceAccount:${google_service_account.agent_sa.email}"
-}
-
 resource "google_project_iam_member" "bigquery_job_user" {
   project = var.project_id
   role    = "roles/bigquery.jobUser"
@@ -56,10 +50,12 @@ resource "google_project_iam_member" "log_writer" {
   member  = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-resource "google_project_iam_member" "storage_user" {
-  project = var.project_id
-  role    = "roles/storage.objectAdmin"
-  member  = "serviceAccount:${google_service_account.agent_sa.email}"
+# Scope storage admin strictly to the designated AI assets bucket (Least Privilege)
+resource "google_storage_bucket_iam_member" "ai_assets_storage_user" {
+  count  = var.ai_assets_bucket != "" ? 1 : 0
+  bucket = var.ai_assets_bucket
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
 # 5. BigQuery Dataset for Enterprise Knowledge Base (Serverless Vector Storage)
@@ -71,6 +67,14 @@ resource "google_bigquery_dataset" "kb_dataset" {
   location                   = var.region
   delete_contents_on_destroy = false
   depends_on                 = [google_project_service.services]
+}
+
+# Scope BigQuery read-only access strictly to the KB dataset (Least Privilege)
+resource "google_bigquery_dataset_iam_member" "kb_dataset_viewer" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.kb_dataset.dataset_id
+  role       = "roles/bigquery.dataViewer"
+  member     = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
 # 6. Secret Manager Configuration
@@ -174,6 +178,11 @@ resource "google_cloud_run_v2_service" "default" {
           memory = "2Gi"
         }
       }
+    }
+
+    scaling {
+      min_instance_count = var.min_instance_count
+      max_instance_count = var.max_instance_count
     }
   }
   

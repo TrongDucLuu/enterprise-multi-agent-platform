@@ -223,8 +223,8 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 from google.cloud import bigquery
                 self._bq_client = bigquery.Client(project=self.project_id)
             except Exception as e:
-                # Severity-aware warning logging when BigQuery client fails to initialize
-                logger.warning("BigQuery client initialization failed (%s). Operating in fallback mode.", e)
+                # Severity-aware error logging when BigQuery client fails to initialize (alerts SRE/DevOps)
+                logger.error("BigQuery client initialization failed (%s). Operating in fallback mode.", e)
                 self._bq_client = None
         return self._bq_client
 
@@ -327,8 +327,8 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 ))
             return results
         except Exception as e:
-            # Severity-aware warning for BigQuery fallback to enable Cloud Logging alerting
-            logger.warning("BigQuery vector search failed (%s). Falling back to in-memory store.", e)
+            # Severity-aware error for BigQuery fallback to enable Cloud Logging incident alerting
+            logger.error("BigQuery vector search failed (%s). Falling back to in-memory store.", e)
             return InMemoryKnowledgeStore().search(query, system, limit, allowed_systems=allowed_systems)
 
     def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
@@ -357,7 +357,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                     keywords=list(r.keywords) if r.keywords else []
                 )
         except Exception as e:
-            logger.warning("BigQuery get_article_by_id failed (%s). Falling back to in-memory store.", e)
+            logger.error("BigQuery get_article_by_id failed (%s). Falling back to in-memory store.", e)
         return InMemoryKnowledgeStore().get_article_by_id(article_id)
 
 

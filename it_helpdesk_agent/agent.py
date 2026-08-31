@@ -1,9 +1,14 @@
+import os
+from typing import Optional
 from google.adk.agents import Agent
 from google.adk.apps import App
-from google.adk.models import Gemini
+from google.adk.models import Gemini, LlmRequest, LlmResponse
+from google.adk.agents.callback_context import CallbackContext
 from google.adk.tools import load_memory_tool, preload_memory_tool
 from google.genai import types
 from it_helpdesk_agent.app_utils.env import init_environment
+from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
+from it_helpdesk_agent.app_utils.sso_auth import current_sso_user
 from it_helpdesk_agent.tools.mcp_config import get_enterprise_rag_mcp_toolset
 from it_helpdesk_agent.tools.ticketing_tool import (
     create_helpdesk_ticket,
@@ -27,12 +32,13 @@ fast_model = Gemini(
 )
 
 # 2. High-reasoning pro model for L3 deep diagnostics & compliance analysis
+# Configured with attempts=2 to prevent runaway token costs on expensive reasoning retries
 high_reasoning_model = Gemini(
     model="gemini-3-pro-preview",
     vertexai=True,
     project=PROJECT_ID,
     location=MODEL_LOC,
-    retry_options=types.HttpRetryOptions(attempts=3),
+    retry_options=types.HttpRetryOptions(attempts=2),
 )
 
 async def save_session_to_memory_callback(*args, **kwargs) -> None:
@@ -44,6 +50,115 @@ async def save_session_to_memory_callback(*args, **kwargs) -> None:
         await ctx._invocation_context.memory_service.add_session_to_memory(
             ctx._invocation_context.session
         )
+
+
+async def semantic_cache_before_model_callback(
+    callback_context: CallbackContext,
+    llm_request: LlmRequest
+) -> Optional[LlmResponse]:
+    """
+    Checks the semantic cache for matching questions before calling Gemini.
+    If hit, returns LlmResponse immediately to short-circuit the model call and save tokens.
+    """
+    if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
+        return None
+
+    if not llm_request.contents:
+        return None
+
+    last_content = llm_request.contents[-1]
+    if getattr(last_content, "role", None) not in ("user", None, ""):
+        return None
+
+    parts = getattr(last_content, "parts", []) or []
+    query_parts = [p.text for p in parts if hasattr(p, "text") and p.text]
+    query_text = " ".join(query_parts).strip()
+    if not query_text or len(query_text) < 3:
+        return None
+
+    user = current_sso_user.get()
+    user_id = user.user_id if user else None
+
+    cache = get_semantic_cache()
+    cached = cache.get(query=query_text, user_id=user_id)
+    if cached:
+        return LlmResponse(
+            content=types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=cached["response"])]
+            ),
+            custom_metadata={"cached": True, "cached_query": cached.get("cached_query", query_text)}
+        )
+    return None
+
+
+async def semantic_cache_after_model_callback(
+    callback_context: CallbackContext,
+    llm_response: LlmResponse
+) -> Optional[LlmResponse]:
+    """
+    Persists successful conversational text responses into Semantic Cache for subsequent queries.
+    """
+    if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
+        return None
+
+    if not llm_response or getattr(llm_response, "error_code", None):
+        return None
+
+    if llm_response.custom_metadata and llm_response.custom_metadata.get("cached"):
+        return None
+
+    if not llm_response.content or not getattr(llm_response.content, "parts", None):
+        return None
+
+    # Skip caching if response contains function/tool calls
+    for p in llm_response.content.parts:
+        if hasattr(p, "function_call") and p.function_call:
+            return None
+
+    response_parts = [p.text for p in llm_response.content.parts if hasattr(p, "text") and p.text]
+    response_text = " ".join(response_parts).strip()
+    if not response_text:
+        return None
+
+    inv_ctx = getattr(callback_context, "_invocation_context", None)
+    user_query = ""
+    if inv_ctx:
+        events = inv_ctx._get_events(current_invocation=True) if hasattr(inv_ctx, "_get_events") else []
+        for ev in reversed(events):
+            if getattr(ev, "author", "") == "user" and getattr(ev, "content", None) and getattr(ev.content, "parts", None):
+                for p in ev.content.parts:
+                    if hasattr(p, "text") and p.text:
+                        user_query = p.text
+                        break
+                if user_query:
+                    break
+
+        if not user_query and getattr(inv_ctx, "session", None) and hasattr(inv_ctx.session, "events"):
+            for ev in reversed(inv_ctx.session.events):
+                if getattr(ev, "author", "") == "user" and getattr(ev, "content", None) and getattr(ev.content, "parts", None):
+                    for p in ev.content.parts:
+                        if hasattr(p, "text") and p.text:
+                            user_query = p.text
+                            break
+                    if user_query:
+                        break
+
+    if user_query and len(user_query) >= 3:
+        user = current_sso_user.get()
+        user_id = user.user_id if user else None
+        agent_name = inv_ctx.agent.name if inv_ctx and hasattr(inv_ctx, "agent") else "root"
+
+        cache = get_semantic_cache()
+        cache.set(
+            query=user_query,
+            response=response_text,
+            user_id=user_id,
+            is_public=(user_id is None),
+            tier=agent_name
+        )
+
+    return None
 
 # Singleton Toolsets
 rag_mcp = get_enterprise_rag_mcp_toolset()
@@ -76,6 +191,8 @@ l1_selfservice_agent = Agent(
         list_user_tickets,
         load_memory_tool.LoadMemoryTool(),
     ],
+    before_model_callback=semantic_cache_before_model_callback,
+    after_model_callback=semantic_cache_after_model_callback,
     after_agent_callback=save_session_to_memory_callback,
 )
 
@@ -105,6 +222,8 @@ l2_enterprise_rag_agent = Agent(
         get_ticket_details,
         load_memory_tool.LoadMemoryTool(),
     ],
+    before_model_callback=semantic_cache_before_model_callback,
+    after_model_callback=semantic_cache_after_model_callback,
     after_agent_callback=save_session_to_memory_callback,
 )
 
@@ -137,6 +256,8 @@ l3_deep_diagnostics_agent = Agent(
         get_ticket_details,
         load_memory_tool.LoadMemoryTool(),
     ],
+    before_model_callback=semantic_cache_before_model_callback,
+    after_model_callback=semantic_cache_after_model_callback,
     after_agent_callback=save_session_to_memory_callback,
 )
 
@@ -173,6 +294,8 @@ root_orchestrator = Agent(
         list_user_tickets,
         get_ticket_details,
     ],
+    before_model_callback=semantic_cache_before_model_callback,
+    after_model_callback=semantic_cache_after_model_callback,
     after_agent_callback=save_session_to_memory_callback,
     sub_agents=[l1_selfservice_agent, l2_enterprise_rag_agent, l3_deep_diagnostics_agent]
 )

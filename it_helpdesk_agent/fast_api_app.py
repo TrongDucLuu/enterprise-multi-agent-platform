@@ -13,6 +13,7 @@ from it_helpdesk_agent.app_utils.sso_auth import (
     ALLOW_LOCAL_DEV_SSO,
 )
 from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
+from it_helpdesk_agent.app_utils.rate_limiter import RateLimitMiddleware
 
 PROJECT_ID, MODEL_LOC, SERVICE_LOC, SECRETS = init_environment()
 
@@ -67,7 +68,10 @@ app: FastAPI = get_fast_api_app(
     otel_to_cloud=OTEL_TO_CLOUD,
 )
 
-# 1. Protect ALL endpoints (Agent runs, streams, API calls) with global authentication middleware
+# 1. Protect endpoints with rate limiting to prevent bot abuse and runaway demo costs
+app.add_middleware(RateLimitMiddleware)
+
+# 2. Protect ALL endpoints (Agent runs, streams, API calls) with global authentication middleware
 app.add_middleware(SSOAuthenticationMiddleware)
 
 # 2. Authenticated user profile inspection endpoint
