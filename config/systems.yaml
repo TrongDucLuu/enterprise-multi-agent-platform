@@ -158,5 +158,5 @@ document_processing:
 # Enterprise RAG & BigQuery Retrieval Configuration
 retrieval:
   fraction_lists_to_search: 0.05              # Fraction of IVF lists to search (0.0 to 1.0)
-  hybrid_search_enabled: false                # Enable lexical BM25/keyword boost alongside vector search
+  hybrid_search_enabled: true                 # Enable lexical BM25/keyword boost alongside vector search
 

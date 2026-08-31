@@ -307,7 +307,7 @@ locust -f scripts/load_test/locustfile.py --host="https://helpdesk.customer.corp
 | **Vector Index Coverage** | Giám sát qua `INFORMATION_SCHEMA.VECTOR_INDEXES`, cảnh báo nếu coverage = 0% trên tập dữ liệu lớn. | ✅ Bắt buộc |
 | **Section Hierarchy** | Trường RECORD `section_hierarchy` được trích xuất và lưu trữ đầy đủ trong BigQuery. | ✅ Bắt buộc |
 | **Deduplication & CDC** | Hash `content_hash` bằng SHA-256 được cập nhật chính xác, không trùng lặp ID trong staging. | ✅ Bắt buộc |
-| **Redis Shared State & HA** | Memorystore Redis kết nối qua Direct VPC Egress, Rate Limit Fail-Open và Cache Soft Fail-Closed / RediSearch. | ✅ Bắt buộc |
+| **Redis Shared State & HA** | Memorystore Redis kết nối qua Direct VPC Egress, Rate Limit Fail-Open và Cache Soft Fail-Closed (Candidate Vector Scan). | ✅ Bắt buộc |
 | **Load Test Benchmark** | Đạt p95 Latency < 2.5s ở bậc tải Peak CCU theo cam kết SLA. | ✅ Bắt buộc |
 
 

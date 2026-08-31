@@ -267,3 +267,70 @@ async def test_contextvar_propagation_across_threadpool():
         current_sso_user.reset(token)
 
 
+def test_is_safe_public_faq_word_boundary_matching():
+    """
+    P2.7: Word Boundary Matching for _is_safe_public_faq.
+    Verifies that substring 'po' does not prevent public caching for queries
+    like 'wifi support' or 'quy định it về powerpoint', while actual sensitive
+    terms like 'purchase order của tôi' and 'kiểm tra PO 123' remain private.
+    """
+    from it_helpdesk_agent.agent import _is_safe_public_faq
+
+    # 1. Safe queries that contain 'po' as substring inside words like 'support', 'powerpoint', 'portal', 'policy'
+    assert _is_safe_public_faq("wifi support", "l1_selfservice_agent", []) is True
+    assert _is_safe_public_faq("quy định it về powerpoint", "l1_selfservice_agent", []) is True
+    assert _is_safe_public_faq("hướng dẫn cài đặt vpn văn phòng", "l1_selfservice_agent", []) is True
+
+    # 2. Private queries containing standalone PO or purchase order
+    assert _is_safe_public_faq("purchase order của tôi", "l1_selfservice_agent", []) is False
+    assert _is_safe_public_faq("kiểm tra mã PO 12345", "l1_selfservice_agent", []) is False
+    assert _is_safe_public_faq("hướng dẫn reset password", "l1_selfservice_agent", []) is False
+
+    # 3. Non-L1 agents or tool-calling agents must never be public FAQ
+    assert _is_safe_public_faq("wifi support", "l2_operator_agent", []) is False
+    assert _is_safe_public_faq("wifi support", "l1_selfservice_agent", ["search_knowledge_base"]) is False
+
+
+def test_redis_semantic_cache_deserialization_and_errors_log_warning(caplog):
+    """
+    P2.6: Verifies that Redis errors, pipeline errors, and corrupted/invalid cache entry
+    deserialization emit log at WARNING level so operators are alerted.
+    """
+    import logging
+    import fakeredis
+    from it_helpdesk_agent.app_utils.semantic_cache import RedisSemanticCache
+
+    caplog.set_level(logging.WARNING)
+
+    # 1. Corrupted entry deserialization
+    fake_server = fakeredis.FakeServer()
+    r = fakeredis.FakeStrictRedis(server=fake_server, decode_responses=True)
+    cache = RedisSemanticCache(redis_client=r, similarity_threshold=0.85)
+
+    # Inject corrupted JSON into public cache
+    r.sadd("sem_cache:keys:public", "corrupted_eid")
+    r.set("sem_cache:entry:corrupted_eid", "NOT_A_VALID_JSON{")
+
+    # get() should skip corrupted entry and log a warning
+    res = cache.get("Hướng dẫn Wi-Fi")
+    assert res is None
+
+    warning_messages = [rec.message for rec in caplog.records if rec.levelno == logging.WARNING]
+    assert any("deserializing" in msg.lower() or "skipping entry" in msg.lower() for msg in warning_messages)
+
+    # 2. Redis operation failure
+    class ErrorRedis:
+        def smembers(self, key):
+            raise RuntimeError("Simulated Redis socket failure")
+        def pipeline(self):
+            raise RuntimeError("Simulated Redis pipeline failure")
+
+    err_cache = RedisSemanticCache(redis_client=ErrorRedis())
+    err_res = err_cache.get("Lỗi kết nối", user_id="user_1")
+    assert err_res is None
+
+    warning_messages = [rec.message for rec in caplog.records if rec.levelno == logging.WARNING]
+    assert any("error" in msg.lower() or "soft fail-closed" in msg.lower() for msg in warning_messages)
+
+
+

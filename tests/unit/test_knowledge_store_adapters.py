@@ -341,3 +341,72 @@ def test_mutation_removing_source_uri_breaks_citation_integrity():
     assert results[0].source_uri is not None
     assert results[0].source_uri == "docs/hrm_timesheet_sync.md"
 
+
+def test_hybrid_search_enabled_unified_default_across_backends(monkeypatch):
+    """
+    P1.3 Hybrid Search Default Parity:
+    Verifies that when hybrid_search_enabled is omitted from config,
+    both InMemoryKnowledgeStore and BigQueryVectorKnowledgeStore resolve to True.
+    """
+    monkeypatch.setattr(
+        "it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store.get_retrieval_config",
+        lambda: {"fraction_lists_to_search": 0.05}  # key hybrid_search_enabled missing
+    )
+
+    # BigQuery store check
+    mock_bq = MagicMock()
+    mock_query_job = MagicMock()
+    mock_query_job.result.return_value = []
+    mock_bq.query.return_value = mock_query_job
+
+    store_bq = BigQueryVectorKnowledgeStore(
+        project_id="test-project",
+        dataset_id="test_kb",
+        table_name="articles",
+        bq_client=mock_bq,
+        embedding_fn=lambda t: [0.1] * 64
+    )
+
+    store_bq.search("Lỗi ME21N", system="ERP", limit=3)
+    sql_bq = mock_bq.query.call_args[0][0]
+    # Since default is True, hybrid SQL with UNNEST(@query_tokens_param) must be generated
+    assert "UNNEST(@query_tokens_param)" in sql_bq
+    assert "WITH vector_matches AS" in sql_bq
+
+
+def test_hybrid_search_token_capping_50_words(monkeypatch):
+    """
+    P1.4 Hybrid Search Token Capping:
+    Verifies that a 50-word input query is capped to at most 10 unique tokens in BigQuery SQL,
+    prioritizing longer technical/transaction tokens.
+    """
+    mock_bq = MagicMock()
+    mock_query_job = MagicMock()
+    mock_query_job.result.return_value = []
+    mock_bq.query.return_value = mock_query_job
+
+    store_bq = BigQueryVectorKnowledgeStore(
+        project_id="test-project",
+        dataset_id="test_kb",
+        table_name="articles",
+        bq_client=mock_bq,
+        embedding_fn=lambda t: [0.1] * 64
+    )
+
+    long_50_word_query = (
+        "hướng dẫn xử lý lỗi khi người dùng không thể tạo đơn đặt hàng purchase order "
+        "trên phân hệ SAP ERP với mã giao dịch ME21N và bị chặn bởi authorization object "
+        "M_BEST_EKO cùng mã lỗi ZFI_POSTING_001 trong khi thực hiện giao dịch kế toán tài chính "
+        "kỳ đóng OB52 và các thiết lập tài khoản phụ cấp chi tiết"
+    )
+
+    store_bq.search(long_50_word_query, system="ERP", limit=3)
+    job_config = mock_bq.query.call_args[1]["job_config"]
+    tokens_param = next(p for p in job_config.query_parameters if p.name == "query_tokens_param")
+
+    assert len(tokens_param.values) <= 10
+    # Long technical tokens should be present
+    assert "ZFI_POSTING_001" in tokens_param.values
+    assert "AUTHORIZATION" in tokens_param.values or "M_BEST_EKO" in tokens_param.values
+
+

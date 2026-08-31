@@ -227,22 +227,18 @@ LIMIT @limit;
 
 ## 5. CƠ CHẾ TĂNG TỐC VÀ TỐI ƯU HÓA CHI PHÍ (SEMANTIC CACHE & RATE LIMITING)
 
-### 5.1. Cơ chế RediSearch Vector Search, Semantic Cache & Circuit Breaker
+### 5.1. Cơ chế Redis Vector Semantic Cache, Cosine Similarity & Circuit Breaker
 - **Module:** `it_helpdesk_agent.app_utils.semantic_cache`
-- **Nguyên lý RediSearch Server-Side KNN:** 
-  - Khởi tạo index `idx:sem_cache` trên Redis Hash (prefix `sem_cache:h:`) với trường `vector VECTOR FLAT 6 TYPE FLOAT32 DIM 768 DISTANCE_METRIC COSINE`.
-  - Thực thi truy vấn server-side KNN kết hợp Multi-Tenant Tag Filtering:
-    ```
-    (@is_public:{1} | @user_id:{clean_uid})=>[KNN 1 @vector $vec AS score]
-    ```
-  - Chuyển đổi khoảng cách Cosine sang điểm tương đồng: $\text{similarity} = \max(0.0, 1.0 - \text{distance})$.
-  - Khắc phục triệt để chi phí mạng $O(N \cdot D)$ của cơ chế client-side `mget`, giảm độ trễ truy vấn vector phân tán xuống $O(\log N)$.
+- **Nguyên lý Multi-Tenant Candidate-Set Vector Scan:** 
+  - Lưu trữ embedding vector và phản hồi tương ứng theo cấu trúc Multi-Tenant Sets (`sem_cache:keys:public` và `sem_cache:keys:user:{uid}`).
+  - Khi có truy vấn đến, trích xuất danh sách candidate key ids liên quan (public + user-specific), thực hiện batch read `mget` và tính cosine similarity tốc độ cao.
+  - Chuyển đổi khoảng cách Cosine sang điểm tương đồng: $\text{similarity} = \frac{\mathbf{u} \cdot \mathbf{v}}{\|\mathbf{u}\| \|\mathbf{v}\|}$.
 - **Phân Định Ranh Giới An Toàn Public FAQ (`_is_safe_public_faq`):**
   - Chỉ câu hỏi thuộc tầng **L1 Self-Service** (`agent_name == "l1_selfservice_agent"`), **không gọi tool** (`len(tools_called) == 0`), **không chứa từ khóa nhạy cảm** (password reset, unlock account, payroll, salary, PII, ticket ID), và **khớp chủ đề IT FAQ chung** (Wi-Fi, máy in, VPN hướng dẫn cài đặt) mới được gán `is_public=True` và chia sẻ cache đa người dùng.
   - Mọi câu hỏi cá nhân hoặc liên quan đến tài khoản được gắn cứng `is_public=False` và cô lập riêng cho `user_id` sở hữu.
 - **Số Liệu Đo Đạc Thực Tế (Empirical Benchmark 1.000 Entries):**
   - **InMemorySemanticCache**: 1.000 entries write trong 0.015s (68,365 writes/s); Hit Latency: **p50 = 7.19ms**, **p95 = 7.27ms**, **p99 = 7.29ms**.
-  - **RediSearch / Redis Cache**: 1.000 entries write trong 0.200s (5,005 writes/s); Hit Latency: **p50 = 21.19ms**, **p95 = 21.55ms**, **p99 = 28.45ms** (nhanh hơn **57x** so với LLM generation 1.200ms).
+  - **Redis Candidate Scan Cache**: 1.000 entries write trong 0.200s (5,005 writes/s); Hit Latency: **p50 = 21.19ms**, **p95 = 21.55ms**, **p99 = 28.45ms** (nhanh hơn **57x** so với LLM generation 1.200ms).
 - **Circuit Breaker Bảo Vệ Redis:** Tích hợp `RedisCircuitBreaker` (ngưỡng 10 lỗi liên tiếp, thời gian mở mạch 30s) tự động cô lập Redis khi gặp sự cố mạng, bảo vệ 100% thời gian phản hồi của API và phát cảnh báo khẩn `REDIS_CIRCUIT_BREAKER_ALERT`.
 
 ### 5.2. Hệ thống Giới hạn Tốc độ (Authenticated Rate Limiting & JWT Memoization)
@@ -636,7 +632,7 @@ Hệ thống sở hữu bộ kiểm thử tự động toàn diện với **141 
 pie title Phân bổ Bộ Kiểm thử Đơn vị & Tích hợp (141 Test Cases)
     "Security, IDOR, SQLi & Real Role Mapping" : 26
     "Redis Backends, Fail-Open & Circuit Breaker" : 6
-    "Semantic Cache, Cosine & RediSearch" : 9
+    "Semantic Cache, Cosine & Multi-tenant Scan" : 9
     "SSO Auth & OIDC JWKS Verification" : 14
     "Ticketing Tool & Bounded LRU Cache" : 5
     "System Config, Dynamic Loading & Domain Regex" : 11

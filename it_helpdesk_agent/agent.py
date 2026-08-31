@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 from typing import Optional
 from google.adk.agents import Agent
@@ -168,7 +169,7 @@ def _is_safe_public_faq(query: str, agent_name: str, tools_called: list) -> bool
 
     q_lower = query.lower()
 
-    # Strictly forbid caching personal or account-sensitive actions
+    # Strictly forbid caching personal or account-sensitive actions with word-boundary matching
     private_triggers = [
         "mật khẩu", "password", "reset", "đổi pass", "quên pass",
         "mở khóa", "unlock", "tài khoản của tôi", "my account",
@@ -176,19 +177,22 @@ def _is_safe_public_faq(query: str, agent_name: str, tools_called: list) -> bool
         "sđt", "phone", "email cá nhân", "token", "otp", "2fa", "mfa",
         "cccd", "cmnd", "hóa đơn", "po", "purchase order"
     ]
-    if any(k in q_lower for k in private_triggers):
+    # Word boundary matching so that "po" does not match "support", "powerpoint", "portal", "policy"
+    private_pattern = r"(?:\b|_)(?:" + "|".join(re.escape(k) for k in private_triggers) + r")(?:\b|_)"
+    if re.search(private_pattern, q_lower, flags=re.IGNORECASE):
         return False
 
     # Safe general corporate IT topics
     safe_faq_patterns = [
         "wifi", "wi-fi", "mạng", "internet",
         "máy in", "printer", "in ấn",
-        "cài đặt vpn", "hướng dẫn vpn", "vpn văn phòng",
+        "cài đặt vpn", "hướng dẫn vpn", "vpn văn phòng", "vpn",
         "phần mềm tiêu chuẩn", "quy định it", "chính sách bảo mật",
         "giờ làm việc", "hotline it", "thời gian hỗ trợ",
-        "office 365", "chrome", "slack", "zoom"
+        "office 365", "chrome", "slack", "zoom", "powerpoint", "support"
     ]
-    return any(p in q_lower for p in safe_faq_patterns)
+    safe_pattern = r"(?:\b|_)(?:" + "|".join(re.escape(p) for p in safe_faq_patterns) + r")(?:\b|_)"
+    return bool(re.search(safe_pattern, q_lower, flags=re.IGNORECASE))
 
 
 async def semantic_cache_after_model_callback(

@@ -421,56 +421,13 @@ class RedisSemanticCache(BaseSemanticCache):
             )
             self._redis.ping()
             self._record_redis_success()
-            self._init_redisearch_index()
             logger.info(
-                "Connected to Redis Semantic Cache at %s:%s (db=%d, rediSearch=%s)",
-                self._host, self._port, self._db, self._redisearch_available
+                "Connected to Redis Semantic Cache at %s:%s (db=%d)",
+                self._host, self._port, self._db
             )
         except Exception as e:
             self._record_redis_failure(e, "connect")
             self._redis = None
-
-    def _init_redisearch_index(self, dim: int = 128) -> None:
-        """Attempts to initialize or verify RediSearch vector index for O(1) server-side KNN lookup."""
-        if not self._redis:
-            self._redisearch_available = False
-            return
-        try:
-            try:
-                self._redis.execute_command("FT.INFO", "idx:sem_cache")
-                self._redisearch_available = True
-            except Exception as info_err:
-                if "unknown command" in str(info_err).lower():
-                    self._redisearch_available = False
-                    return
-                # Create index if not existing
-                try:
-                    self._redis.execute_command(
-                        "FT.CREATE", "idx:sem_cache",
-                        "ON", "HASH",
-                        "PREFIX", "1", "sem_cache:h:",
-                        "SCHEMA",
-                        "query", "TEXT",
-                        "response", "TEXT",
-                        "user_id", "TAG",
-                        "is_public", "TAG",
-                        "tier", "TAG",
-                        "expires_at", "NUMERIC", "SORTABLE",
-                        "vector", "VECTOR", "FLAT", "6",
-                        "TYPE", "FLOAT32",
-                        "DIM", str(dim),
-                        "DISTANCE_METRIC", "COSINE"
-                    )
-                    self._redisearch_available = True
-                    logger.info("RediSearch Vector Index 'idx:sem_cache' initialized (dim=%d, metric=COSINE).", dim)
-                except Exception as create_err:
-                    if "Index already exists" in str(create_err):
-                        self._redisearch_available = True
-                    else:
-                        logger.debug("RediSearch FT.CREATE skipped/unavailable: %s", create_err)
-                        self._redisearch_available = False
-        except Exception:
-            self._redisearch_available = False
 
     def _generate_embedding(self, text: str) -> Optional[list[float]]:
         if self._embedding_fn:
@@ -543,60 +500,7 @@ class RedisSemanticCache(BaseSemanticCache):
             if self._redis is None:
                 return None
 
-        # 1. Attempt RediSearch Vector Search first if index is active
-        if getattr(self, "_redisearch_available", False):
-            try:
-                import struct
-                vec_bytes = struct.pack(f"{len(query_emb)}f", *query_emb)
-                if user_id:
-                    clean_uid = "".join(c for c in user_id if c.isalnum() or c in ("_", "-"))
-                    filter_expr = f"(@is_public:{{1}} | @user_id:{{{clean_uid}}})"
-                else:
-                    filter_expr = "@is_public:{1}"
-
-                search_query = f"{filter_expr}=>[KNN 1 @vector $vec AS score]"
-                raw_res = self._redis.execute_command(
-                    "FT.SEARCH",
-                    "idx:sem_cache",
-                    search_query,
-                    "PARAMS", "2", "vec", vec_bytes,
-                    "SORTBY", "score", "ASC",
-                    "RETURN", "8", "score", "query", "response", "user_id", "is_public", "tier", "expires_at", "metadata",
-                    "DIALECT", "2"
-                )
-                if raw_res and len(raw_res) > 1 and raw_res[0] > 0:
-                    fields = {}
-                    props = raw_res[2]
-                    if isinstance(props, list):
-                        for i in range(0, len(props), 2):
-                            fields[props[i]] = props[i+1]
-                    elif isinstance(props, dict):
-                        fields = props
-
-                    # RediSearch COSINE metric returns cosine distance (1.0 - cosine_sim)
-                    distance = float(fields.get("score", 2.0))
-                    sim = max(0.0, 1.0 - distance)
-                    exp_at = float(fields.get("expires_at", 0.0))
-
-                    if (exp_at == 0.0 or exp_at > time.time()) and sim >= threshold:
-                        self._local_hits += 1
-                        self._record_redis_success()
-                        meta_json = fields.get("metadata")
-                        meta = json.loads(meta_json) if meta_json else {}
-                        return {
-                            "status": "cache_hit",
-                            "cached_query": fields.get("query", query),
-                            "response": fields.get("response", ""),
-                            "similarity": round(sim, 4),
-                            "tier": fields.get("tier", "L1"),
-                            "hits": 1,
-                            "is_public": fields.get("is_public") == "1",
-                            "metadata": meta,
-                        }
-            except Exception as rs_err:
-                logger.debug("RediSearch FT.SEARCH query skipped/failed (%s), falling back to candidate scan.", rs_err)
-
-        # 2. Multi-tenant Candidate-Set Fallback
+        # Multi-tenant Candidate-Set Scan with Vector Cosine Similarity
         try:
             candidate_entry_ids = set()
             public_ids = self._redis.smembers("sem_cache:keys:public") or set()
@@ -639,7 +543,8 @@ class RedisSemanticCache(BaseSemanticCache):
                         highest_sim = sim
                         best_match = entry
                         best_entry_id = eid
-                except Exception:
+                except Exception as entry_err:
+                    logger.warning("RedisSemanticCache error deserializing cache entry %s: %s. Skipping entry.", eid, entry_err)
                     expired_ids.append(eid)
 
             # Lazy cleanup of expired keys in sets
@@ -650,8 +555,8 @@ class RedisSemanticCache(BaseSemanticCache):
                     if user_id:
                         pipe.srem(f"sem_cache:keys:user:{user_id}", *expired_ids)
                     pipe.execute()
-                except Exception:
-                    pass
+                except Exception as cleanup_err:
+                    logger.warning("RedisSemanticCache lazy cleanup error: %s", cleanup_err)
 
             self._record_redis_success()
 
@@ -668,8 +573,8 @@ class RedisSemanticCache(BaseSemanticCache):
                         keepttl=True
                     )
                     pipe.execute()
-                except Exception:
-                    pass
+                except Exception as hit_err:
+                    logger.warning("RedisSemanticCache error updating hit count: %s", hit_err)
 
                 return {
                     "status": "cache_hit",
@@ -737,7 +642,7 @@ class RedisSemanticCache(BaseSemanticCache):
         try:
             pipe = self._redis.pipeline()
 
-            # 1. Store standard JSON entry & set indexing
+            # Store standard JSON entry & set indexing
             entry_key = f"sem_cache:entry:{entry_id}"
             serialized = json.dumps(entry.to_dict())
             if ttl > 0:
@@ -749,31 +654,6 @@ class RedisSemanticCache(BaseSemanticCache):
                 pipe.sadd("sem_cache:keys:public", entry_id)
             elif user_id:
                 pipe.sadd(f"sem_cache:keys:user:{user_id}", entry_id)
-
-            # 2. Store RediSearch Hash if RediSearch is active
-            if getattr(self, "_redisearch_available", False):
-                try:
-                    import struct
-                    vec_bytes = struct.pack(f"{len(query_emb)}f", *query_emb)
-                    clean_uid = "".join(c for c in (user_id or "anon") if c.isalnum() or c in ("_", "-"))
-                    hash_key = f"sem_cache:h:{entry_id}"
-                    pipe.hset(
-                        hash_key,
-                        mapping={
-                            "query": query,
-                            "response": response,
-                            "user_id": clean_uid,
-                            "is_public": "1" if is_public else "0",
-                            "tier": tier,
-                            "expires_at": str(expires_at),
-                            "metadata": json.dumps(metadata or {}),
-                            "vector": vec_bytes,
-                        }
-                    )
-                    if ttl > 0:
-                        pipe.expire(hash_key, ttl)
-                except Exception as rs_set_err:
-                    logger.debug("RediSearch hash indexing skipped: %s", rs_set_err)
 
             pipe.execute()
             self._record_redis_success()
@@ -791,25 +671,17 @@ class RedisSemanticCache(BaseSemanticCache):
         try:
             public_keys = list(self._redis.smembers("sem_cache:keys:public") or [])
             all_entry_keys = [f"sem_cache:entry:{eid}" for eid in public_keys]
-            hash_keys = [f"sem_cache:h:{eid}" for eid in public_keys]
 
             # Find user sets
             user_sets = list(self._redis.keys("sem_cache:keys:user:*") or [])
             for u_set in user_sets:
                 u_keys = list(self._redis.smembers(u_set) or [])
                 all_entry_keys.extend([f"sem_cache:entry:{eid}" for eid in u_keys])
-                hash_keys.extend([f"sem_cache:h:{eid}" for eid in u_keys])
 
-            # Additional search for any lingering hash keys
-            extra_hashes = list(self._redis.keys("sem_cache:h:*") or [])
-            all_hashes = list(set(hash_keys + extra_hashes))
-
-            if all_entry_keys or user_sets or public_keys or all_hashes:
+            if all_entry_keys or user_sets or public_keys:
                 pipe = self._redis.pipeline()
                 if all_entry_keys:
                     pipe.delete(*all_entry_keys)
-                if all_hashes:
-                    pipe.delete(*all_hashes)
                 if user_sets:
                     pipe.delete(*user_sets)
                 pipe.delete("sem_cache:keys:public")

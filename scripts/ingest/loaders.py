@@ -118,7 +118,40 @@ def check_vector_index_coverage(
         }
     except Exception as e:
         logger.warning("Could not query INFORMATION_SCHEMA.VECTOR_INDEXES: %s", e)
-        return {"index_status": "ERROR", "error": str(e)}
+def get_knowledge_articles_schema() -> list[Any]:
+    """Returns the canonical BigQuery SchemaField list for enterprise knowledge articles."""
+    from google.cloud import bigquery
+    return [
+        bigquery.SchemaField("id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("system", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("title", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("category", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("content", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("keywords", "STRING", mode="REPEATED"),
+        bigquery.SchemaField("embedding", "FLOAT64", mode="REPEATED"),
+        bigquery.SchemaField("source_uri", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("owner", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("effective_date", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("expiry_date", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("is_deleted", "BOOLEAN", mode="NULLABLE"),
+        bigquery.SchemaField("deleted_at", "TIMESTAMP", mode="NULLABLE"),
+        bigquery.SchemaField("parser_version", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("chunker_version", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("embedding_model", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("embedding_dim", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("content_hash", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField(
+            "section_hierarchy",
+            "RECORD",
+            mode="NULLABLE",
+            fields=[
+                bigquery.SchemaField("h1", "STRING", mode="NULLABLE"),
+                bigquery.SchemaField("h2", "STRING", mode="NULLABLE"),
+                bigquery.SchemaField("h3", "STRING", mode="NULLABLE"),
+            ]
+        ),
+        bigquery.SchemaField("updated_at", "TIMESTAMP", mode="REQUIRED"),
+    ]
 
 
 def ingest_articles_to_bigquery(
@@ -231,37 +264,7 @@ def ingest_articles_to_bigquery(
     staging_table_id = f"{project_id}.{dataset_id}.{staging_table_name}"
     full_staging_table = f"`{project_id}.{dataset_id}.{staging_table_name}`"
 
-    schema = [
-        bigquery.SchemaField("id", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("system", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("title", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("category", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("content", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("keywords", "STRING", mode="REPEATED"),
-        bigquery.SchemaField("embedding", "FLOAT64", mode="REPEATED"),
-        bigquery.SchemaField("source_uri", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("owner", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("effective_date", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("expiry_date", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("is_deleted", "BOOLEAN", mode="NULLABLE"),
-        bigquery.SchemaField("deleted_at", "TIMESTAMP", mode="NULLABLE"),
-        bigquery.SchemaField("parser_version", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("chunker_version", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("embedding_model", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("embedding_dim", "INTEGER", mode="NULLABLE"),
-        bigquery.SchemaField("content_hash", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField(
-            "section_hierarchy",
-            "RECORD",
-            mode="NULLABLE",
-            fields=[
-                bigquery.SchemaField("h1", "STRING", mode="NULLABLE"),
-                bigquery.SchemaField("h2", "STRING", mode="NULLABLE"),
-                bigquery.SchemaField("h3", "STRING", mode="NULLABLE"),
-            ]
-        ),
-        bigquery.SchemaField("updated_at", "TIMESTAMP", mode="REQUIRED"),
-    ]
+    schema = get_knowledge_articles_schema()
 
     staging_table = bigquery.Table(staging_table_id, schema=schema)
     staging_table.expires = datetime.now(timezone.utc) + timedelta(hours=1)

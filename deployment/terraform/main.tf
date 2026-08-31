@@ -140,6 +140,60 @@ resource "google_bigquery_table" "knowledge_articles" {
     "description": "Source document location (e.g. gs://bucket/docs/manual.docx)"
   },
   {
+    "name": "owner",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Content owner or author department"
+  },
+  {
+    "name": "effective_date",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Effective date for document validity in ISO-8601 YYYY-MM-DD"
+  },
+  {
+    "name": "expiry_date",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Expiration date for document validity in ISO-8601 YYYY-MM-DD"
+  },
+  {
+    "name": "is_deleted",
+    "type": "BOOLEAN",
+    "mode": "NULLABLE",
+    "description": "Tombstone flag indicating if document is soft-deleted"
+  },
+  {
+    "name": "deleted_at",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE",
+    "description": "Timestamp when the document was marked as tombstoned"
+  },
+  {
+    "name": "parser_version",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Version of document parser used (e.g. 1.0.0)"
+  },
+  {
+    "name": "chunker_version",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Version of chunking algorithm used (e.g. 1.0.0)"
+  },
+  {
+    "name": "embedding_model",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Model used for embedding generation (e.g. text-embedding-005)"
+  },
+  {
+    "name": "embedding_dim",
+    "type": "INTEGER",
+    "mode": "NULLABLE",
+    "description": "Dimension of embedding vector (e.g. 768)"
+  },
+  {
     "name": "content_hash",
     "type": "STRING",
     "mode": "NULLABLE",

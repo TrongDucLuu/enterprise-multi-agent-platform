@@ -59,14 +59,14 @@ Hệ thống **IT Helpdesk Multi-Agent AI** thông minh, phân cấp 3 mức đ�
 
 ---
 
-## ⚡ 2. Tối Ưu Hóa Hiệu Năng & Chi Phí (RediSearch Vector Search & BigQuery Vector)
+## ⚡ 2. Tối Ưu Hóa Hiệu Năng & Chi Phí (Redis Vector Semantic Cache & BigQuery Vector)
 
-### A. RediSearch Vector Search & Semantic Cache (`semantic_cache.py`)
+### A. Redis Vector Semantic Cache (`semantic_cache.py`)
 - **Vấn đề giải quyết:** Các câu hỏi IT Helpdesk lặp lại thường xuyên (ví dụ: *"hướng dẫn đổi pass wifi"*, *"cách thay đổi mật khẩu wifi văn phòng"*). Nếu mỗi câu hỏi đều gọi Gemini sẽ tốn chi phí token và mất 1.5–3s phản hồi.
-- **Giải pháp:** Sử dụng **RediSearch Server-Side Vector Search** (`idx:sem_cache` trên Redis Hash với `VECTOR FLAT FLOAT32 COSINE`) kết hợp multi-tenant tag filtering (`@is_public:{1} | @user_id:{uid}`):
-  - **Server-Side KNN Search**: Tìm kiếm vector tương đồng trực tiếp trong Redis engine mà không cần kéo toàn bộ candidate keys về client (`mget`), giúp giảm độ phức tạp từ $O(N \cdot D)$ client-side xuống $O(\log N)$ trên cụm Redis.
+- **Giải pháp:** Sử dụng **Redis Multi-Tenant Candidate-Set Vector Cache** kết hợp cosine similarity và phân quyền tenant (`public` vs `user:{uid}`):
+  - **Multi-Tenant Candidate Sets**: Phân tách key sets theo phạm vi quyền hạn (`sem_cache:keys:public` và `sem_cache:keys:user:{uid}`), thực hiện batch fetch `mget` và tính cosine similarity tốc độ cao.
   - **Bộ lọc An toàn Public FAQ (`_is_safe_public_faq`)**: Tự động chia sẻ cache công khai (`is_public=True`) cho các câu hỏi hướng dẫn chung (Wi-Fi, VPN, máy in) thuộc tầng L1 không gọi tool và không chứa PII. Các câu hỏi riêng tư (reset mật khẩu, mở khóa tài khoản cá nhân, mã ticket) được cô lập nghiêm ngặt theo `user_id`.
-  - **Graceful Fallback**: Tự động chuyển đổi giữa RediSearch và Candidate Scanning pipeline nếu Redis server không cài module RediSearch.
+  - **Soft Fail-Closed & Circuit Breaker**: Tự động bypass cache và log `WARNING` khi Redis gặp sự cố mạng, bảo đảm luồng hội thoại không bị gián đoạn.
 
 #### 📊 Số Liệu Benchmark Thực Tế (1.000 Cached Entries):
 Thực hiện benchmark trên tập dữ liệu 1.000 entry embedding thực tế (`scripts/benchmark_semantic_cache.py`):
@@ -74,7 +74,7 @@ Thực hiện benchmark trên tập dữ liệu 1.000 entry embedding thực t�
 | Backend | Tốc độ ghi (1.000 entries) | Hit Latency (p50) | Hit Latency (p95) | Hit Latency (p99) | Tăng tốc so với LLM |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **InMemorySemanticCache** | **0.015s** (68,365 writes/s) | **7.19ms** | **7.27ms** | **7.29ms** | **~167x** |
-| **Redis / RediSearch Cache** | **0.200s** (5,005 writes/s) | **21.19ms** | **21.55ms** | **28.45ms** | **~57x** |
+| **Redis Candidate-Set Cache** | **0.200s** (5,005 writes/s) | **21.19ms** | **21.55ms** | **28.45ms** | **~57x** |
 
 - **Endpoints Giám Sát:**
   - `GET /api/cache/stats`: Xem tỷ lệ hit rate, số lượng entry trong cache.
@@ -206,11 +206,11 @@ uv run python scripts/eval_harness.py
 ```
 *(Đo lường tự động: Intent Accuracy 100%, L2 Groundedness Faithfulness 100%, và Trap Question Refusal Rate 100%)*
 
-### Bước 4: Chạy Benchmark RediSearch Vector Search & Semantic Cache
+### Bước 4: Chạy Benchmark Redis Vector Search & Semantic Cache
 ```bash
 uv run python scripts/benchmark_semantic_cache.py
 ```
-*(Đo lường trên 1.000 entry vector: InMemory p50=7.19ms, RediSearch p50=21.19ms — nhanh gấp 57x–167x so với LLM)*
+*(Đo lường trên 1.000 entry vector: InMemory p50=7.19ms, Redis Candidate Scan p50=21.19ms — nhanh gấp 57x–167x so với LLM)*
 
 ### Bước 5: Chạy Tải Giả Lập CCU (Locust Benchmark)
 ```bash
@@ -279,7 +279,7 @@ it-helpdesk-agent/
 ├── config/                          # Cấu hình hệ thống, RBAC & chunking đa tầng
 │   └── systems.yaml                 # Định nghĩa ERP/HRM/CRM, user role mappings, domain keywords & DocAI
 ├── scripts/
-│   ├── benchmark_semantic_cache.py  # Benchmark RediSearch vs In-Memory trên 1.000 entry vector pool
+│   ├── benchmark_semantic_cache.py  # Benchmark Redis Candidate Scan vs In-Memory trên 1.000 entry vector pool
 │   ├── eval_harness.py              # Eval benchmark đo Groundedness & Trap Refusal
 │   ├── ingest_knowledge_base.py     # CLI Driver nạp dữ liệu CDC + BigQuery STORING vector
 │   ├── ingest/                      # Package module hóa xử lý dữ liệu nạp
@@ -302,7 +302,7 @@ it-helpdesk-agent/
 │   │   ├── env.py                   # Quản lý nạp biến môi trường, Secret Manager & Model Selection SLA
 │   │   ├── embedding_utils.py       # Embedding abstraction (Vertex AI + Fail-Closed)
 │   │   ├── rate_limiter.py          # Token-hash & IP Sliding Window Limiter + Soft Warning
-│   │   ├── semantic_cache.py        # InMemory, Redis & RediSearch Vector Search (KNN, Tag filter)
+│   │   ├── semantic_cache.py        # InMemory & Redis Vector Semantic Cache (Candidate Scan, Multi-tenant)
 │   │   ├── sso_auth.py              # Xác thực OIDC JWKS, Role Resolution, RBAC ContextVar & Memoization
 │   │   ├── system_config.py         # Dynamic loader cho systems.yaml & Domain Keyword Patterns
 │   │   └── telemetry.py             # OpenTelemetry tracking, Fail-Closed Privacy & PII redaction

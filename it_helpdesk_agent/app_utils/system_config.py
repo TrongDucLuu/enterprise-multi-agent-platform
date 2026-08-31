@@ -252,7 +252,7 @@ def load_system_config(config_path: Optional[str] = None, force_reload: bool = F
             f"Trường 'retrieval.fraction_lists_to_search' ({fraction_lists_to_search}) phải là số thực trong khoảng (0.0, 1.0]. (Fail-Closed)"
         )
 
-    hybrid_search_enabled = raw_retrieval.get("hybrid_search_enabled", False)
+    hybrid_search_enabled = raw_retrieval.get("hybrid_search_enabled", True)
     if not isinstance(hybrid_search_enabled, bool):
         raise SystemConfigurationError(
             f"Trường 'retrieval.hybrid_search_enabled' ({hybrid_search_enabled}) phải là boolean. (Fail-Closed)"
@@ -396,7 +396,7 @@ def get_retrieval_config() -> dict[str, Any]:
     cfg = load_system_config()
     return cfg.get("retrieval", {
         "fraction_lists_to_search": 0.05,
-        "hybrid_search_enabled": False,
+        "hybrid_search_enabled": True,
     })
 
 

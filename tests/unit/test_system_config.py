@@ -279,7 +279,7 @@ def test_retrieval_config_defaults():
     reload_system_config()
     cfg = get_retrieval_config()
     assert cfg["fraction_lists_to_search"] == 0.05
-    assert cfg["hybrid_search_enabled"] is False
+    assert cfg["hybrid_search_enabled"] is True
 
 
 def test_retrieval_config_invalid_fraction_fails_closed(monkeypatch):

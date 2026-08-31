@@ -57,7 +57,7 @@ def run_benchmark():
     print(f"       - Read Throughput:    ~{1000.0 / mem_p50:.0f} queries/sec/core")
 
     # -------------------------------------------------------------
-    # 2. Redis-backed Semantic Cache Benchmark (Multi-Tenant Candidate Sets & RediSearch)
+    # 2. Redis-backed Semantic Cache Benchmark (Multi-Tenant Candidate Set Vector Scan)
     # -------------------------------------------------------------
     fake_server = fakeredis.FakeServer()
     r = fakeredis.FakeStrictRedis(server=fake_server, decode_responses=True)

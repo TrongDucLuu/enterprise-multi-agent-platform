@@ -622,7 +622,7 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
 
         # Check if hybrid search is enabled in configuration
         retrieval_cfg = get_retrieval_config()
-        hybrid_enabled = retrieval_cfg.get("hybrid_search_enabled", False)
+        hybrid_enabled = retrieval_cfg.get("hybrid_search_enabled", True)
 
         # Common Vietnamese and English stop words
         STOP_WORDS = {
@@ -810,8 +810,11 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             fraction_lists_to_search = retrieval_cfg.get("fraction_lists_to_search", 0.05)
             hybrid_enabled = retrieval_cfg.get("hybrid_search_enabled", True)
 
-            # Extract search tokens / keywords for hybrid ranking
-            tokens = [t.strip().upper() for t in re.split(r'[^a-zA-Z0-9_\-]+', query) if len(t.strip()) >= 2]
+            # Extract search tokens / keywords for hybrid ranking (capped at 10, prioritizing longer technical tokens)
+            raw_tokens = [t.strip().upper() for t in re.split(r'[^a-zA-Z0-9_\-]+', query) if len(t.strip()) >= 2]
+            unique_tokens = list(dict.fromkeys(raw_tokens))
+            unique_tokens.sort(key=len, reverse=True)
+            tokens = unique_tokens[:10]
 
             if hybrid_enabled and tokens:
                 candidate_k = max(limit * 4, 10)
