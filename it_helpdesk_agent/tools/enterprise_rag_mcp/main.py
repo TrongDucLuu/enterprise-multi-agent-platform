@@ -48,6 +48,18 @@ def _check_system_access(system: str) -> tuple[bool, Optional[str]]:
     return require_role(needed_roles)
 
 
+def _get_authorized_systems() -> list[str]:
+    """
+    Returns the list of enterprise systems the current user is authorized to access.
+    """
+    authorized = []
+    for sys_name in ("ERP", "HRM", "CRM"):
+        allowed, _ = _check_system_access(sys_name)
+        if allowed:
+            authorized.append(sys_name)
+    return authorized
+
+
 def _initialize_console_logging(min_level: int = logging.INFO):
     # Logs MUST go to stderr to prevent breaking the stdio MCP protocol
     handler = logging.StreamHandler(sys.stderr)
@@ -64,7 +76,7 @@ def search_enterprise_knowledge(
     """
     Searches enterprise knowledge base for ERP, HRM, and CRM systems.
     - system: 'ERP', 'HRM', 'CRM', or 'ALL'
-    Enforces domain-level RBAC authorization and Security Trimming based on authenticated user roles.
+    Enforces domain-level RBAC authorization and Pre-Query Security Trimming based on authenticated user roles.
     """
     if system != "ALL":
         is_allowed, error_msg = _check_system_access(system)
@@ -79,18 +91,21 @@ def search_enterprise_knowledge(
         results = store.search(query=query, system=system, limit=3)
         return [r.model_dump() for r in results]
 
-    results = store.search(query=query, system=system, limit=5)
-    
-    # Security Trimming: filter out systems the caller lacks permissions for when system="ALL"
-    allowed_results = []
-    for r in results:
-        allowed, _ = _check_system_access(r.system)
-        if allowed:
-            allowed_results.append(r.model_dump())
-            if len(allowed_results) >= 3:
-                break
-                
-    return allowed_results
+    # Pre-query Security Trimming for system == "ALL":
+    # Calculate authorized systems before querying database to avoid pulling restricted records into memory
+    # and to ensure vector search top_k slots are filled exclusively with accessible documents.
+    authorized_systems = _get_authorized_systems()
+    if not authorized_systems:
+        return []
+
+    results = store.search(
+        query=query,
+        system="ALL",
+        limit=3,
+        allowed_systems=authorized_systems
+    )
+    return [r.model_dump() for r in results]
+
 
 @mcp.tool()
 def get_system_manual(article_id: str) -> dict:

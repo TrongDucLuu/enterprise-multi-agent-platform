@@ -242,6 +242,50 @@ def test_bigquery_vector_store_parameterization():
     assert "@limit" in sql_text
 
 
+def test_bigquery_vector_store_allowed_systems_parameterization():
+    """Verify that allowed_systems creates IN UNNEST parameterization at SQL level."""
+    store = BigQueryVectorKnowledgeStore(project_id="test-proj")
+    
+    mock_bq_client = MagicMock()
+    mock_query_job = MagicMock()
+    mock_query_job.result.return_value = []
+    mock_bq_client.query.return_value = mock_query_job
+    store._bq_client = mock_bq_client
+
+    # Search with allowed_systems list
+    store.search(query="quy trình nghỉ phép", system="ALL", limit=3, allowed_systems=["HRM", "CRM"])
+
+    assert mock_bq_client.query.called
+    called_args, called_kwargs = mock_bq_client.query.call_args
+    sql_text = called_args[0]
+    job_config = called_kwargs.get("job_config")
+
+    assert "WHERE system IN UNNEST(@allowed_systems_param)" in sql_text
+    # Verify parameter is present
+    param_names = [p.name for p in job_config.query_parameters]
+    assert "allowed_systems_param" in param_names
+
+
+def test_bigquery_fallback_logging_warning(caplog):
+    """Verify that BigQuery failure logs warning for Cloud Monitoring alerting."""
+    import logging
+    store = BigQueryVectorKnowledgeStore(project_id="test-proj")
+    
+    mock_bq_client = MagicMock()
+    mock_bq_client.query.side_effect = Exception("BigQuery Connection Timeout")
+    store._bq_client = mock_bq_client
+
+    with caplog.at_level(logging.WARNING):
+        results = store.search(query="SAP PO", system="ERP", limit=1)
+        # Verify graceful fallback to in-memory
+        assert len(results) > 0
+        assert results[0].system == "ERP"
+
+    # Verify warning log was emitted
+    assert any("BigQuery vector search failed" in record.message for record in caplog.records)
+
+
+
 # -------------------------------------------------------------
 # 3. Semantic Cache Multi-Tenant Isolation Tests
 # -------------------------------------------------------------

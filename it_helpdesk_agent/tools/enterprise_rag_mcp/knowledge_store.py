@@ -1,8 +1,11 @@
 import os
 import re
 import math
+import logging
 from abc import ABC, abstractmethod
 from typing import Optional, Any
+
+logger = logging.getLogger(__name__)
 
 try:
     from rag_models import KnowledgeArticle, SearchResult, DocumentSummary
@@ -105,8 +108,14 @@ class BaseKnowledgeStore(ABC):
     """Abstract Base Class for Enterprise Knowledge Stores (Adapter Pattern)."""
 
     @abstractmethod
-    def search(self, query: str, system: str = "ALL", limit: int = 3) -> list[SearchResult]:
-        """Search knowledge articles matching the query and system filter."""
+    def search(
+        self,
+        query: str,
+        system: str = "ALL",
+        limit: int = 3,
+        allowed_systems: Optional[list[str]] = None
+    ) -> list[SearchResult]:
+        """Search knowledge articles matching the query, system filter, and authorized domain list."""
         pass
 
     @abstractmethod
@@ -124,17 +133,28 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
     def __init__(self, articles: list[KnowledgeArticle] = ENTERPRISE_ARTICLES):
         self.articles = articles
 
-    def search(self, query: str, system: str = "ALL", limit: int = 3) -> list[SearchResult]:
-        """Search knowledge articles by query keywords and system filter."""
+    def search(
+        self,
+        query: str,
+        system: str = "ALL",
+        limit: int = 3,
+        allowed_systems: Optional[list[str]] = None
+    ) -> list[SearchResult]:
+        """Search knowledge articles by query keywords, system filter, and authorized systems."""
         clean_system = system.upper().strip() if system else "ALL"
         if clean_system not in ALLOWED_SYSTEMS:
             clean_system = "ALL"
+
+        allowed_upper = set(s.upper() for s in allowed_systems) if allowed_systems is not None else None
 
         terms = re.findall(r'\w+', query.lower())
         results: list[tuple[float, KnowledgeArticle]] = []
 
         for article in self.articles:
-            if clean_system != "ALL" and article.system.upper() != clean_system:
+            art_sys = article.system.upper()
+            if clean_system != "ALL" and art_sys != clean_system:
+                continue
+            if allowed_upper is not None and art_sys not in allowed_upper:
                 continue
 
             score = 0.0
@@ -203,8 +223,8 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 from google.cloud import bigquery
                 self._bq_client = bigquery.Client(project=self.project_id)
             except Exception as e:
-                # Fallback logging if client cannot be initialized
-                print(f"Warning: BigQuery client init failed ({e}).")
+                # Severity-aware warning logging when BigQuery client fails to initialize
+                logger.warning("BigQuery client initialization failed (%s). Operating in fallback mode.", e)
                 self._bq_client = None
         return self._bq_client
 
@@ -219,7 +239,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 embeddings = model.get_embeddings([text])
                 return embeddings[0].values
             except Exception as e:
-                print(f"Notice: Vertex AI embedding unavailable ({e}), using local embedding.")
+                logger.info("Vertex AI embedding unavailable (%s), falling back to local embedding.", e)
 
         # Fallback simple deterministic pseudo-vector for offline simulation
         words = text.lower().split()
@@ -229,11 +249,20 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
         norm = math.sqrt(sum(x*x for x in vec)) or 1.0
         return [x / norm for x in vec]
 
-    def search(self, query: str, system: str = "ALL", limit: int = 3) -> list[SearchResult]:
-        """Searches BigQuery table using VECTOR_SEARCH or SQL Cosine Distance with parameterized queries."""
+    def search(
+        self,
+        query: str,
+        system: str = "ALL",
+        limit: int = 3,
+        allowed_systems: Optional[list[str]] = None
+    ) -> list[SearchResult]:
+        """
+        Searches BigQuery table using VECTOR_SEARCH with parameterized queries and SQL-level security trimming.
+        Pushes system filtering into SQL BEFORE fetching to minimize scan cost and eliminate memory leakage.
+        """
         if not self.bq_client:
             # Fallback to in-memory store if BigQuery is unavailable
-            return InMemoryKnowledgeStore().search(query, system, limit)
+            return InMemoryKnowledgeStore().search(query, system, limit, allowed_systems=allowed_systems)
 
         clean_system = system.upper().strip() if system else "ALL"
         if clean_system not in ALLOWED_SYSTEMS:
@@ -253,6 +282,12 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             if clean_system != "ALL":
                 system_filter = "WHERE system = @system_param"
                 query_params.append(bigquery.ScalarQueryParameter("system_param", "STRING", clean_system))
+            elif allowed_systems is not None:
+                clean_allowed = [s.upper() for s in allowed_systems if s.upper() in ALLOWED_SYSTEMS and s.upper() != "ALL"]
+                if not clean_allowed:
+                    return []
+                system_filter = "WHERE system IN UNNEST(@allowed_systems_param)"
+                query_params.append(bigquery.ArrayQueryParameter("allowed_systems_param", "STRING", clean_allowed))
 
             # SQL with BigQuery VECTOR_SEARCH using Parameterized Query
             sql = f"""
@@ -292,9 +327,9 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 ))
             return results
         except Exception as e:
-            # Graceful degradation to in-memory fallback
-            print(f"Notice: BigQuery vector search fell back to in-memory: {e}")
-            return InMemoryKnowledgeStore().search(query, system, limit)
+            # Severity-aware warning for BigQuery fallback to enable Cloud Logging alerting
+            logger.warning("BigQuery vector search failed (%s). Falling back to in-memory store.", e)
+            return InMemoryKnowledgeStore().search(query, system, limit, allowed_systems=allowed_systems)
 
     def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
         """Retrieves article by ID from BigQuery table."""
@@ -322,7 +357,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                     keywords=list(r.keywords) if r.keywords else []
                 )
         except Exception as e:
-            print(f"Notice: BigQuery get_article_by_id fell back to in-memory: {e}")
+            logger.warning("BigQuery get_article_by_id failed (%s). Falling back to in-memory store.", e)
         return InMemoryKnowledgeStore().get_article_by_id(article_id)
 
 
@@ -341,3 +376,4 @@ def get_knowledge_store() -> BaseKnowledgeStore:
 
 # Backward compatibility alias
 KnowledgeStore = InMemoryKnowledgeStore
+
