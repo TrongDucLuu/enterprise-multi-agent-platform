@@ -1,15 +1,18 @@
+import os
 import re
 from typing import Optional
 from it_helpdesk_agent.app_utils.sso_auth import require_role
 
 def review_it_contract_sla(
-    contract_text: str,
+    contract_ref: Optional[str] = None,
+    contract_text: Optional[str] = None,
     vendor_name: str = "IT Vendor",
     focus_area: str = "ALL"
 ) -> dict:
     """
     Scans IT contracts, Vendor Service Level Agreements (SLA), and Data Protection Addendums (DPA).
     Extracts uptime commitments, MTTR guarantees, penalty/credit thresholds, and data security obligations.
+    Supports reference-based ingestion (contract_ref) for long contract documents.
     Protected by RBAC: requires compliance_officer, it_admin, sys_admin, or legal_counsel.
     """
     # 1. RBAC Authorization Gate
@@ -22,7 +25,42 @@ def review_it_contract_sla(
             "vendor": vendor_name,
         }
 
-    text_lower = contract_text.lower()
+    # 2. Resolve contract content from reference (contract_ref) or direct text (contract_text)
+    content: Optional[str] = None
+    if contract_ref:
+        clean_path = contract_ref.replace("file://", "")
+        if os.path.exists(clean_path) and os.path.isfile(clean_path):
+            try:
+                with open(clean_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "error": "File Read Failure",
+                    "message": f"Không thể đọc hợp đồng từ tham chiếu '{contract_ref}': {e}",
+                    "vendor": vendor_name,
+                }
+        elif "\n" in contract_ref or len(contract_ref) > 260:
+            # Fallback if contract text was passed positionally as first argument
+            content = contract_ref
+        else:
+            return {
+                "status": "error",
+                "error": "Contract Reference Not Found",
+                "message": f"Tham chiếu hợp đồng '{contract_ref}' không tồn tại trên hệ thống lưu trữ.",
+                "vendor": vendor_name,
+            }
+    elif contract_text:
+        content = contract_text
+    else:
+        return {
+            "status": "error",
+            "error": "Missing Input",
+            "message": "Vui lòng cung cấp tham chiếu hợp đồng (contract_ref) hoặc chuỗi văn bản hợp đồng (contract_text).",
+            "vendor": vendor_name,
+        }
+
+    text_lower = content.lower()
 
     # 2. Extract SLA Uptime targets (handles prefix 'uptime: 99.9%', suffix '99.9% uptime', and inline 'cam kết 99.95% uptime')
     uptime_matches = re.findall(
@@ -89,7 +127,7 @@ def review_it_contract_sla(
     return {
         "status": "success",
         "vendor": vendor_name,
-        "contract_length_chars": len(contract_text),
+        "contract_length_chars": len(content),
         "uptime_commitments": uptime_commitments,
         "mttr_commitments": mttr_commitments,
         "compliance_checklist": compliance_flags,

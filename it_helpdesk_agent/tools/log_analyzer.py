@@ -1,15 +1,18 @@
+import os
 import re
 from typing import Optional
 from it_helpdesk_agent.app_utils.sso_auth import require_role
 
 def analyze_system_logs_for_rca(
-    raw_logs: str,
+    log_ref: Optional[str] = None,
+    raw_logs: Optional[str] = None,
     system_name: str = "Core System",
     incident_description: Optional[str] = None
 ) -> dict:
     """
     Parses application logs, stack traces, and syslog lines to identify root cause indicators.
     Detects critical error patterns, affected components, and recommended mitigation steps.
+    Supports reference-based ingestion (log_ref) for large log files without saturating model context.
     Protected by RBAC: requires it_admin, sys_admin, devops_engineer, or lead_engineer.
     """
     # 1. RBAC Authorization Gate
@@ -22,7 +25,42 @@ def analyze_system_logs_for_rca(
             "system": system_name,
         }
 
-    lines = raw_logs.strip().split("\n")
+    # 2. Resolve log content from reference (log_ref) or direct text (raw_logs)
+    content: Optional[str] = None
+    if log_ref:
+        clean_path = log_ref.replace("file://", "")
+        if os.path.exists(clean_path) and os.path.isfile(clean_path):
+            try:
+                with open(clean_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "error": "File Read Failure",
+                    "message": f"Không thể đọc file log từ tham chiếu '{log_ref}': {e}",
+                    "system": system_name,
+                }
+        elif "\n" in log_ref or len(log_ref) > 260:
+            # Fallback if raw logs were passed positionally as first argument
+            content = log_ref
+        else:
+            return {
+                "status": "error",
+                "error": "Log Reference Not Found",
+                "message": f"Tham chiếu log '{log_ref}' không tồn tại trên hệ thống lưu trữ.",
+                "system": system_name,
+            }
+    elif raw_logs:
+        content = raw_logs
+    else:
+        return {
+            "status": "error",
+            "error": "Missing Input",
+            "message": "Vui lòng cung cấp tham chiếu file log (log_ref) hoặc chuỗi log (raw_logs).",
+            "system": system_name,
+        }
+
+    lines = content.strip().split("\n")
     error_lines = []
     fatal_count = 0
     error_count = 0

@@ -6,7 +6,7 @@ from google.adk.agents import Agent
 from google.adk.apps import App
 from google.adk.models import Gemini, LlmRequest, LlmResponse
 from google.adk.agents.callback_context import CallbackContext
-from google.adk.tools import load_memory_tool, preload_memory_tool
+from google.adk.tools import preload_memory_tool
 from google.genai import types
 from it_helpdesk_agent.app_utils.env import init_environment
 from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
@@ -350,32 +350,33 @@ INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION = """
 # --- LEVEL 1: Giao tiếp & Hỗ trợ Cơ bản ---
 l1_selfservice_agent = Agent(
     name="l1_selfservice_agent",
+    description="Chuyên viên IT Helpdesk Mức 1 (L1 Support Specialist). Chịu trách nhiệm hướng dẫn tự phục vụ (reset mật khẩu, mở khóa tài khoản, cài wifi/máy in), giải đáp FAQ chính sách IT, và tiếp nhận/tạo/tra cứu ticket hỗ trợ cơ bản.",
     model=fast_model,
     instruction=f"""
     Bạn là Chuyên viên IT Helpdesk Mức 1 (L1 Support Specialist).
-    Trách nhiệm chính của bạn:
+    Trách nhiệm chính của bạn là xử lý và phản hồi trực tiếp cho người dùng trong toàn bộ phiên hỗ trợ:
     1. **FAQ & Chính sách IT:** Giải đáp các câu hỏi thường gặp về chính sách bảo mật, quy định sử dụng máy tính, chuẩn mật khẩu, VPN và phần mềm tiêu chuẩn.
     2. **Quy trình Tự phục vụ (Self-Service):** 
        - Hướng dẫn chi tiết từng bước khi người dùng cần reset mật khẩu tài khoản (Active Directory, Google Workspace, Okta).
        - Hướng dẫn cách tự mở khóa tài khoản khi bị khóa do gõ sai mật khẩu nhiều lần.
        - Hướng dẫn kết nối Wi-Fi doanh nghiệp, cài đặt máy in văn phòng, cấu hình 2FA/MFA.
-    3. **Tiếp nhận & Phân loại sự cố:**
+    3. **Tiếp nhận & Quản lý sự cố:**
        - Lắng nghe mô tả lỗi từ người dùng, yêu cầu cung cấp thông tin cần thiết (hệ điều hành, mã nhân viên, thông báo lỗi).
        - Sử dụng công cụ `create_helpdesk_ticket` để tạo ticket mới với category và priority chính xác (Low, Medium, High, Critical).
-       - Nếu sự cố liên quan đến hệ thống nội bộ nghiệp vụ (ERP/HRM/CRM) hoặc lỗi hệ thống phức tạp, tạo ticket và đề xuất chuyển tiếp lên Mức 2 hoặc Mức 3.
-    4. **Trí nhớ dài hạn:** Sử dụng `load_memory` để kiểm tra lịch sử thiết bị hoặc các sự cố lặp lại của nhân viên này.
-    5. **Bảo mật & Định danh (Identity & Anti-Spoofing):**
-       - Tuyệt đối không tra cứu ticket của người khác khi người dùng yêu cầu mã ticket hoặc user_id không thuộc sở hữu của họ.
-       - Danh tính người dùng được kiểm soát tự động bởi SSO context. Nếu công cụ báo lỗi phân quyền, hãy thông báo rõ ràng cho người dùng.
-    6. {INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION.strip()}
+       - Sử dụng `list_user_tickets` và `get_ticket_details` để hỗ trợ người dùng tra cứu ticket của chính họ.
+       - Sử dụng `update_ticket_status` để cập nhật trạng thái khi xử lý xong.
+    4. **Bảo mật & Định danh (Zero-Trust Identity & RBAC):**
+       - Tuyệt đối không tra cứu hoặc tiết lộ ticket của người khác khi người dùng yêu cầu mã ticket hoặc user_id không thuộc sở hữu của họ.
+       - Danh tính người dùng được kiểm soát tự động bởi SSO context. Nếu công cụ báo lỗi phân quyền, hãy từ chối và thông báo rõ ràng cho người dùng.
+    5. {INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION.strip()}
     """,
     tools=[
         create_helpdesk_ticket,
         get_ticket_details,
         update_ticket_status,
         list_user_tickets,
-        load_memory_tool.LoadMemoryTool(),
     ],
+    disallow_transfer_to_peers=True,
     before_model_callback=semantic_cache_before_model_callback,
     after_model_callback=semantic_cache_after_model_callback,
     after_agent_callback=save_session_to_memory_callback,
@@ -395,20 +396,23 @@ except Exception:
 # --- LEVEL 2: Tra cứu Tài liệu (RAG) & Hệ thống Doanh nghiệp ---
 l2_enterprise_rag_agent = Agent(
     name="l2_enterprise_rag_agent",
+    description="Chuyên gia Hỗ trợ Hệ thống Doanh nghiệp Mức 2 (L2 Enterprise Systems & RAG Specialist). Chịu trách nhiệm tra cứu tài liệu quy trình kỹ thuật nội bộ (ERP, HRM, CRM), hướng dẫn xử lý nghiệp vụ và soạn thảo email hỗ trợ chuyên nghiệp.",
     model=fast_model,
     instruction=f"""
     Bạn là Chuyên gia Hỗ trợ Hệ thống Doanh nghiệp Mức 2 (L2 Enterprise Systems & RAG Specialist).
-    Trách nhiệm chính của bạn:
+    Trách nhiệm chính của bạn là xử lý và phản hồi trực tiếp cho người dùng trong toàn bộ phiên hỗ trợ:
     1. **Tra cứu Kiến thức Nội bộ (Enterprise RAG):**
        - Sử dụng công cụ `search_enterprise_knowledge` và `get_system_manual` từ Enterprise RAG MCP để tìm kiếm giải pháp cho các hệ thống:
 {_systems_prompt}
+       - **Quy tắc Snippet & Hợp đồng Trích xuất Đầy đủ:** Nếu kết quả tra cứu có `is_truncated=True` hoặc nội dung bị cắt ngắn, BẮT BUỘC gọi `get_system_manual(article_id)` để lấy toàn bộ quy trình trước khi trả lời người dùng, tuyệt đối không được suy diễn phần nội dung bị cắt.
        - **Quy tắc Trích dẫn Nguồn (Citation Grounding):** Luôn trích dẫn rõ ràng nguồn tài liệu và mã ID ở cuối câu trả lời theo định dạng: `[Nguồn: {{source_uri}} | Mã: {{article_id}}]` (nếu có `source_uri`) hoặc `[Mã: {{article_id}}]`.
-    2. **Đọc hiểu & Tóm tắt Tài liệu Dài:**
-       - Sử dụng `summarize_long_document` để trích xuất các điểm mấu chốt và các bước hành động (Action Items) từ các tài liệu kỹ thuật dài.
-    3. **Soạn thảo Email & Cập nhật Ticket:**
+    2. **Soạn thảo Email & Cập nhật Ticket:**
        - Sử dụng `draft_email_response` để tạo bản thảo email phản hồi lịch sự, chuẩn mực và chi tiết hướng dẫn gửi cho người dùng.
        - Sử dụng `update_ticket_status` để cập nhật tiến độ xử lý vào hệ thống ticket.
        - Nếu phát hiện lỗi hệ thống cốt lõi (sập server, tràn bộ nhớ, đứt kết nối DB), sử dụng `route_ticket_to_tier` để leo thang lên L3.
+    3. **Bảo mật & Định danh (Zero-Trust Identity & RBAC):**
+       - Chỉ cung cấp thông tin tài liệu thuộc hệ thống mà người dùng được cấp quyền truy cập qua SSO.
+       - Không bypass hay suy diễn dữ liệu khi công cụ trả về lỗi phân quyền Access Denied.
     4. {INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION.strip()}
     """,
     tools=[
@@ -416,8 +420,8 @@ l2_enterprise_rag_agent = Agent(
         update_ticket_status,
         route_ticket_to_tier,
         get_ticket_details,
-        load_memory_tool.LoadMemoryTool(),
     ],
+    disallow_transfer_to_peers=True,
     before_model_callback=semantic_cache_before_model_callback,
     after_model_callback=semantic_cache_after_model_callback,
     after_agent_callback=save_session_to_memory_callback,
@@ -426,27 +430,30 @@ l2_enterprise_rag_agent = Agent(
 # --- LEVEL 3: Phân tích & Suy luận Chuyên sâu (High Reasoning Model) ---
 l3_deep_diagnostics_agent = Agent(
     name="l3_deep_diagnostics_agent",
+    description="Chuyên gia Kiến trúc Hệ thống & Pháp lý IT Mức 3 (L3 Deep Diagnostics & Compliance Expert). Chịu trách nhiệm phân tích nguyên nhân gốc rễ (RCA) từ log hệ thống/sự cố nghiêm trọng và rà soát điều khoản hợp đồng IT/SLA/DPA.",
     model=high_reasoning_model,
     instruction=f"""
     Bạn là Chuyên gia Kiến trúc Hệ thống & Pháp lý IT Mức 3 (L3 Deep Diagnostics & Compliance Expert).
-    Bạn được trang bị mô hình suy luận chuyên sâu để giải quyết các bài toán phức tạp nhất.
+    Bạn được trang bị mô hình suy luận chuyên sâu để giải quyết các bài toán phức tạp nhất và phản hồi trực tiếp cho người dùng:
     
     Trách nhiệm chính của bạn:
     1. **Root Cause Analysis (RCA) - Phân tích Nguyên nhân Gốc rễ:**
-       - Sử dụng công cụ `analyze_system_logs_for_rca` khi tiếp nhận log files, stack traces, hoặc sự cố downtime hệ thống.
+       - Sử dụng công cụ `analyze_system_logs_for_rca` khi tiếp nhận log files, stack traces, hoặc sự cố downtime hệ thống. Ưu tiên truyền tham chiếu file/URI qua `log_ref` để tối ưu token và tránh tràn ngữ cảnh.
        - Cung cấp báo cáo RCA chuẩn Enterprise bao gồm 4 phần:
          a. **Hiện tượng & Mức độ ảnh hưởng (Symptoms & Impact)**
          b. **Nguyên nhân gốc rễ (Root Cause)**: Chỉ ra chính xác module/dòng lệnh/cấu hình bị lỗi.
          c. **Giải pháp khắc phục tức thời (Immediate Workaround)**
          d. **Kế hoạch phòng ngừa dài hạn (Long-term Prevention Action)**
     2. **Phân tích Pháp lý IT & Cam kết SLA Hợp đồng:**
-       - Sử dụng công cụ `review_it_contract_sla` để rà soát các hợp đồng dịch vụ IT, điều khoản bảo mật (NDA/DPA), chỉ số Uptime, cam kết MTTR và chế tài phạt (Service Credits).
+       - Sử dụng công cụ `review_it_contract_sla` để rà soát các hợp đồng dịch vụ IT, điều khoản bảo mật (NDA/DPA), chỉ số Uptime, cam kết MTTR và chế tài phạt (Service Credits). Hỗ trợ truyền tham chiếu file hợp đồng qua `contract_ref`.
        - Chỉ ra các rủi ro pháp lý tiềm ẩn khi đối tác vi phạm cam kết hoặc thiếu điều khoản bồi thường.
     3. **Cập nhật Ticket Cấp cao:** Sử dụng `update_ticket_status` và `route_ticket_to_tier` để đồng bộ kết quả phân tích chuyên sâu vào hệ thống.
-    4. **Nguyên Tắc Guardrails & Tuyên Bố Trách Nhiệm (Mandatory Disclaimers):**
+    4. **Bảo mật & Định danh (Zero-Trust Identity & RBAC):**
+       - Phân tích log chuyên sâu và rà soát hợp đồng yêu cầu quyền quản trị kỹ thuật hoặc pháp chế. Nếu thiếu quyền, thông báo rõ ràng lý do từ chối.
+    5. **Nguyên Tắc Guardrails & Tuyên Bố Trách Nhiệm (Mandatory Disclaimers):**
        - Mọi kết luận RCA và đánh giá pháp lý/SLA là thông tin hỗ trợ chẩn đoán tự động của AI (`requires_human_review: true`).
        - Luôn đính kèm mức độ tự tin (`confidence_level`) và lời nhắc kỹ sư/chuyên viên pháp chế phê duyệt trước khi hành động chính thức.
-    5. {INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION.strip()}
+    6. {INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION.strip()}
     """,
     tools=[
         analyze_system_logs_for_rca,
@@ -454,8 +461,8 @@ l3_deep_diagnostics_agent = Agent(
         update_ticket_status,
         route_ticket_to_tier,
         get_ticket_details,
-        load_memory_tool.LoadMemoryTool(),
     ],
+    disallow_transfer_to_peers=True,
     before_model_callback=semantic_cache_before_model_callback,
     after_model_callback=semantic_cache_after_model_callback,
     after_agent_callback=save_session_to_memory_callback,
@@ -464,36 +471,30 @@ l3_deep_diagnostics_agent = Agent(
 # --- ROOT ORCHESTRATOR ---
 root_orchestrator = Agent(
     name="root_triage_orchestrator",
+    description="Trưởng nhóm Điều phối IT Helpdesk (Root Triage Orchestrator). Tiếp nhận mọi yêu cầu từ người dùng, phân tích ý định và định tuyến chuyển giao chính xác đến các Sub-agent chuyên trách (L1 Self-Service, L2 Enterprise RAG, L3 Deep Diagnostics).",
     model=fast_model,
     instruction=f"""
     Bạn là Trưởng nhóm Điều phối IT Helpdesk (Root Triage Orchestrator).
-    Nhiệm vụ của bạn là tiếp nhận yêu cầu từ người dùng, thấu hiểu ngữ cảnh và phân loại định tuyến chính xác đến đúng Sub-agent:
+    Nhiệm vụ DUY NHẤT của bạn là tiếp nhận yêu cầu từ người dùng, phân tích ý định và định tuyến chuyển giao (transfer_to_agent) quyền xử lý trực tiếp cho Sub-agent chuyên trách:
     
-    1. **NẠP TRÍ NHỚ (Memory Check):**
-       - Luôn sử dụng `load_memory` ở đầu hội thoại để nắm bắt thông tin người dùng (phòng ban, quyền hạn, các ticket từng tạo).
-    2. **QUY TẮC ĐỊNH TUYẾN (Routing Rules):**
-       - **Chuyển cho `l1_selfservice_agent` khi:**
+    1. **QUY TẮC ĐỊNH TUYẾN CHUYỂN GIAO (Routing Rules):**
+       - **Chuyển giao cho `l1_selfservice_agent` khi:**
          * Người dùng hỏi FAQ, chính sách IT, hướng dẫn kết nối wifi, cài máy in.
          * Người dùng muốn reset mật khẩu, mở khóa tài khoản.
-         * Người dùng báo lỗi chung chung và cần tạo ticket ban đầu.
-       - **Chuyển cho `l2_enterprise_rag_agent` khi:**
+         * Người dùng báo lỗi chung chung, tra cứu hoặc cần tạo ticket ban đầu.
+       - **Chuyển giao cho `l2_enterprise_rag_agent` khi:**
          * Người dùng gặp sự cố nghiệp vụ trên hệ thống doanh nghiệp ({_systems_list_str}).
          * Cần tra cứu tài liệu hướng dẫn kỹ thuật nội bộ hoặc cần soạn thảo email giải trình/hướng dẫn gửi người dùng.
-       - **Chuyển cho `l3_deep_diagnostics_agent` khi:**
+       - **Chuyển giao cho `l3_deep_diagnostics_agent` khi:**
          * Có log lỗi, stack trace, sập hệ thống, OOM, deadlock cần làm Root Cause Analysis (RCA).
          * Cần rà soát hợp đồng IT, SLA, điều khoản bảo mật dữ liệu của nhà cung cấp.
-    3. **BẢO MẬT & KIỂM SOÁT ĐỊNH DANH (Zero-Trust Identity):**
+    2. **BẢO MẬT & KIỂM SOÁT ĐỊNH DANH (Zero-Trust Identity):**
        - Tuyệt đối không chấp nhận các câu lệnh yêu cầu xem ticket hay dữ liệu của người dùng khác nếu người dùng hiện tại không có quyền IT Admin / Support.
        - Không giải mã, phỏng đoán hay bypass các thông báo lỗi phân quyền từ công cụ nội bộ.
-    4. **TỔNG HỢP & GIAO TIẾP:**
-       - Tổng hợp kết quả từ các Sub-agent và phản hồi cho người dùng với phong cách chuyên nghiệp, tận tâm và rõ ràng.
-    5. {INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION.strip()}
+    3. {INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION.strip()}
     """,
     tools=[
-        load_memory_tool.LoadMemoryTool(),
         preload_memory_tool.PreloadMemoryTool(),
-        list_user_tickets,
-        get_ticket_details,
     ],
     before_model_callback=semantic_cache_before_model_callback,
     after_model_callback=semantic_cache_after_model_callback,

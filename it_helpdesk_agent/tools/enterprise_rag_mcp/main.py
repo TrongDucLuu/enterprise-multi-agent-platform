@@ -6,10 +6,10 @@ from dotenv import load_dotenv
 
 try:
     from knowledge_store import get_knowledge_store, KnowledgeStoreUnavailableError, wrap_retrieved_document
-    from rag_models import SearchResult, DocumentSummary
+    from rag_models import SearchResult
 except ImportError:
     from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import get_knowledge_store, KnowledgeStoreUnavailableError, wrap_retrieved_document
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult, DocumentSummary
+    from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult
 
 try:
     from it_helpdesk_agent.app_utils.system_config import (
@@ -198,26 +198,6 @@ def get_system_manual(article_id: str) -> dict:
         title=article.title,
     )
     return {"status": "success", "article": art_dict}
-
-
-@mcp.tool()
-def summarize_long_document(document_text: str, system_name: str = "Enterprise System") -> dict:
-    """
-    Extracts key points, prerequisites, and action items from long enterprise documents.
-    """
-    lines = [line.strip() for line in document_text.strip().split("\n") if line.strip()]
-    key_points = [l for l in lines if l.startswith(("-", "*", "1.", "2.", "3.", "4.", "5."))] or lines[:3]
-    action_items = [l for l in lines if any(w in l.lower() for w in ["bước", "step", "yêu cầu", "khắc phục", "action", "quy trình"])]
-    
-    return {
-        "status": "success",
-        "system": system_name,
-        "summary": {
-            "total_length": len(document_text),
-            "key_points": key_points[:5],
-            "action_items": action_items[:5] or ["Tuân thủ quy trình bảo mật IT."],
-        }
-    }
 
 
 @mcp.tool()

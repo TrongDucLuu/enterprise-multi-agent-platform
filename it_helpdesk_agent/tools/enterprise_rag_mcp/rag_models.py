@@ -62,6 +62,7 @@ class SearchResult(BaseModel):
     effective_date: Optional[str] = None
     expiry_date: Optional[str] = None
     is_deleted: bool = False
+    is_truncated: bool = False
 
     @field_validator("system")
     @classmethod

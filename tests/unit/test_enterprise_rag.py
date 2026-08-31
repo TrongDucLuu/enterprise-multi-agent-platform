@@ -3,7 +3,6 @@ from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import Knowledge
 from it_helpdesk_agent.tools.enterprise_rag_mcp.main import (
     search_enterprise_knowledge,
     get_system_manual,
-    summarize_long_document,
     draft_email_response
 )
 from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
@@ -29,12 +28,14 @@ def test_knowledge_store_search_erp():
     assert results[0].system == "ERP"
     assert "M_BEST_EKO" in results[0].snippet or "Purchase Order" in results[0].title
 
+
 def test_knowledge_store_search_hrm():
     store = KnowledgeStore()
     results = store.search(query="chấm công vân tay", system="HRM")
     assert len(results) > 0
     assert results[0].system == "HRM"
     assert "HRM-KB-101" in results[0].article_id
+
 
 def test_get_system_manual_success_and_not_found():
     res = get_system_manual("ERP-KB-001")
@@ -92,19 +93,18 @@ def test_enterprise_rag_rbac_allowed_for_hr_role():
     finally:
         current_sso_user.reset(token)
 
-def test_summarize_long_document():
-    long_doc = """
-    QUY TRÌNH XỬ LÝ SỰ CỐ TẠI CHI NHÁNH
-    1. Tiếp nhận phản ánh từ khách hàng và ghi nhận ticket.
-    2. Bước 1: Kiểm tra trạng thái nguồn điện và cáp mạng LAN.
-    3. Bước 2: Khởi động lại Router Cisco và Switch PoE.
-    4. Bước 3: Xác minh kết nối VPN tới Headquarter.
-    5. Đóng ticket sau khi chi nhánh hoạt động bình thường.
-    """
-    summary_res = summarize_long_document(long_doc, system_name="Network Infra")
-    assert summary_res["status"] == "success"
-    assert len(summary_res["summary"]["key_points"]) > 0
-    assert len(summary_res["summary"]["action_items"]) > 0
+
+def test_search_is_truncated_flag():
+    store = KnowledgeStore()
+    # ERP-KB-001 has content > 200 chars -> is_truncated must be True
+    results = store.search(query="purchase order sap", system="ERP")
+    assert len(results) > 0
+    assert results[0].is_truncated is True
+
+    # Test via main search_enterprise_knowledge tool
+    mcp_res = search_enterprise_knowledge("purchase order sap", system="ERP")
+    assert len(mcp_res) > 0
+    assert mcp_res[0]["is_truncated"] is True
 
 def test_draft_email_response():
     email = draft_email_response(

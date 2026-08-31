@@ -735,7 +735,8 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
 
         search_results = []
         for score, article in results[:limit]:
-            raw_snippet = article.content[:200].strip() + "..."
+            is_truncated = len(article.content) > 200
+            raw_snippet = article.content[:200].strip() + "..." if is_truncated else article.content.strip()
             snippet = wrap_retrieved_document(
                 content=raw_snippet,
                 doc_id=article.id,
@@ -760,6 +761,7 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
                 effective_date=article.effective_date,
                 expiry_date=article.expiry_date,
                 is_deleted=getattr(article, "is_deleted", False),
+                is_truncated=is_truncated,
             ))
         return search_results
 
@@ -983,7 +985,8 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 art_id = _extract_str(row.id) or str(row.id)
                 art_sys = _extract_str(row.system) or str(row.system)
                 art_title = _extract_str(row.title) or str(row.title)
-                raw_snippet = content_str[:200].strip() + "..."
+                is_truncated = len(content_str) > 200
+                raw_snippet = content_str[:200].strip() + "..." if is_truncated else content_str.strip()
                 snippet = wrap_retrieved_document(
                     content=raw_snippet,
                     doc_id=art_id,
@@ -1006,6 +1009,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                     effective_date=_extract_str(getattr(row, "effective_date", None)),
                     expiry_date=_extract_str(getattr(row, "expiry_date", None)),
                     is_deleted=_extract_bool(getattr(row, "is_deleted", False)),
+                    is_truncated=is_truncated,
                 ))
             return results
         except Exception as e:

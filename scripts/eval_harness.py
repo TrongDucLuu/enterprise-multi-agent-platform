@@ -136,6 +136,17 @@ EVAL_DATASET = [
         "expected_source_ids": ["CRM-KB-201"],
         "is_unanswerable": False,
     },
+    {
+        "id": "L2-07",
+        "tier": "L2",
+        "category": "ERP",
+        "query": "Thời gian cam kết SLA và hệ thống phê duyệt phân quyền SAP GRC cho lỗi ME21N là bao lâu?",
+        "expected_intent": "PO_SLA_DETAILS",
+        "expected_system": "ERP",
+        "ground_truth_keywords": ["SAP GRC", "2 giờ làm việc", "ME21N"],
+        "expected_source_ids": ["ERP-KB-001"],
+        "is_unanswerable": False,
+    },
 
     # --- TIER 3: L3 Deep Diagnostics & Compliance ---
     {
@@ -326,6 +337,8 @@ def evaluate_l2_groundedness(test_case: Dict[str, Any], store: KnowledgeStore) -
     """
     Evaluates L2 RAG Groundedness / Faithfulness.
     Verifies that retrieved chunks from KnowledgeStore contain ground truth facts.
+    If search snippet is truncated (is_truncated=True), retrieves full manual via get_article()
+    as required by the L2 Agent contract before assessing groundedness.
     """
     if test_case["tier"] != "L2":
         return {"applicable": False}
@@ -343,10 +356,17 @@ def evaluate_l2_groundedness(test_case: Dict[str, Any], store: KnowledgeStore) -
             "score": 0.0,
         }
 
-    combined_text = " ".join([
-        (getattr(r, "content", "") or "") + " " + (getattr(r, "title", "") or "")
-        for r in results
-    ]).lower()
+    retrieved_texts = []
+    for r in results:
+        text = getattr(r, "content", "") or ""
+        # Emulate L2 Agent behavior: if snippet was truncated, call get_system_manual/get_article
+        if getattr(r, "is_truncated", False) and hasattr(store, "get_article"):
+            full_article = store.get_article(getattr(r, "article_id", ""))
+            if full_article:
+                text = full_article.content
+        retrieved_texts.append(text + " " + (getattr(r, "title", "") or ""))
+
+    combined_text = " ".join(retrieved_texts).lower()
     keywords = test_case["ground_truth_keywords"]
     matched = [k for k in keywords if k.lower() in combined_text]
     score = len(matched) / len(keywords) if keywords else 1.0
