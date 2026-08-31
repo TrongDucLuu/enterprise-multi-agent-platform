@@ -227,6 +227,33 @@ def check_l3_rate_limit(user_id: Optional[str] = None) -> Tuple[bool, int, float
     return get_l3_rate_limiter().is_allowed(key, max_requests=l3_rpm)
 
 
+def check_l3_rate_limit_with_warning(
+    user_id: Optional[str] = None
+) -> Tuple[bool, int, float, bool, Optional[str]]:
+    """
+    Evaluates L3 rate limit and checks for soft warning threshold (>= 80% quota consumed).
+    Returns: (allowed, remaining, reset_after, is_soft_warning, warning_message)
+    """
+    l3_rpm = int(os.getenv("L3_RATE_LIMIT_PER_MINUTE", "10"))
+    key = f"l3_user:{user_id}" if user_id else "l3_user:anonymous"
+    allowed, remaining, reset_after = get_l3_rate_limiter().is_allowed(key, max_requests=l3_rpm)
+
+    is_soft_warning = False
+    warning_message = None
+    if allowed:
+        used = l3_rpm - remaining
+        # Trigger soft warning when at or above 80% capacity
+        soft_threshold_remaining = max(1, int(l3_rpm * 0.2))
+        if remaining <= soft_threshold_remaining:
+            is_soft_warning = True
+            warning_message = (
+                f"⚠️ [L3 Quota Soft Warning] Bạn đã sử dụng {used}/{l3_rpm} lượt phân tích sâu L3 trong phút này. "
+                f"Còn lại {remaining} lượt khả dụng trước khi bị giới hạn tạm thời."
+            )
+
+    return allowed, remaining, reset_after, is_soft_warning, warning_message
+
+
 def reset_rate_limiters() -> None:
     """Reset singletons for testing purposes."""
     global _global_rate_limiter, _l3_rate_limiter

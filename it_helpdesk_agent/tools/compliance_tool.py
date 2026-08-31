@@ -76,6 +76,16 @@ def review_it_contract_sla(
     if not compliance_flags["AUDIT_RIGHTS"]:
         risk_assessment.append("RỦI RO TUÂN THỦ: Bên mua không có quyền yêu cầu kiểm toán an toàn thông tin độc lập định kỳ.")
 
+    # Guardrails: Determine confidence level
+    has_explicit_uptime = uptime_commitments != ["Không tìm thấy điều khoản uptime cụ thể"]
+    has_explicit_mttr = mttr_commitments != ["Chưa rõ cam kết thời gian phản hồi"]
+    if has_explicit_uptime and has_explicit_mttr:
+        confidence_level = "HIGH"
+    elif has_explicit_uptime or has_explicit_mttr:
+        confidence_level = "MEDIUM"
+    else:
+        confidence_level = "LOW"
+
     return {
         "status": "success",
         "vendor": vendor_name,
@@ -83,5 +93,13 @@ def review_it_contract_sla(
         "uptime_commitments": uptime_commitments,
         "mttr_commitments": mttr_commitments,
         "compliance_checklist": compliance_flags,
-        "identified_legal_risks": risk_assessment or ["Hợp đồng đáp ứng đầy đủ các tiêu chuẩn an toàn cơ bản."]
+        "identified_legal_risks": risk_assessment or ["Hợp đồng đáp ứng đầy đủ các tiêu chuẩn an toàn cơ bản."],
+        # Mandatory P0 Output Guardrails
+        "confidence_level": confidence_level,
+        "requires_human_review": True,
+        "disclaimer": (
+            "Báo cáo rà soát hợp đồng và cam kết SLA là phân tích trích xuất dữ liệu sơ bộ hỗ trợ bởi AI, "
+            "KHÔNG cấu thành ý kiến tư vấn pháp lý hay kết luận ràng buộc. Mọi quyết định chế tài, khiếu nại "
+            "hoặc đàm phán hợp đồng bắt buộc phải được Bộ phận Pháp chế (Legal/Compliance) xác minh và phê duyệt."
+        ),
     }

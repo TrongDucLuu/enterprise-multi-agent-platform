@@ -105,6 +105,15 @@ class BaseSemanticCache(ABC):
         pass
 
 
+def is_production_mode() -> bool:
+    """
+    Checks whether the application is running in a production environment.
+    Evaluates ENVIRONMENT, ENV, and GCP Cloud Run runtime indicator K_SERVICE.
+    """
+    env = os.getenv("ENVIRONMENT", os.getenv("ENV", "")).lower().strip()
+    return env in ("prod", "production") or bool(os.getenv("K_SERVICE"))
+
+
 class InMemorySemanticCache(BaseSemanticCache):
     """
     In-memory Semantic Cache for local development and unit tests.
@@ -130,20 +139,41 @@ class InMemorySemanticCache(BaseSemanticCache):
         self._total_lookups = 0
         self._total_hits = 0
 
-    def _generate_embedding(self, text: str) -> list[float]:
-        """Generates embedding for a query text."""
+    def _generate_embedding(self, text: str) -> Optional[list[float]]:
+        """
+        Generates embedding for a query text.
+        
+        Fail-Closed in Production:
+        If running in production (ENVIRONMENT=production, K_SERVICE set), real Vertex AI
+        embeddings are strictly required. If USE_VERTEX_EMBEDDING is not enabled or Vertex AI
+        fails, returns None so that the semantic cache is safely bypassed rather than producing
+        inaccurate pseudo-vector matches.
+        
+        In local dev/test environments, falls back to ASCII character-hash vectors.
+        """
         if self._embedding_fn:
             return self._embedding_fn(text)
 
-        if os.getenv("USE_VERTEX_EMBEDDING", "false").lower() in ("true", "1"):
+        use_vertex = os.getenv("USE_VERTEX_EMBEDDING", "false").lower() in ("true", "1", "yes")
+        in_prod = is_production_mode()
+
+        if use_vertex:
             try:
                 from vertexai.language_models import TextEmbeddingModel
                 model = TextEmbeddingModel.from_pretrained("text-embedding-005")
                 embeddings = model.get_embeddings([text])
                 return embeddings[0].values
             except Exception as e:
+                if in_prod:
+                    logger.error("Fail-Closed: Vertex AI embedding error in production (%s). Bypassing semantic cache.", e)
+                    return None
                 logger.debug("Vertex AI embedding unavailable (%s), using local embedding.", e)
 
+        if in_prod:
+            logger.warning("Fail-Closed: Semantic cache requires real Vertex AI embeddings in production (USE_VERTEX_EMBEDDING=true). Bypassing cache.")
+            return None
+
+        # Local development / test ASCII pseudo-vector fallback
         vec = [0.0] * 128
         cleaned = text.lower().strip()
         words = cleaned.split()
@@ -166,9 +196,12 @@ class InMemorySemanticCache(BaseSemanticCache):
         if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
             return None
 
+        query_emb = self._generate_embedding(query)
+        if query_emb is None:
+            return None
+
         self._total_lookups += 1
         threshold = similarity_threshold or self.similarity_threshold
-        query_emb = self._generate_embedding(query)
 
         self._entries = [e for e in self._entries if not e.is_expired()]
 
@@ -210,11 +243,14 @@ class InMemorySemanticCache(BaseSemanticCache):
         ttl_seconds: Optional[int] = None,
         tier: str = "L1",
         metadata: Optional[dict] = None,
-    ) -> SemanticCacheEntry:
+    ) -> Optional[SemanticCacheEntry]:
+        query_emb = self._generate_embedding(query)
+        if query_emb is None:
+            logger.debug("Skipping semantic cache set: embedding is None (Fail-Closed mode).")
+            return None
+
         ttl = ttl_seconds if ttl_seconds is not None else self.default_ttl_seconds
         expires_at = time.time() + ttl if ttl > 0 else 0.0
-
-        query_emb = self._generate_embedding(query)
 
         if len(self._entries) >= self.max_size:
             self._entries.sort(key=lambda x: x.hit_count)
@@ -297,8 +333,42 @@ class RedisSemanticCache(BaseSemanticCache):
         self._local_lookups = 0
         self._local_hits = 0
 
+        # Circuit Breaker & Consecutive Failure Tracker
+        self._consecutive_redis_failures = 0
+        self._circuit_breaker_tripped = False
+        self._failure_threshold = 10
+
         if self._redis is None:
             self._init_redis()
+
+    def _record_redis_failure(self, error: Exception, context: str) -> None:
+        """Records a Redis failure, trips circuit breaker, and emits alert if threshold reached."""
+        self._consecutive_redis_failures += 1
+        if self._consecutive_redis_failures >= self._failure_threshold:
+            if not self._circuit_breaker_tripped:
+                self._circuit_breaker_tripped = True
+                logger.critical(
+                    "REDIS_CIRCUIT_BREAKER_ALERT: Redis semantic cache failed %d consecutive times! "
+                    "Last error in %s: %s. Circuit breaker TRIPPED. Bypassing Redis cache to protect application latency.",
+                    self._consecutive_redis_failures,
+                    context,
+                    error,
+                )
+        else:
+            logger.warning(
+                "RedisSemanticCache %s error: %s (Failure %d/%d). Soft Fail-Closed.",
+                context,
+                error,
+                self._consecutive_redis_failures,
+                self._failure_threshold,
+            )
+
+    def _record_redis_success(self) -> None:
+        """Resets failure counter and clears circuit breaker upon successful Redis operation."""
+        if self._consecutive_redis_failures > 0 or self._circuit_breaker_tripped:
+            logger.info("RedisSemanticCache recovered after %d failures. Circuit breaker reset.", self._consecutive_redis_failures)
+            self._consecutive_redis_failures = 0
+            self._circuit_breaker_tripped = False
 
     def _init_redis(self) -> None:
         try:
@@ -312,24 +382,36 @@ class RedisSemanticCache(BaseSemanticCache):
                 decode_responses=True,
             )
             self._redis.ping()
+            self._record_redis_success()
             logger.info("Connected to Redis Semantic Cache at %s:%s (db=%d)", self._host, self._port, self._db)
         except Exception as e:
-            logger.warning("Failed to connect to Redis Semantic Cache (%s:%s): %s. Operating in Soft Fail-Closed mode.", self._host, self._port, e)
+            self._record_redis_failure(e, "connect")
             self._redis = None
 
-    def _generate_embedding(self, text: str) -> list[float]:
+    def _generate_embedding(self, text: str) -> Optional[list[float]]:
         if self._embedding_fn:
             return self._embedding_fn(text)
 
-        if os.getenv("USE_VERTEX_EMBEDDING", "false").lower() in ("true", "1"):
+        use_vertex = os.getenv("USE_VERTEX_EMBEDDING", "false").lower() in ("true", "1", "yes")
+        in_prod = is_production_mode()
+
+        if use_vertex:
             try:
                 from vertexai.language_models import TextEmbeddingModel
                 model = TextEmbeddingModel.from_pretrained("text-embedding-005")
                 embeddings = model.get_embeddings([text])
                 return embeddings[0].values
             except Exception as e:
+                if in_prod:
+                    logger.error("Fail-Closed: Vertex AI embedding error in production (%s). Bypassing semantic cache.", e)
+                    return None
                 logger.debug("Vertex AI embedding unavailable (%s), using local embedding.", e)
 
+        if in_prod:
+            logger.warning("Fail-Closed: Semantic cache requires real Vertex AI embeddings in production (USE_VERTEX_EMBEDDING=true). Bypassing cache.")
+            return None
+
+        # Local development / test ASCII pseudo-vector fallback
         vec = [0.0] * 128
         cleaned = text.lower().strip()
         words = cleaned.split()
@@ -361,6 +443,14 @@ class RedisSemanticCache(BaseSemanticCache):
         if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
             return None
 
+        if self._circuit_breaker_tripped:
+            logger.debug("RedisSemanticCache circuit breaker is TRIPPED. Fast bypassing get().")
+            return None
+
+        query_emb = self._generate_embedding(query)
+        if query_emb is None:
+            return None
+
         self._local_lookups += 1
         threshold = similarity_threshold or self.similarity_threshold
 
@@ -380,13 +470,13 @@ class RedisSemanticCache(BaseSemanticCache):
                 candidate_entry_ids.update(user_ids)
 
             if not candidate_entry_ids:
+                self._record_redis_success()
                 return None
 
             # Fetch candidate entries in one batch
             entry_keys = [f"sem_cache:entry:{eid}" for eid in candidate_entry_ids]
             raw_entries = self._redis.mget(entry_keys)
 
-            query_emb = self._generate_embedding(query)
             best_match: Optional[SemanticCacheEntry] = None
             best_entry_id: Optional[str] = None
             highest_sim = -1.0
@@ -426,6 +516,8 @@ class RedisSemanticCache(BaseSemanticCache):
                 except Exception:
                     pass
 
+            self._record_redis_success()
+
             if best_match and highest_sim >= threshold and best_entry_id:
                 best_match.hit_count += 1
                 self._local_hits += 1
@@ -456,7 +548,7 @@ class RedisSemanticCache(BaseSemanticCache):
             return None
 
         except Exception as e:
-            logger.warning("RedisSemanticCache get error: %s. Soft Fail-Closed (Cache Miss).", e)
+            self._record_redis_failure(e, "get")
             return None
 
     def set(
@@ -473,6 +565,15 @@ class RedisSemanticCache(BaseSemanticCache):
         Persists query, embedding, and response into Redis with TTL.
         Soft Fail-Closed: Silently logs warning on error without interrupting flow.
         """
+        if self._circuit_breaker_tripped:
+            logger.debug("RedisSemanticCache circuit breaker is TRIPPED. Fast bypassing set().")
+            return None
+
+        query_emb = self._generate_embedding(query)
+        if query_emb is None:
+            logger.debug("Skipping RedisSemanticCache set: embedding is None (Fail-Closed mode).")
+            return None
+
         if self._redis is None:
             self._init_redis()
             if self._redis is None:
@@ -480,7 +581,6 @@ class RedisSemanticCache(BaseSemanticCache):
 
         ttl = ttl_seconds if ttl_seconds is not None else self.default_ttl_seconds
         expires_at = time.time() + ttl if ttl > 0 else 0.0
-        query_emb = self._generate_embedding(query)
 
         entry = SemanticCacheEntry(
             query=query,
@@ -512,9 +612,10 @@ class RedisSemanticCache(BaseSemanticCache):
                 pipe.sadd(f"sem_cache:keys:user:{user_id}", entry_id)
 
             pipe.execute()
+            self._record_redis_success()
             return entry
         except Exception as e:
-            logger.warning("RedisSemanticCache set error for entry %s: %s (Soft Fail-Closed).", entry_id, e)
+            self._record_redis_failure(e, "set")
             return None
 
     def clear(self) -> None:
@@ -542,8 +643,9 @@ class RedisSemanticCache(BaseSemanticCache):
 
             self._local_lookups = 0
             self._local_hits = 0
+            self._record_redis_success()
         except Exception as e:
-            logger.warning("Failed to clear RedisSemanticCache: %s", e)
+            self._record_redis_failure(e, "clear")
 
     def get_stats(self) -> dict:
         """Returns statistics on semantic cache usage."""
@@ -554,8 +656,9 @@ class RedisSemanticCache(BaseSemanticCache):
                 total_entries += public_count
                 for u_set in self._redis.keys("sem_cache:keys:user:*") or []:
                     total_entries += (self._redis.scard(u_set) or 0)
-            except Exception:
-                pass
+                self._record_redis_success()
+            except Exception as e:
+                self._record_redis_failure(e, "get_stats")
 
         hit_rate = (
             round(self._local_hits / self._local_lookups * 100, 2)
@@ -568,7 +671,9 @@ class RedisSemanticCache(BaseSemanticCache):
             "total_hits": self._local_hits,
             "hit_rate_percent": hit_rate,
             "similarity_threshold": self.similarity_threshold,
-            "backend": "redis"
+            "backend": "redis",
+            "circuit_breaker_tripped": self._circuit_breaker_tripped,
+            "consecutive_failures": self._consecutive_redis_failures,
         }
 
 

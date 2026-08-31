@@ -72,6 +72,14 @@ def analyze_system_logs_for_rca(
     if not hypotheses:
         hypotheses.append("Cần kiểm tra sâu hơn log tầng kernel hoặc APM traces do lỗi xuất phát từ logic application bất thường.")
 
+    # Guardrails: Determine confidence level based on empirical log signals
+    if fatal_count > 0 or (len(detected_anomalies) > 0 and error_count >= 2):
+        confidence_level = "HIGH"
+    elif error_count > 0 or len(detected_anomalies) > 0:
+        confidence_level = "MEDIUM"
+    else:
+        confidence_level = "LOW"
+
     return {
         "status": "success",
         "system": system_name,
@@ -84,5 +92,13 @@ def analyze_system_logs_for_rca(
         "detected_anomalies": detected_anomalies,
         "root_cause_hypotheses": hypotheses,
         "sample_error_traces": error_lines[:5],
-        "incident_context": incident_description
+        "incident_context": incident_description,
+        # Mandatory P0 Output Guardrails
+        "confidence_level": confidence_level,
+        "requires_human_review": True,
+        "disclaimer": (
+            "Kết quả phân tích nguyên nhân gốc rễ (RCA) là giả thuyết chẩn đoán tự động hỗ trợ bởi AI, "
+            "KHÔNG phải là kết luận điều tra sự cố chính thức. Bắt buộc cần có kỹ sư/quản trị viên hệ thống "
+            "xác minh và phê duyệt trước khi áp dụng hành động can thiệp vào môi trường vận hành."
+        ),
     }

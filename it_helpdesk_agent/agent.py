@@ -80,7 +80,8 @@ async def semantic_cache_before_model_callback(
 
     # 1. Protect expensive L3 Pro model with per-user rate limiting (L3_RATE_LIMIT_PER_MINUTE)
     if agent_name == "l3_deep_diagnostics_agent":
-        allowed, rem, retry_after = check_l3_rate_limit(user_id)
+        from it_helpdesk_agent.app_utils.rate_limiter import check_l3_rate_limit_with_warning
+        allowed, rem, retry_after, is_soft_warning, warn_msg = check_l3_rate_limit_with_warning(user_id)
         if not allowed:
             l3_limit = os.getenv("L3_RATE_LIMIT_PER_MINUTE", "10")
             return LlmResponse(
@@ -92,6 +93,8 @@ async def semantic_cache_before_model_callback(
                 ),
                 custom_metadata={"rate_limited": True, "tier": "L3"}
             )
+        if is_soft_warning and warn_msg:
+            logging.getLogger("it_helpdesk_agent").info("User %s soft quota reached: %s", user_id, warn_msg)
 
     # 2. Check semantic cache
     if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
@@ -342,6 +345,9 @@ l3_deep_diagnostics_agent = Agent(
        - Sử dụng công cụ `review_it_contract_sla` để rà soát các hợp đồng dịch vụ IT, điều khoản bảo mật (NDA/DPA), chỉ số Uptime, cam kết MTTR và chế tài phạt (Service Credits).
        - Chỉ ra các rủi ro pháp lý tiềm ẩn khi đối tác vi phạm cam kết hoặc thiếu điều khoản bồi thường.
     3. **Cập nhật Ticket Cấp cao:** Sử dụng `update_ticket_status` và `route_ticket_to_tier` để đồng bộ kết quả phân tích chuyên sâu vào hệ thống.
+    4. **Nguyên Tắc Guardrails & Tuyên Bố Trách Nhiệm (Mandatory Disclaimers):**
+       - Mọi kết luận RCA và đánh giá pháp lý/SLA là thông tin hỗ trợ chẩn đoán tự động của AI (`requires_human_review: true`).
+       - Luôn đính kèm mức độ tự tin (`confidence_level`) và lời nhắc kỹ sư/chuyên viên pháp chế phê duyệt trước khi hành động chính thức.
     """,
     tools=[
         analyze_system_logs_for_rca,
