@@ -90,3 +90,55 @@ def test_list_user_tickets():
     assert user_a_tickets["status"] == "success"
     assert user_a_tickets["count"] == 2
     assert len(user_a_tickets["tickets"]) == 2
+
+
+def test_ticket_cache_ttl_and_fallback():
+    """Verify ticket cache expires after TTL and falls back to cached version if Firestore fails."""
+    import time
+    from unittest.mock import MagicMock, patch
+    from it_helpdesk_agent.tools import ticketing_tool
+
+    # Create ticket
+    res = create_helpdesk_ticket(user_id="emp-ttl", title="TTL Test", description="Testing TTL")
+    ticket_id = res["ticket"]["id"]
+
+    # Mock Firestore client
+    mock_fs = MagicMock()
+    mock_doc = MagicMock()
+    mock_doc.exists = True
+    mock_doc.to_dict.return_value = {
+        "id": ticket_id,
+        "user_id": "emp-ttl",
+        "title": "TTL Test Updated in Firestore",
+        "description": "Testing TTL",
+        "category": "General",
+        "priority": "Medium",
+        "status": "In_Progress",
+        "assigned_tier": "L1_SelfService",
+        "created_at": res["ticket"]["created_at"],
+        "updated_at": res["ticket"]["updated_at"],
+    }
+    mock_fs.collection.return_value.document.return_value.get.return_value = mock_doc
+
+    with patch("it_helpdesk_agent.tools.ticketing_tool._get_firestore", return_value=mock_fs):
+        # 1. Immediate read within TTL should hit cache (title="TTL Test")
+        details = get_ticket_details(ticket_id)
+        assert details["ticket"]["title"] == "TTL Test"
+        assert not mock_fs.collection.called
+
+        # 2. Simulate expired cache (set cache timestamp in the past)
+        norm_id = ticket_id.upper()
+        ticketing_tool._TICKETS_CACHE_TIMES[norm_id] = time.time() - 100
+
+        # Now read should query Firestore and return updated title
+        details_updated = get_ticket_details(ticket_id)
+        assert details_updated["ticket"]["title"] == "TTL Test Updated in Firestore"
+        assert mock_fs.collection.called
+
+        # 3. Simulate Firestore failure when cache expired -> should fallback to stale cached ticket
+        mock_fs.collection.side_effect = Exception("Firestore unavailable")
+        ticketing_tool._TICKETS_CACHE_TIMES[norm_id] = time.time() - 100
+        fallback_details = get_ticket_details(ticket_id)
+        assert fallback_details["status"] == "success"
+        assert fallback_details["ticket"]["id"] == ticket_id
+

@@ -1,6 +1,7 @@
 import datetime
 import logging
 import os
+import time
 import uuid
 from typing import Literal, Optional
 from pydantic import BaseModel, Field
@@ -29,8 +30,11 @@ from collections import OrderedDict
 import threading
 
 MAX_LOCAL_TICKETS_CACHE = int(os.getenv("MAX_LOCAL_TICKETS_CACHE", "1000"))
+TICKET_CACHE_TTL_SECONDS = int(os.getenv("TICKET_CACHE_TTL_SECONDS", "30"))
+
 # In-memory LRU ticket storage (Local cache & fallback for offline/test environments)
 _TICKETS_DB: OrderedDict[str, HelpdeskTicket] = OrderedDict()
+_TICKETS_CACHE_TIMES: dict[str, float] = {}
 _tickets_cache_lock = threading.Lock()
 
 
@@ -41,18 +45,31 @@ def _cache_put_ticket(ticket: HelpdeskTicket) -> None:
         if norm_id in _TICKETS_DB:
             _TICKETS_DB.move_to_end(norm_id)
         _TICKETS_DB[norm_id] = ticket
+        _TICKETS_CACHE_TIMES[norm_id] = time.time()
         while len(_TICKETS_DB) > MAX_LOCAL_TICKETS_CACHE:
-            _TICKETS_DB.popitem(last=False)
+            oldest_id, _ = _TICKETS_DB.popitem(last=False)
+            _TICKETS_CACHE_TIMES.pop(oldest_id, None)
 
 
-def _cache_get_ticket(ticket_id: str) -> Optional[HelpdeskTicket]:
-    """Retrieves ticket from LRU cache, updating its access recency."""
+def _cache_get_ticket(ticket_id: str, max_age: Optional[float] = None) -> Optional[HelpdeskTicket]:
+    """Retrieves ticket from LRU cache, checking expiration against TTL."""
     with _tickets_cache_lock:
         norm_id = ticket_id.upper()
         if norm_id in _TICKETS_DB:
             _TICKETS_DB.move_to_end(norm_id)
+            if max_age is not None:
+                cached_time = _TICKETS_CACHE_TIMES.get(norm_id, 0.0)
+                if (time.time() - cached_time) > max_age:
+                    return None  # Expired
             return _TICKETS_DB[norm_id]
         return None
+
+
+def _cache_get_fallback(ticket_id: str) -> Optional[HelpdeskTicket]:
+    """Retrieves ticket from LRU cache regardless of TTL for offline/error fallback."""
+    with _tickets_cache_lock:
+        norm_id = ticket_id.upper()
+        return _TICKETS_DB.get(norm_id)
 
 # Lazy Firestore Client Initialization
 _firestore_client = None
@@ -88,23 +105,31 @@ def _persist_ticket_to_storage(ticket: HelpdeskTicket):
 
 
 def _load_ticket_from_storage(ticket_id: str) -> Optional[HelpdeskTicket]:
-    """Loads ticket from local LRU cache, or fetches from Firestore if missing."""
+    """Loads ticket from local LRU cache if unexpired, or fetches fresh from Firestore with fallback."""
     ticket_id_norm = ticket_id.upper()
-    cached = _cache_get_ticket(ticket_id_norm)
+    fs = _get_firestore()
+
+    # If Firestore is not enabled (e.g. offline dev, test mode), use local cache directly
+    if fs is None:
+        return _cache_get_fallback(ticket_id_norm)
+
+    # If Firestore is enabled, check unexpired cache first (TTL-based)
+    cached = _cache_get_ticket(ticket_id_norm, max_age=TICKET_CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
-    
-    fs = _get_firestore()
-    if fs:
-        try:
-            doc = fs.collection("helpdesk_tickets").document(ticket_id_norm).get()
-            if doc.exists:
-                data = doc.to_dict()
-                ticket = HelpdeskTicket(**data)
-                _cache_put_ticket(ticket)
-                return ticket
-        except Exception as e:
-            logger.error(f"Error fetching ticket {ticket_id} from Firestore: {e}")
+
+    # Cache miss or expired: fetch fresh from Firestore
+    try:
+        doc = fs.collection("helpdesk_tickets").document(ticket_id_norm).get()
+        if doc.exists:
+            data = doc.to_dict()
+            ticket = HelpdeskTicket(**data)
+            _cache_put_ticket(ticket)
+            return ticket
+    except Exception as e:
+        logger.error(f"Error fetching ticket {ticket_id} from Firestore: {e}. Using stale cache fallback.")
+        return _cache_get_fallback(ticket_id_norm)
+
     return None
 
 
