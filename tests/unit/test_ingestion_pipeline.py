@@ -607,7 +607,7 @@ def test_ensure_vector_index_contains_storing_clause():
     ensure_vector_index(mock_bq, project_id="my-proj", dataset_id="my_kb", table_name="articles")
     assert mock_bq.query.called
     ddl = mock_bq.query.call_args[0][0]
-    assert "STORING (system, category, id, title, content, section_hierarchy, source_uri, owner, effective_date, expiry_date, is_deleted)" in ddl
+    assert "STORING (system, category, id, title, content, section_h1, section_h2, section_h3, source_uri, owner, effective_date, expiry_date, is_deleted, parent_doc_id, chunk_index, allowed_roles, sensitivity)" in ddl
     assert "OPTIONS(distance_type='COSINE', index_type='IVF')" in ddl
 
 
@@ -665,7 +665,7 @@ def test_pipeline_version_constants_and_chunk_metadata():
 
     assert PARSER_VERSION == "1.0.0"
     assert CHUNKER_VERSION == "1.0.0"
-    assert EMBEDDING_MODEL == "text-embedding-005"
+    assert EMBEDDING_MODEL == "text-multilingual-embedding-002"
     assert EMBEDDING_DIM == 768
 
     doc_info = {
@@ -683,7 +683,7 @@ def test_pipeline_version_constants_and_chunk_metadata():
     for c in chunks:
         assert c["parser_version"] == "1.0.0"
         assert c["chunker_version"] == "1.0.0"
-        assert c["embedding_model"] == "text-embedding-005"
+        assert c["embedding_model"] == "text-multilingual-embedding-002"
         assert c["embedding_dim"] == 768
         assert c["owner"] == "governance@company.com"
         assert c["effective_date"] == "2026-01-01"

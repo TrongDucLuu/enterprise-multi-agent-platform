@@ -56,6 +56,9 @@ class SSOUser(BaseModel):
 current_sso_user: contextvars.ContextVar[Optional[SSOUser]] = contextvars.ContextVar(
     "current_sso_user", default=None
 )
+current_sso_raw_token: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "current_sso_raw_token", default=None
+)
 
 
 def get_current_sso_user() -> Optional[SSOUser]:
@@ -73,6 +76,19 @@ def get_current_sso_user() -> Optional[SSOUser]:
             is_authenticated=True,
         )
     return user
+
+
+def get_current_sso_token() -> Optional[str]:
+    """Retrieves the raw OIDC/JWT token from the current context or generates dev token if permitted."""
+    token = current_sso_raw_token.get()
+    if token is None and ALLOW_LOCAL_DEV_SSO:
+        user = get_current_sso_user()
+        if user:
+            try:
+                return create_dev_mock_token(user)
+            except Exception:
+                return None
+    return token
 
 
 def require_role(required_roles: list[str]) -> tuple[bool, Optional[str]]:
@@ -406,10 +422,13 @@ class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
                 )
                 request.state.user = dev_user
                 token_ctx = current_sso_user.set(dev_user)
+                mock_raw = create_dev_mock_token(dev_user)
+                raw_token_ctx = current_sso_raw_token.set(mock_raw)
                 try:
                     return await call_next(request)
                 finally:
                     current_sso_user.reset(token_ctx)
+                    current_sso_raw_token.reset(raw_token_ctx)
 
             return JSONResponse(
                 status_code=401,
@@ -430,10 +449,12 @@ class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
 
             request.state.user = user
             token_ctx = current_sso_user.set(user)
+            raw_token_ctx = current_sso_raw_token.set(token)
             try:
                 return await call_next(request)
             finally:
                 current_sso_user.reset(token_ctx)
+                current_sso_raw_token.reset(raw_token_ctx)
         except HTTPException as exc:
             return JSONResponse(
                 status_code=exc.status_code,

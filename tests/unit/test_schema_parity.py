@@ -1,7 +1,7 @@
 """
 Unit and Mutation Tests for Schema Parity between Terraform and Python Ingestion.
 Guarantees that `google_bigquery_table.knowledge_articles` in `deployment/terraform/main.tf`
-and `scripts/ingest/loaders.py` have 100% schema parity across all 20 fields.
+and `scripts/ingest/loaders.py` have 100% schema parity across all 26 fields.
 """
 import re
 import json
@@ -36,6 +36,7 @@ def normalize_type(t: str) -> str:
         "INTEGER": "INTEGER",
         "FLOAT64": "FLOAT64",
         "STRING": "STRING",
+        "DATE": "DATE",
         "TIMESTAMP": "TIMESTAMP",
         "RECORD": "RECORD",
         "STRUCT": "RECORD",
@@ -44,14 +45,14 @@ def normalize_type(t: str) -> str:
 
 
 def test_schema_parity_fields_and_types():
-    """Verifies that all 20 fields, types, modes, and nested fields match between Terraform and loaders.py."""
+    """Verifies that all 26 fields, types, modes, and nested fields match between Terraform and loaders.py."""
     tf_schema = extract_terraform_schema()
     py_schema = get_knowledge_articles_schema()
 
     # 1. Total field count check
-    assert len(tf_schema) == len(py_schema) == 20, (
+    assert len(tf_schema) == len(py_schema) == 26, (
         f"Schema count mismatch: Terraform has {len(tf_schema)} fields, "
-        f"Python loaders.py has {len(py_schema)} fields (Expected exactly 20)."
+        f"Python loaders.py has {len(py_schema)} fields (Expected exactly 26)."
     )
 
     tf_dict = {f["name"]: f for f in tf_schema}

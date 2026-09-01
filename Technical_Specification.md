@@ -213,7 +213,6 @@ def _get_and_authorize_ticket(
 Trong `BigQueryVectorKnowledgeStore.search()`, chuỗi truy vấn và danh sách hệ thống được phép truy cập (`allowed_systems`) tuyệt đối không bao giờ được nối chuỗi (string concatenation) vào câu lệnh SQL. Toàn bộ tham số được truyền qua `google.cloud.bigquery.ScalarQueryParameter` và `ArrayQueryParameter`:
 
 ```sql
--- Chuẩn hóa câu lệnh SQL BigQuery với Security Trimming
 SELECT 
     id, system, title, category, content, keywords, source_uri, updated_at,
     (1.0 - ML.DISTANCE(embedding, @query_vector, 'COSINE')) AS similarity_score
@@ -222,6 +221,33 @@ WHERE system IN UNNEST(@allowed_systems_param)
 ORDER BY similarity_score DESC
 LIMIT @limit;
 ```
+
+### 4.5. Tuân Thủ An Toàn Doanh Nghiệp Cấp Độ Cao (CMEK, VPC-SC, Audit Logs & Data Residency)
+
+Nhằm đáp ứng các tiêu chuẩn khắt khe của khối Ngân hàng, Tài chính, Bảo hiểm và Y tế (PCI-DSS, HIPAA, GDPR, ISO 27001):
+
+#### 1. Khóa Mã Hóa Do Khách Hàng Tự Quản Lý (CMEK - Customer-Managed Encryption Keys)
+- **Google Cloud KMS:** Toàn bộ dữ liệu nhạy cảm ở trạng thái nghỉ (At-Rest) đều được mã hóa bằng khóa mã hóa riêng của doanh nghiệp (CMEK) quản lý tại Cloud KMS:
+  - **BigQuery Knowledge Table:** `kms_key_name = "projects/{project_id}/locations/{region}/keyRings/helpdesk-ring/cryptoKeys/bigquery-key"`.
+  - **Cloud Storage Bucket Ingestion:** `default_kms_key_name = "projects/{project_id}/locations/{region}/keyRings/helpdesk-ring/cryptoKeys/gcs-key"`.
+  - **Memorystore Redis:** Mã hóa At-Rest với KMS và In-Transit với TLS 1.3.
+- **Phân quyền Tối thiểu (Least Privilege):** Gán role `roles/cloudkms.cryptoKeyEncrypterDecrypter` cho Service Account của từng dịch vụ tương ứng (`bq-{project_number}@bigquery-encryption.iam.gserviceaccount.com`, `service-{project_number}@gs-project-accounts.iam.gserviceaccount.com`).
+
+#### 2. Vành Đai Bảo Mật VPC Service Controls (VPC-SC)
+- Thiết lập **VPC-SC Security Perimeter** bao bọc toàn bộ tài nguyên lưu trữ và tính toán:
+  - Dịch vụ được bảo vệ: `bigquery.googleapis.com`, `aiplatform.googleapis.com`, `storage.googleapis.com`, `secretmanager.googleapis.com`, `firestore.googleapis.com`.
+  - **Chống Thất Thoát Dữ Liệu (Data Exfiltration Prevention):** Ngăn chặn nhân viên hay Service Account sao chép dữ liệu ra các project hoặc Cloud Storage bucket ngoài vành đai.
+  - **Serverless VPC Access Connector:** Mọi kết nối từ Cloud Run đến BigQuery, Redis và Vertex AI đi qua đường truyền mạng riêng ảo (Private Google Access), không lộ diện qua Internet công cộng.
+
+#### 3. Nhật Ký Kiểm Toán Toàn Diện (Cloud Audit Logs & Data Access Logs)
+- Kích hoạt **Data Access Audit Logs** trên toàn bộ các tài nguyên cốt lõi:
+  - `DATA_READ`: Ghi nhận mọi truy vấn vector search đọc từ bảng `knowledge_articles` và gọi Vertex AI Embeddings.
+  - `DATA_WRITE`: Ghi nhận toàn bộ thao tác thêm, sửa, tombstone (xóa mềm) tài liệu trong BigQuery và Ingestion DLQ.
+  - `ADMIN_READ` / `ADMIN_WRITE`: Giám sát thay đổi phân quyền IAM và thay đổi cấu hình dataset.
+- Tự động chuyển tiếp (Export Sink) nhật ký sang Cloud Storage Archive / BigQuery Audit Dataset với thời gian lưu trữ tối thiểu 365 ngày phục vụ rà soát tuân thủ.
+
+#### 4. Định Cư Dữ Liệu Nghiêm Ngặt (Data Residency)
+- Toàn bộ hạ tầng lưu trữ và tính toán (BigQuery Dataset, Cloud Storage Buckets, Cloud Run Services, Firestore Native Database, Vertex AI Regional Endpoints) được ghim cứng tại cùng một khu vực địa lý duy nhất (ví dụ: `asia-southeast1` - Singapore hoặc `asia-east1` - Đài Loan), bảo đảm không luân chuyển dữ liệu ra ngoài lãnh thổ theo luật an ninh mạng.
 
 ---
 

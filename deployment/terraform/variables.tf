@@ -190,5 +190,29 @@ variable "telemetry_include_query" {
   default     = false
 }
 
+variable "enable_bigquery_reservation" {
+  description = "Enable BigQuery Edition Reservation with slot autoscaling for low-latency vector search"
+  type        = bool
+  default     = false
+}
+
+variable "bigquery_edition" {
+  description = "BigQuery Edition for capacity reservation ('ENTERPRISE' or 'ENTERPRISE_PLUS')"
+  type        = string
+  default     = "ENTERPRISE"
+}
+
+variable "bigquery_baseline_slots" {
+  description = "Baseline dedicated slots for BigQuery Reservation (0 for pure autoscaling)"
+  type        = number
+  default     = 0
+}
+
+variable "bigquery_max_slots" {
+  description = "Maximum autoscaling slots for BigQuery Reservation"
+  type        = number
+  default     = 100
+}
+
 
 

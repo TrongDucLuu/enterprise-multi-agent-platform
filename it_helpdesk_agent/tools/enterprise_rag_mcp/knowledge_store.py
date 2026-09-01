@@ -2,11 +2,38 @@ import os
 import re
 import math
 import html
+import time
+import datetime
 import logging
 from abc import ABC, abstractmethod
 from typing import Optional, Any
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_str(val: Any) -> Optional[str]:
+    """Safely extracts string representation from a BigQuery row field or model attribute."""
+    if val is None:
+        return None
+    if isinstance(val, (datetime.date, datetime.datetime)):
+        return val.isoformat()
+    return str(val)
+
+
+def _extract_bool(val: Any) -> bool:
+    """Safely extracts boolean value."""
+    if isinstance(val, bool):
+        return val
+    return bool(val) if val is not None else False
+
+
+def _extract_list(val: Any) -> list[str]:
+    """Safely extracts list of strings from BigQuery REPEATED fields."""
+    if val is None:
+        return []
+    if isinstance(val, (list, tuple, set)):
+        return [str(x) for x in val if x is not None]
+    return [str(val)]
 
 
 def escape_xml_attribute(val: Any) -> str:
@@ -56,18 +83,22 @@ except ImportError:
 try:
     from it_helpdesk_agent.app_utils.system_config import get_valid_system_filters, get_retrieval_config
     from it_helpdesk_agent.app_utils.embedding_utils import DEFAULT_EMBEDDING_MODEL, generate_text_embedding
+    from it_helpdesk_agent.app_utils.reranker import rerank_search_results
 except ImportError:
     try:
         from app_utils.system_config import get_valid_system_filters, get_retrieval_config
         from app_utils.embedding_utils import DEFAULT_EMBEDDING_MODEL, generate_text_embedding
+        from app_utils.reranker import rerank_search_results
     except ImportError:
         def get_valid_system_filters() -> set[str]:
             return {"ERP", "HRM", "CRM", "ALL"}
         def get_retrieval_config() -> dict[str, Any]:
-            return {"fraction_lists_to_search": 0.05, "hybrid_search_enabled": False}
-        DEFAULT_EMBEDDING_MODEL = "text-embedding-005"
+            return {"fraction_lists_to_search": 0.05, "hybrid_search_enabled": False, "reranker_enabled": False}
+        DEFAULT_EMBEDDING_MODEL = "text-multilingual-embedding-002"
         def generate_text_embedding(text: str, **kwargs) -> list[float]:
-            return [0.0] * 64
+            return [0.0] * 768
+        def rerank_search_results(query: str, candidates: list[SearchResult], **kwargs) -> list[SearchResult]:
+            return candidates
 
 
 class KnowledgeStoreUnavailableError(Exception):
@@ -748,12 +779,19 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
             context_path = sec_hier.format_path() if sec_hier else f"{article.system} > {article.category} > {article.title}"
             search_results.append(SearchResult(
                 article_id=article.id,
+                parent_doc_id=article.parent_doc_id,
+                chunk_index=article.chunk_index,
                 system=article.system,
                 title=article.title,
                 snippet=snippet,
                 relevance_score=round(relevance, 2),
+                section_h1=article.section_h1,
+                section_h2=article.section_h2,
+                section_h3=article.section_h3,
                 section_hierarchy=sec_hier,
                 context_path=context_path,
+                allowed_roles=article.allowed_roles,
+                sensitivity=article.sensitivity,
                 source_uri=article.source_uri,
                 category=article.category,
                 keywords=article.keywords,
@@ -766,11 +804,55 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         return search_results
 
     def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
-        """Retrieves an article by its unique ID."""
-        for article in self.articles:
-            if article.id.upper() == article_id.upper():
-                return article
-        return None
+        """Retrieves an article by its unique ID, aggregating multi-chunk documents if present."""
+        clean_id = article_id.upper().strip()
+        
+        target_parent = None
+        for a in self.articles:
+            if a.id.upper() == clean_id:
+                if a.parent_doc_id:
+                    target_parent = a.parent_doc_id.upper()
+                break
+            elif a.parent_doc_id and a.parent_doc_id.upper() == clean_id:
+                target_parent = a.parent_doc_id.upper()
+                break
+
+        if target_parent:
+            matching = [a for a in self.articles if a.parent_doc_id and a.parent_doc_id.upper() == target_parent]
+        else:
+            matching = [a for a in self.articles if a.id.upper() == clean_id]
+
+        if not matching:
+            return None
+
+        if len(matching) == 1 and not matching[0].parent_doc_id:
+            return matching[0]
+
+        sorted_chunks = sorted(matching, key=lambda x: getattr(x, "chunk_index", 0) or 0)
+        base = sorted_chunks[0]
+        aggregated_content = "\n\n".join(c.content for c in sorted_chunks if c.content)
+        return KnowledgeArticle(
+            id=base.parent_doc_id or base.id,
+            parent_doc_id=base.parent_doc_id,
+            chunk_index=0,
+            system=base.system,
+            title=base.title.split(" (Phần ")[0] if " (Phần " in base.title else base.title,
+            category=base.category,
+            content=aggregated_content,
+            keywords=base.keywords,
+            section_h1=base.section_h1,
+            section_h2=base.section_h2,
+            section_h3=base.section_h3,
+            section_hierarchy=base.section_hierarchy,
+            allowed_roles=base.allowed_roles,
+            sensitivity=base.sensitivity,
+            source_uri=base.source_uri,
+            owner=base.owner,
+            effective_date=base.effective_date,
+            expiry_date=base.expiry_date,
+            is_deleted=base.is_deleted,
+            deleted_at=base.deleted_at,
+        )
 
 
 class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
@@ -793,6 +875,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
         self.table_name = table_name
         self.embedding_model = embedding_model
         self.embedding_fn = embedding_fn
+        self._index_active_cache: Optional[tuple[bool, float]] = None
 
         if bq_client is not None:
             self.bq_client = bq_client
@@ -804,11 +887,41 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 logger.error("Failed to initialize BigQuery Client for Vector Search (%s).", e)
                 self.bq_client = None
 
-    def _generate_embedding(self, text: str) -> list[float]:
+    def _generate_embedding(self, text: str, task_type: str = "RETRIEVAL_QUERY") -> list[float]:
         """Generates embedding using the shared enterprise embedding model or injected function."""
         if self.embedding_fn is not None:
             return self.embedding_fn(text)
-        return generate_text_embedding(text, model_name=self.embedding_model)
+        return generate_text_embedding(text, model_name=self.embedding_model, task_type=task_type)
+
+    def _is_vector_index_active(self) -> bool:
+        """Checks if BigQuery Vector Index exists and has coverage > 0. Caches result for 60 seconds."""
+        now = time.time()
+        if self._index_active_cache is not None:
+            active, cached_time = self._index_active_cache
+            if now - cached_time < 60:
+                return active
+
+        if not self.bq_client:
+            return False
+
+        try:
+            sql = f"""
+            SELECT coverage_percentage 
+            FROM `{self.project_id}.{self.dataset_id}.INFORMATION_SCHEMA.VECTOR_INDEXES`
+            WHERE table_name = '{self.table_name}'
+            LIMIT 1
+            """
+            rows = list(self.bq_client.query(sql).result(timeout=5.0))
+            if rows:
+                cov = getattr(rows[0], "coverage_percentage", None)
+                is_active = (float(cov) > 0.0) if cov is not None else True
+            else:
+                is_active = True
+            self._index_active_cache = (is_active, now)
+            return is_active
+        except Exception as e:
+            logger.debug("Could not verify vector index coverage (%s), assuming active by default if index exists.", e)
+            return True
 
     def search(
         self,
@@ -859,6 +972,9 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             fraction_lists_to_search = retrieval_cfg.get("fraction_lists_to_search", 0.05)
             hybrid_enabled = retrieval_cfg.get("hybrid_search_enabled", True)
 
+            index_active = self._is_vector_index_active()
+            options_clause = f", options => '{{\"fraction_lists_to_search\": {fraction_lists_to_search}}}'" if index_active else ""
+
             # Extract search tokens / keywords for hybrid ranking (capped at 10, prioritizing longer technical tokens)
             raw_tokens = [t.strip().upper() for t in re.split(r'[^a-zA-Z0-9_\-]+', query) if len(t.strip()) >= 2]
             unique_tokens = list(dict.fromkeys(raw_tokens))
@@ -873,10 +989,16 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 WITH vector_matches AS (
                     SELECT 
                         base.id, 
+                        base.parent_doc_id,
+                        base.chunk_index,
                         base.system, 
                         base.title, 
                         base.content, 
-                        base.section_hierarchy,
+                        base.section_h1,
+                        base.section_h2,
+                        base.section_h3,
+                        base.allowed_roles,
+                        base.sensitivity,
                         base.source_uri,
                         base.category,
                         base.keywords,
@@ -890,8 +1012,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                         'embedding',
                         (SELECT @query_vector AS embedding),
                         top_k => @candidate_limit,
-                        distance_type => 'COSINE',
-                        options => '{{"fraction_lists_to_search": {fraction_lists_to_search}}}'
+                        distance_type => 'COSINE'{options_clause}
                     )
                 )
                 SELECT 
@@ -917,10 +1038,16 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 sql = f"""
                 SELECT 
                     base.id, 
+                    base.parent_doc_id,
+                    base.chunk_index,
                     base.system, 
                     base.title, 
                     base.content, 
-                    base.section_hierarchy,
+                    base.section_h1,
+                    base.section_h2,
+                    base.section_h3,
+                    base.allowed_roles,
+                    base.sensitivity,
                     base.source_uri,
                     base.category,
                     base.keywords,
@@ -934,57 +1061,52 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                     'embedding',
                     (SELECT @query_vector AS embedding),
                     top_k => @limit,
-                    distance_type => 'COSINE',
-                    options => '{{"fraction_lists_to_search": {fraction_lists_to_search}}}'
+                    distance_type => 'COSINE'{options_clause}
                 )
                 ORDER BY distance ASC
                 """
 
-            bq_timeout = float(os.getenv("BIGQUERY_QUERY_TIMEOUT_SECONDS", "15.0"))
+            bq_timeout = float(os.getenv("BIGQUERY_QUERY_TIMEOUT_SECONDS", "3.0"))
             job_config = bigquery.QueryJobConfig(query_parameters=query_params)
             query_job = self.bq_client.query(sql, job_config=job_config)
             rows = query_job.result(timeout=bq_timeout)
 
             results = []
             for row in rows:
-                content_str = str(row.content) if not hasattr(row.content, "_mock_return_value") else ""
-                snippet = content_str[:200].strip() + "..."
+                content_raw = getattr(row, "content", "")
+                content_str = str(content_raw) if content_raw is not None else ""
+                
+                # Hybrid score vs distance
                 hybrid_val = getattr(row, "hybrid_score", None)
-                if hybrid_val is not None and not hasattr(hybrid_val, "_mock_return_value") and isinstance(hybrid_val, (int, float)):
-                    relevance = round(max(0.0, float(hybrid_val)), 2)
+                if hybrid_val is not None and isinstance(hybrid_val, (int, float)):
+                    relevance = round(max(0.0, min(1.0, float(hybrid_val))), 2)
                 else:
                     dist_val = getattr(row, "distance", 0.0)
-                    relevance = round(max(0.0, 1.0 - (float(dist_val) if isinstance(dist_val, (int, float)) else 0.0)), 2)
+                    dist_float = float(dist_val) if isinstance(dist_val, (int, float)) else 0.0
+                    relevance = round(max(0.0, min(1.0, 1.0 - dist_float)), 2)
                 
-                sec_hier = None
-                context_path = None
+                sec_h1 = _extract_str(getattr(row, "section_h1", None))
+                sec_h2 = _extract_str(getattr(row, "section_h2", None))
+                sec_h3 = _extract_str(getattr(row, "section_h3", None))
+                
                 raw_hier = getattr(row, "section_hierarchy", None)
-                if raw_hier and not hasattr(raw_hier, "_mock_return_value"):
-                    hier_dict = dict(raw_hier) if hasattr(raw_hier, "items") else raw_hier
-                    if isinstance(hier_dict, dict):
-                        sec_hier = SectionHierarchy(
-                            h1=str(hier_dict["h1"]) if hier_dict.get("h1") and not hasattr(hier_dict["h1"], "_mock_return_value") else None,
-                            h2=str(hier_dict["h2"]) if hier_dict.get("h2") and not hasattr(hier_dict["h2"], "_mock_return_value") else None,
-                            h3=str(hier_dict["h3"]) if hier_dict.get("h3") and not hasattr(hier_dict["h3"], "_mock_return_value") else None,
-                        )
-                        context_path = sec_hier.format_path()
+                if raw_hier and not any([sec_h1, sec_h2, sec_h3]):
+                    hier_dict = dict(raw_hier) if hasattr(raw_hier, "items") else (raw_hier if isinstance(raw_hier, dict) else {})
+                    sec_h1 = _extract_str(hier_dict.get("h1"))
+                    sec_h2 = _extract_str(hier_dict.get("h2"))
+                    sec_h3 = _extract_str(hier_dict.get("h3"))
 
-                raw_keywords = getattr(row, "keywords", None)
-                kw_list = list(raw_keywords) if raw_keywords and not hasattr(raw_keywords, "_mock_return_value") else []
+                sec_hier = None
+                if any([sec_h1, sec_h2, sec_h3]):
+                    sec_hier = SectionHierarchy(h1=sec_h1, h2=sec_h2, h3=sec_h3)
 
-                def _extract_str(val: Any) -> Optional[str]:
-                    if val is None or hasattr(val, "_mock_return_value"):
-                        return None
-                    return str(val)
-
-                def _extract_bool(val: Any) -> bool:
-                    if isinstance(val, bool):
-                        return val
-                    return False
-
-                art_id = _extract_str(row.id) or str(row.id)
-                art_sys = _extract_str(row.system) or str(row.system)
-                art_title = _extract_str(row.title) or str(row.title)
+                art_id = _extract_str(getattr(row, "id", "")) or ""
+                art_sys = _extract_str(getattr(row, "system", "")) or ""
+                art_title = _extract_str(getattr(row, "title", "")) or ""
+                category = _extract_str(getattr(row, "category", None))
+                
+                context_path = sec_hier.format_path() if sec_hier else f"{art_sys} > {category or 'General'} > {art_title}"
+                
                 is_truncated = len(content_str) > 200
                 raw_snippet = content_str[:200].strip() + "..." if is_truncated else content_str.strip()
                 snippet = wrap_retrieved_document(
@@ -996,89 +1118,113 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
 
                 results.append(SearchResult(
                     article_id=art_id,
+                    parent_doc_id=_extract_str(getattr(row, "parent_doc_id", None)),
+                    chunk_index=getattr(row, "chunk_index", None) if isinstance(getattr(row, "chunk_index", None), int) else None,
                     system=art_sys,
                     title=art_title,
                     snippet=snippet,
                     relevance_score=relevance,
+                    section_h1=sec_h1,
+                    section_h2=sec_h2,
+                    section_h3=sec_h3,
                     section_hierarchy=sec_hier,
                     context_path=context_path,
+                    allowed_roles=_extract_list(getattr(row, "allowed_roles", None)),
+                    sensitivity=_extract_str(getattr(row, "sensitivity", None)),
                     source_uri=_extract_str(getattr(row, "source_uri", None)),
-                    category=_extract_str(getattr(row, "category", None)),
-                    keywords=kw_list,
+                    category=category,
+                    keywords=_extract_list(getattr(row, "keywords", None)),
                     owner=_extract_str(getattr(row, "owner", None)),
                     effective_date=_extract_str(getattr(row, "effective_date", None)),
                     expiry_date=_extract_str(getattr(row, "expiry_date", None)),
                     is_deleted=_extract_bool(getattr(row, "is_deleted", False)),
                     is_truncated=is_truncated,
                 ))
+
+            if retrieval_cfg.get("reranker_enabled", False) or os.getenv("USE_VERTEX_RERANKER", "false").lower() in ("true", "1", "yes"):
+                results = rerank_search_results(
+                    query=query,
+                    candidates=results,
+                    top_n=limit,
+                    project_id=self.project_id,
+                    ranking_model=retrieval_cfg.get("reranker_model", "semantic-ranker-512@latest"),
+                )
             return results
         except Exception as e:
             logger.error("BigQuery vector search failed (%s). Raising KnowledgeStoreUnavailableError.", e)
             raise KnowledgeStoreUnavailableError(f"Truy vấn BigQuery Vector Search thất bại hoặc quá thời gian chờ: {e}") from e
 
     def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
-        """Retrieves article by ID from BigQuery table. Fails closed on failure."""
+        """Retrieves article by ID from BigQuery table, aggregating multi-chunk documents if present. Fails closed on failure."""
         if not self.bq_client:
             logger.error("BigQuery client is not initialized for get_article_by_id.")
             raise KnowledgeStoreUnavailableError("Dịch vụ BigQuery Knowledge Store chưa được khởi tạo.")
 
+        clean_id = article_id.upper().strip()
         full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
-        sql = f"""SELECT 
-            id, system, title, category, content, keywords, section_hierarchy,
+        sql = f"""
+        SELECT 
+            id, parent_doc_id, chunk_index, system, title, category, content, keywords,
+            section_h1, section_h2, section_h3, allowed_roles, sensitivity,
             source_uri, owner, effective_date, expiry_date, is_deleted, deleted_at 
         FROM {full_table} 
-        WHERE UPPER(id) = @article_id LIMIT 1"""
+        WHERE UPPER(id) = @article_id 
+           OR UPPER(parent_doc_id) = @article_id 
+           OR UPPER(parent_doc_id) = (
+               SELECT UPPER(parent_doc_id) FROM {full_table} WHERE UPPER(id) = @article_id AND parent_doc_id IS NOT NULL LIMIT 1
+           )
+        ORDER BY chunk_index ASC
+        """
         try:
-            bq_timeout = float(os.getenv("BIGQUERY_QUERY_TIMEOUT_SECONDS", "15.0"))
+            bq_timeout = float(os.getenv("BIGQUERY_QUERY_TIMEOUT_SECONDS", "3.0"))
             from google.cloud import bigquery
             job_config = bigquery.QueryJobConfig(
                 query_parameters=[
-                    bigquery.ScalarQueryParameter("article_id", "STRING", article_id.upper())
+                    bigquery.ScalarQueryParameter("article_id", "STRING", clean_id)
                 ]
             )
             rows = list(self.bq_client.query(sql, job_config=job_config).result(timeout=bq_timeout))
-            if rows:
-                r = rows[0]
-                sec_hier = None
-                raw_hier = getattr(r, "section_hierarchy", None)
-                if raw_hier and not hasattr(raw_hier, "_mock_return_value"):
-                    hier_dict = dict(raw_hier) if hasattr(raw_hier, "items") else raw_hier
-                    if isinstance(hier_dict, dict):
-                        sec_hier = SectionHierarchy(
-                            h1=str(hier_dict["h1"]) if hier_dict.get("h1") and not hasattr(hier_dict["h1"], "_mock_return_value") else None,
-                            h2=str(hier_dict["h2"]) if hier_dict.get("h2") and not hasattr(hier_dict["h2"], "_mock_return_value") else None,
-                            h3=str(hier_dict["h3"]) if hier_dict.get("h3") and not hasattr(hier_dict["h3"], "_mock_return_value") else None,
-                        )
+            if not rows:
+                return None
 
-                def _extract_str(val: Any) -> Optional[str]:
-                    if val is None or hasattr(val, "_mock_return_value"):
-                        return None
-                    return str(val)
+            r = rows[0]
+            sec_h1 = _extract_str(getattr(r, "section_h1", None))
+            sec_h2 = _extract_str(getattr(r, "section_h2", None))
+            sec_h3 = _extract_str(getattr(r, "section_h3", None))
+            sec_hier = None
+            if any([sec_h1, sec_h2, sec_h3]):
+                sec_hier = SectionHierarchy(h1=sec_h1, h2=sec_h2, h3=sec_h3)
 
-                def _extract_bool(val: Any) -> bool:
-                    if isinstance(val, bool):
-                        return val
-                    return False
-
-                raw_keywords = getattr(r, "keywords", None)
-                kw_list = list(raw_keywords) if raw_keywords and not hasattr(raw_keywords, "_mock_return_value") else []
-
-                return KnowledgeArticle(
-                    id=_extract_str(r.id) or str(r.id),
-                    system=_extract_str(r.system) or str(r.system),
-                    title=_extract_str(r.title) or str(r.title),
-                    category=_extract_str(r.category) or "General",
-                    content=_extract_str(r.content) or "",
-                    keywords=kw_list,
-                    section_hierarchy=sec_hier,
-                    source_uri=_extract_str(getattr(r, "source_uri", None)),
-                    owner=_extract_str(getattr(r, "owner", None)),
-                    effective_date=_extract_str(getattr(r, "effective_date", None)),
-                    expiry_date=_extract_str(getattr(r, "expiry_date", None)),
-                    is_deleted=_extract_bool(getattr(r, "is_deleted", False)),
-                    deleted_at=_extract_str(getattr(r, "deleted_at", None)),
+            if len(rows) > 1:
+                combined_content = "\n\n".join(
+                    _extract_str(getattr(row, "content", "")) or "" 
+                    for row in sorted(rows, key=lambda x: getattr(x, "chunk_index", 0) or 0)
                 )
-            return None
+            else:
+                combined_content = _extract_str(getattr(r, "content", "")) or ""
+
+            return KnowledgeArticle(
+                id=_extract_str(getattr(r, "parent_doc_id", None)) or _extract_str(getattr(r, "id", "")) or "",
+                parent_doc_id=_extract_str(getattr(r, "parent_doc_id", None)),
+                chunk_index=0 if len(rows) > 1 else (getattr(r, "chunk_index", None) if isinstance(getattr(r, "chunk_index", None), int) else None),
+                system=_extract_str(getattr(r, "system", "")) or "",
+                title=_extract_str(getattr(r, "title", "")) or "",
+                category=_extract_str(getattr(r, "category", None)) or "General",
+                content=combined_content,
+                keywords=_extract_list(getattr(r, "keywords", None)),
+                section_h1=sec_h1,
+                section_h2=sec_h2,
+                section_h3=sec_h3,
+                section_hierarchy=sec_hier,
+                allowed_roles=_extract_list(getattr(r, "allowed_roles", None)),
+                sensitivity=_extract_str(getattr(r, "sensitivity", None)),
+                source_uri=_extract_str(getattr(r, "source_uri", None)),
+                owner=_extract_str(getattr(r, "owner", None)),
+                effective_date=_extract_str(getattr(r, "effective_date", None)),
+                expiry_date=_extract_str(getattr(r, "expiry_date", None)),
+                is_deleted=_extract_bool(getattr(r, "is_deleted", False)),
+                deleted_at=_extract_str(getattr(r, "deleted_at", None)),
+            )
         except Exception as e:
             logger.error("BigQuery get_article_by_id failed (%s). Raising KnowledgeStoreUnavailableError.", e)
             raise KnowledgeStoreUnavailableError(f"Truy xuất bài viết BigQuery thất bại: {e}") from e

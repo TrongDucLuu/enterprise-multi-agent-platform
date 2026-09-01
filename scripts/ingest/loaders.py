@@ -36,7 +36,7 @@ def ensure_vector_index(
     ddl = f"""
     CREATE VECTOR INDEX IF NOT EXISTS `{index_name}`
     ON `{project_id}.{dataset_id}.{table_name}`(embedding)
-    STORING (system, category, id, title, content, section_hierarchy, source_uri, owner, effective_date, expiry_date, is_deleted)
+    STORING (system, category, id, title, content, section_h1, section_h2, section_h3, source_uri, owner, effective_date, expiry_date, is_deleted, parent_doc_id, chunk_index, allowed_roles, sensitivity)
     OPTIONS(distance_type='COSINE', index_type='IVF')
     """
     try:
@@ -126,16 +126,23 @@ def get_knowledge_articles_schema() -> list[Any]:
     from google.cloud import bigquery
     return [
         bigquery.SchemaField("id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("parent_doc_id", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("chunk_index", "INTEGER", mode="NULLABLE"),
         bigquery.SchemaField("system", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("title", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("category", "STRING", mode="NULLABLE"),
         bigquery.SchemaField("content", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("keywords", "STRING", mode="REPEATED"),
         bigquery.SchemaField("embedding", "FLOAT64", mode="REPEATED"),
+        bigquery.SchemaField("section_h1", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("section_h2", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("section_h3", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("allowed_roles", "STRING", mode="REPEATED"),
+        bigquery.SchemaField("sensitivity", "STRING", mode="NULLABLE"),
         bigquery.SchemaField("source_uri", "STRING", mode="NULLABLE"),
         bigquery.SchemaField("owner", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("effective_date", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("expiry_date", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("effective_date", "DATE", mode="NULLABLE"),
+        bigquery.SchemaField("expiry_date", "DATE", mode="NULLABLE"),
         bigquery.SchemaField("is_deleted", "BOOLEAN", mode="NULLABLE"),
         bigquery.SchemaField("deleted_at", "TIMESTAMP", mode="NULLABLE"),
         bigquery.SchemaField("parser_version", "STRING", mode="NULLABLE"),
@@ -143,16 +150,6 @@ def get_knowledge_articles_schema() -> list[Any]:
         bigquery.SchemaField("embedding_model", "STRING", mode="NULLABLE"),
         bigquery.SchemaField("embedding_dim", "INTEGER", mode="NULLABLE"),
         bigquery.SchemaField("content_hash", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField(
-            "section_hierarchy",
-            "RECORD",
-            mode="NULLABLE",
-            fields=[
-                bigquery.SchemaField("h1", "STRING", mode="NULLABLE"),
-                bigquery.SchemaField("h2", "STRING", mode="NULLABLE"),
-                bigquery.SchemaField("h3", "STRING", mode="NULLABLE"),
-            ]
-        ),
         bigquery.SchemaField("updated_at", "TIMESTAMP", mode="REQUIRED"),
     ]
 
@@ -419,12 +416,19 @@ def ingest_articles_to_bigquery(
         ON T.id = S.id
         WHEN MATCHED AND (T.content_hash != S.content_hash OR T.content_hash IS NULL) THEN
           UPDATE SET
+            T.parent_doc_id = S.parent_doc_id,
+            T.chunk_index = S.chunk_index,
             T.system = S.system,
             T.title = S.title,
             T.category = S.category,
             T.content = S.content,
             T.keywords = S.keywords,
             T.embedding = S.embedding,
+            T.section_h1 = S.section_h1,
+            T.section_h2 = S.section_h2,
+            T.section_h3 = S.section_h3,
+            T.allowed_roles = S.allowed_roles,
+            T.sensitivity = S.sensitivity,
             T.source_uri = S.source_uri,
             T.owner = S.owner,
             T.effective_date = S.effective_date,
@@ -436,20 +440,21 @@ def ingest_articles_to_bigquery(
             T.embedding_model = S.embedding_model,
             T.embedding_dim = S.embedding_dim,
             T.content_hash = S.content_hash,
-            T.section_hierarchy = S.section_hierarchy,
             T.updated_at = S.updated_at
         WHEN NOT MATCHED THEN
           INSERT (
-            id, system, title, category, content, keywords, embedding, source_uri,
+            id, parent_doc_id, chunk_index, system, title, category, content, keywords, embedding,
+            section_h1, section_h2, section_h3, allowed_roles, sensitivity, source_uri,
             owner, effective_date, expiry_date, is_deleted, deleted_at,
             parser_version, chunker_version, embedding_model, embedding_dim,
-            content_hash, section_hierarchy, updated_at
+            content_hash, updated_at
           )
           VALUES (
-            S.id, S.system, S.title, S.category, S.content, S.keywords, S.embedding, S.source_uri,
+            S.id, S.parent_doc_id, S.chunk_index, S.system, S.title, S.category, S.content, S.keywords, S.embedding,
+            S.section_h1, S.section_h2, S.section_h3, S.allowed_roles, S.sensitivity, S.source_uri,
             S.owner, S.effective_date, S.expiry_date, S.is_deleted, S.deleted_at,
             S.parser_version, S.chunker_version, S.embedding_model, S.embedding_dim,
-            S.content_hash, S.section_hierarchy, S.updated_at
+            S.content_hash, S.updated_at
           );
         """
         logger.info("Executing Atomic MERGE into %s...", full_target_table)

@@ -256,8 +256,15 @@ def process_document(
     for idx, item in enumerate(chunk_items):
         chunk = item["text"]
         section_hierarchy = item.get("hierarchy") or {"h1": title, "h2": None, "h3": None}
+        sec_h1 = section_hierarchy.get("h1")
+        sec_h2 = section_hierarchy.get("h2")
+        sec_h3 = section_hierarchy.get("h3")
 
-        # Generate deterministic ID
+        # Generate deterministic parent_doc_id
+        parent_id_base = hashlib.sha256(f"{system_clean}:{source_uri}:{title}".encode("utf-8")).hexdigest()[:8].upper()
+        parent_doc_id = doc_info.get("parent_doc_id") or doc_info.get("id") or f"{system_clean}-DOC-{parent_id_base}"
+
+        # Generate deterministic chunk ID
         if doc_info.get("id") and len(chunk_items) == 1:
             article_id = doc_info["id"].upper()
         else:
@@ -277,8 +284,13 @@ def process_document(
         # Compute content_hash for Change Data Capture (CDC)
         content_hash = hashlib.sha256(chunk.encode("utf-8")).hexdigest()
 
+        allowed_roles = doc_info.get("allowed_roles", [])
+        sensitivity = doc_info.get("sensitivity", "INTERNAL")
+
         processed_articles.append({
             "id": article_id,
+            "parent_doc_id": parent_doc_id,
+            "chunk_index": idx,
             "system": system_clean,
             "title": chunk_title,
             "category": category,
@@ -295,7 +307,12 @@ def process_document(
             "embedding_model": EMBEDDING_MODEL,
             "embedding_dim": EMBEDDING_DIM,
             "content_hash": content_hash,
+            "section_h1": sec_h1,
+            "section_h2": sec_h2,
+            "section_h3": sec_h3,
             "section_hierarchy": section_hierarchy,
+            "allowed_roles": allowed_roles,
+            "sensitivity": sensitivity,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         })
 

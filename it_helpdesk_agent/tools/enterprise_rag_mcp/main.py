@@ -1,8 +1,12 @@
+import os
 import logging
 import sys
 from typing import Optional
 from fastmcp import FastMCP
 from dotenv import load_dotenv
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 try:
     from knowledge_store import get_knowledge_store, KnowledgeStoreUnavailableError, wrap_retrieved_document
@@ -78,9 +82,69 @@ def _get_authorized_systems() -> list[str]:
 
 
 def _initialize_console_logging(min_level: int = logging.INFO):
-    # Logs MUST go to stderr to prevent breaking the stdio MCP protocol
     handler = logging.StreamHandler(sys.stderr)
     logging.basicConfig(level=min_level, handlers=[handler], force=True)
+
+
+class MCPAuthMiddleware(BaseHTTPMiddleware):
+    """
+    Starlette middleware for FastMCP HTTP / Streamable-HTTP endpoints.
+    Extracts Bearer token from Authorization header, validates with SSO OIDC verifier,
+    and binds current_sso_user and current_sso_raw_token ContextVars for tool execution.
+    """
+    async def dispatch(self, request: Request, call_next):
+        # Allow health checks without auth
+        if request.url.path in ("/healthz", "/health", "/readyz", "/"):
+            return await call_next(request)
+
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            try:
+                from it_helpdesk_agent.app_utils.sso_auth import ALLOW_LOCAL_DEV_SSO, SSOUser, current_sso_user
+                if ALLOW_LOCAL_DEV_SSO:
+                    dev_user = SSOUser(
+                        user_id="dev-user-001",
+                        email="dev.employee@company.com",
+                        email_verified=True,
+                        full_name="Local Dev Employee",
+                        department="Engineering",
+                        roles=["employee", "it_admin"],
+                        is_authenticated=True,
+                    )
+                    token_ctx = current_sso_user.set(dev_user)
+                    try:
+                        return await call_next(request)
+                    finally:
+                        current_sso_user.reset(token_ctx)
+            except Exception:
+                pass
+
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Unauthorized", "detail": "Missing Authorization Bearer token header."},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        token = auth_header[7:].strip()
+        try:
+            from it_helpdesk_agent.app_utils.sso_auth import verify_sso_token, current_sso_user, current_sso_raw_token
+            user = verify_sso_token(token)
+            token_ctx = current_sso_user.set(user)
+            raw_token_ctx = current_sso_raw_token.set(token)
+            try:
+                return await call_next(request)
+            finally:
+                current_sso_user.reset(token_ctx)
+                current_sso_raw_token.reset(raw_token_ctx)
+        except Exception as exc:
+            logger.warning("MCP OIDC/SSO authentication failed: %s", exc)
+            detail = getattr(exc, "detail", str(exc))
+            status_code = getattr(exc, "status_code", 401)
+            return JSONResponse(
+                status_code=status_code,
+                content={"error": "Unauthorized", "detail": f"SSO Authentication failed: {detail}"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
 
 store = get_knowledge_store()
@@ -234,7 +298,29 @@ Trân trọng,
     }
 
 
+def get_mcp_app():
+    """Returns Starlette ASGI app for Streamable-HTTP MCP serving."""
+    from starlette.middleware import Middleware
+    return mcp.http_app(
+        transport="streamable-http",
+        middleware=[Middleware(MCPAuthMiddleware)]
+    )
+
+
 if __name__ == "__main__":
     load_dotenv()
     _initialize_console_logging()
-    mcp.run(transport="stdio")
+    transport = os.getenv("MCP_TRANSPORT", "streamable-http").lower()
+    host = os.getenv("MCP_HOST", "0.0.0.0")
+    port = int(os.getenv("MCP_PORT", "8001"))
+
+    if transport in ("streamable-http", "http"):
+        from starlette.middleware import Middleware
+        mcp.run(
+            transport="streamable-http",
+            host=host,
+            port=port,
+            middleware=[Middleware(MCPAuthMiddleware)]
+        )
+    else:
+        mcp.run(transport="stdio")

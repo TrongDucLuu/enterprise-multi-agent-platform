@@ -310,4 +310,54 @@ locust -f scripts/load_test/locustfile.py --host="https://helpdesk.customer.corp
 | **Redis Shared State & HA** | Memorystore Redis kết nối qua Direct VPC Egress, Rate Limit Fail-Open và Cache Soft Fail-Closed (Candidate Vector Scan). | ✅ Bắt buộc |
 | **Load Test Benchmark** | Đạt p95 Latency < 2.5s ở bậc tải Peak CCU theo cam kết SLA. | ✅ Bắt buộc |
 
+---
+
+## 6. Quy Trình Ứng Phó Sự Cố Vận Hành (SRE Incident Response Runbook)
+
+### Sự Cố 1: BigQuery Vector Search Quá Tải hoặc Chậm (>3.0s)
+1. **Dấu hiệu:** Log phát sinh `KnowledgeStoreUnavailableError: Truy vấn BigQuery Vector Search thất bại hoặc quá thời gian chờ`.
+2. **Kiểm tra trạng thái Vector Index:**
+   ```sql
+   SELECT table_name, index_name, index_status, coverage_percentage
+   FROM `it_helpdesk_kb.INFORMATION_SCHEMA.VECTOR_INDEXES`
+   WHERE table_name = 'knowledge_articles';
+   ```
+3. **Biện pháp xử lý:**
+   - Nếu `coverage_percentage < 100%`: Chạy lệnh tạo lại index:
+     ```sql
+     CREATE OR REPLACE VECTOR INDEX kb_articles_ivf_idx
+     ON `it_helpdesk_kb.knowledge_articles`(embedding)
+     STORING(id, system, title, category, keywords, owner, effective_date, expiry_date, is_deleted)
+     OPTIONS(index_type = 'IVF', distance_type = 'COSINE');
+     ```
+   - Nếu số lượng concurrent query vượt ngưỡng: Kích hoạt `enable_bigquery_reservation = true` trong Terraform để cấp phát dedicated autoscaling slots.
+
+### Sự Cố 2: Memorystore Redis Đứt Kết Nối / Circuit Breaker Bị Mở (Trip)
+1. **Dấu hiệu:** Xuất hiện log `REDIS_CIRCUIT_BREAKER_ALERT: Consecutive Redis failures threshold reached`.
+2. **Biện pháp xử lý:**
+   - Hệ thống tự động Soft Fail-Closed (Semantic Cache bypass) và Fail-Open (Rate Limiter), người dùng vẫn trò chuyện được với Agent mà không bị sập dịch vụ.
+   - Kiểm tra VPC Egress Connector trên Cloud Run:
+     ```bash
+     gcloud compute networks vpc-access connectors describe helpdesk-vpc-conn --region=asia-southeast1
+     ```
+   - Khởi động lại Redis instance nếu bị tràn RAM hoặc quá tải CPU:
+     ```bash
+     gcloud redis instances describe helpdesk-redis-cache --region=asia-southeast1
+     ```
+
+### Sự Cố 3: Cập Nhật Tài Liệu Khẩn Cấp / Tombstone & Cache Invalidation
+1. **Quy trình gỡ bỏ tài liệu hết hạn hoặc sai lệch:**
+   - Chạy pipeline Ingestion với cờ `is_deleted = TRUE` hoặc cập nhật trực tiếp qua BigQuery:
+     ```sql
+     UPDATE `it_helpdesk_kb.knowledge_articles`
+     SET is_deleted = TRUE, deleted_at = CURRENT_TIMESTAMP()
+     WHERE id = 'ERP-001';
+     ```
+   - Invalidate Semantic Cache tương ứng:
+     ```python
+     from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
+     cache = get_semantic_cache()
+     cache.invalidate(article_id="ERP-001")
+     ```
+
 

@@ -31,14 +31,32 @@ def test_in_memory_knowledge_store_search_and_get():
 
 def test_bigquery_vector_store_with_mock_client():
     mock_bq = MagicMock()
-    mock_row = MagicMock()
-    mock_row.id = "ERP-KB-001"
-    mock_row.system = "ERP"
-    mock_row.title = "Khắc phục lỗi PO"
-    mock_row.content = "Nội dung chi tiết về phân quyền Purchase Order..."
-    mock_row.section_hierarchy = {"h1": "ERP Guide", "h2": "Procurement", "h3": "PO Authorization"}
-    mock_row.distance = 0.15
-    mock_row.hybrid_score = 0.85
+    
+    # Using SimpleNamespace or explicit object to prevent MagicMock dynamic attribute creation
+    from types import SimpleNamespace
+    mock_row = SimpleNamespace(
+        id="ERP-KB-001",
+        parent_doc_id=None,
+        chunk_index=None,
+        system="ERP",
+        title="Khắc phục lỗi PO",
+        category="Procurement",
+        content="Nội dung chi tiết về phân quyền Purchase Order...",
+        section_h1="ERP Guide",
+        section_h2="Procurement",
+        section_h3="PO Authorization",
+        section_hierarchy=None,
+        allowed_roles=[],
+        sensitivity="INTERNAL",
+        source_uri="docs/erp_po_manual.md",
+        owner="erp-team@company.com",
+        effective_date="2025-01-01",
+        expiry_date=None,
+        is_deleted=False,
+        keywords=["po", "sap"],
+        distance=0.15,
+        hybrid_score=0.85,
+    )
 
     mock_query_job = MagicMock()
     mock_query_job.result.return_value = [mock_row]
@@ -97,7 +115,7 @@ def test_bigquery_vector_store_with_mock_client():
     from scripts.ingest_knowledge_base import ensure_vector_index
     ensure_vector_index(mock_bq, project_id="test-project", dataset_id="test_kb", table_name="articles")
     ddl_call = mock_bq.query.call_args[0][0]
-    assert "STORING (system, category, id, title, content, section_hierarchy, source_uri, owner, effective_date, expiry_date, is_deleted)" in ddl_call
+    assert "STORING (system, category, id, title, content, section_h1, section_h2, section_h3, source_uri, owner, effective_date, expiry_date, is_deleted, parent_doc_id, chunk_index, allowed_roles, sensitivity)" in ddl_call
 
 
 def test_mutation_bigquery_search_omitting_base_filters_fails(monkeypatch):
@@ -408,5 +426,147 @@ def test_hybrid_search_token_capping_50_words(monkeypatch):
     # Long technical tokens should be present
     assert "ZFI_POSTING_001" in tokens_param.values
     assert "AUTHORIZATION" in tokens_param.values or "M_BEST_EKO" in tokens_param.values
+
+
+def test_in_memory_multi_chunk_aggregation():
+    """
+    P1.11 Multi-chunk Aggregation Test (InMemory):
+    Verifies that get_article_by_id stitches chunks of a partitioned document in chunk_index order.
+    """
+    chunk0 = KnowledgeArticle(
+        id="ERP-GUIDE-001#chunk-0",
+        parent_doc_id="ERP-GUIDE-001",
+        chunk_index=0,
+        system="ERP",
+        title="Hướng dẫn ERP Tổng quát (Phần 1/2)",
+        category="Manual",
+        content="Nội dung phần 1: Thiết lập cấu hình hệ thống.",
+        section_h1="Chương 1",
+    )
+    chunk1 = KnowledgeArticle(
+        id="ERP-GUIDE-001#chunk-1",
+        parent_doc_id="ERP-GUIDE-001",
+        chunk_index=1,
+        system="ERP",
+        title="Hướng dẫn ERP Tổng quát (Phần 2/2)",
+        category="Manual",
+        content="Nội dung phần 2: Vận hành và xử lý lỗi thường gặp.",
+        section_h1="Chương 2",
+    )
+    store = InMemoryKnowledgeStore(articles=[chunk1, chunk0])  # out of order
+
+    # Lookup by parent_doc_id
+    doc = store.get_article_by_id("ERP-GUIDE-001")
+    assert doc is not None
+    assert doc.id == "ERP-GUIDE-001"
+    assert "Nội dung phần 1" in doc.content
+    assert "Nội dung phần 2" in doc.content
+    # Verified ordered concatenation
+    assert doc.content.index("Nội dung phần 1") < doc.content.index("Nội dung phần 2")
+
+    # Lookup by chunk ID also stitches full doc
+    doc_by_chunk = store.get_article_by_id("ERP-GUIDE-001#chunk-0")
+    assert doc_by_chunk is not None
+    assert "Nội dung phần 1" in doc_by_chunk.content
+    assert "Nội dung phần 2" in doc_by_chunk.content
+
+
+def test_bigquery_get_article_by_id_multi_chunk():
+    """
+    P1.11 Multi-chunk Aggregation Test (BigQuery):
+    Verifies that BigQueryVectorKnowledgeStore.get_article_by_id stitches chunks returned by SQL.
+    """
+    mock_bq = MagicMock()
+    from types import SimpleNamespace
+    row0 = SimpleNamespace(
+        id="DOC-100#chunk-0",
+        parent_doc_id="DOC-100",
+        chunk_index=0,
+        system="HRM",
+        title="Quy chế nghỉ phép (Phần 1)",
+        category="Policy",
+        content="Phần 1: Số ngày phép tiêu chuẩn.",
+        section_h1="Nghỉ phép",
+        section_h2="Tiêu chuẩn",
+        section_h3=None,
+        allowed_roles=["ALL_EMPLOYEES"],
+        sensitivity="INTERNAL",
+        source_uri="docs/leave_policy.docx",
+        owner="hr@company.com",
+        effective_date="2025-01-01",
+        expiry_date=None,
+        is_deleted=False,
+        deleted_at=None,
+        keywords=["nghi_phep", "che_do"],
+    )
+    row1 = SimpleNamespace(
+        id="DOC-100#chunk-1",
+        parent_doc_id="DOC-100",
+        chunk_index=1,
+        system="HRM",
+        title="Quy chế nghỉ phép (Phần 2)",
+        category="Policy",
+        content="Phần 2: Thủ tục bàn giao công việc.",
+        section_h1="Nghỉ phép",
+        section_h2="Thủ tục",
+        section_h3=None,
+        allowed_roles=["ALL_EMPLOYEES"],
+        sensitivity="INTERNAL",
+        source_uri="docs/leave_policy.docx",
+        owner="hr@company.com",
+        effective_date="2025-01-01",
+        expiry_date=None,
+        is_deleted=False,
+        deleted_at=None,
+        keywords=["nghi_phep", "che_do"],
+    )
+
+    mock_query_job = MagicMock()
+    mock_query_job.result.return_value = [row0, row1]
+    mock_bq.query.return_value = mock_query_job
+
+    store = BigQueryVectorKnowledgeStore(
+        project_id="test-project",
+        dataset_id="test_kb",
+        table_name="articles",
+        bq_client=mock_bq,
+    )
+
+    doc = store.get_article_by_id("DOC-100")
+    assert doc is not None
+    assert doc.id == "DOC-100"
+    assert "Phần 1: Số ngày phép tiêu chuẩn." in doc.content
+    assert "Phần 2: Thủ tục bàn giao công việc." in doc.content
+    assert doc.content.index("Phần 1") < doc.content.index("Phần 2")
+
+
+def test_vector_index_active_check_conditional_options(monkeypatch):
+    """
+    P0.3 Conditional fraction_lists_to_search:
+    Verifies that options => '{"fraction_lists_to_search": ...}' is ONLY added when index coverage > 0.
+    """
+    mock_bq = MagicMock()
+    from types import SimpleNamespace
+
+    # Mock index coverage check query
+    cov_job = MagicMock()
+    cov_job.result.return_value = [SimpleNamespace(coverage_percentage=0.0)]  # Inactive
+    search_job = MagicMock()
+    search_job.result.return_value = []
+
+    mock_bq.query.side_effect = [cov_job, search_job]
+
+    store = BigQueryVectorKnowledgeStore(
+        project_id="test-project",
+        dataset_id="test_kb",
+        table_name="articles",
+        bq_client=mock_bq,
+        embedding_fn=lambda t: [0.1] * 64,
+    )
+
+    store.search("Lỗi kiểm thử", system="ERP", limit=2)
+    # Search SQL should NOT contain fraction_lists_to_search when index coverage is 0.0
+    search_sql = mock_bq.query.call_args_list[1][0][0]
+    assert "fraction_lists_to_search" not in search_sql
 
 

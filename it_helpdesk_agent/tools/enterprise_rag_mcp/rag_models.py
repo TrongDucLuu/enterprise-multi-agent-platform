@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Any
 from pydantic import BaseModel, Field, field_validator
 
 try:
@@ -29,13 +29,35 @@ class KnowledgeArticle(BaseModel):
     category: str
     content: str
     keywords: list[str] = Field(default_factory=list)
+    section_h1: Optional[str] = None
+    section_h2: Optional[str] = None
+    section_h3: Optional[str] = None
     section_hierarchy: Optional[SectionHierarchy] = None
+    parent_doc_id: Optional[str] = None
+    chunk_index: Optional[int] = 0
+    allowed_roles: list[str] = Field(default_factory=list)
+    sensitivity: Optional[str] = "INTERNAL"
     source_uri: Optional[str] = None
     owner: Optional[str] = None
     effective_date: Optional[str] = None
     expiry_date: Optional[str] = None
     is_deleted: bool = False
     deleted_at: Optional[str] = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.section_hierarchy is None and any([self.section_h1, self.section_h2, self.section_h3]):
+            self.section_hierarchy = SectionHierarchy(
+                h1=self.section_h1,
+                h2=self.section_h2,
+                h3=self.section_h3,
+            )
+        elif self.section_hierarchy is not None:
+            if not self.section_h1:
+                self.section_h1 = self.section_hierarchy.h1
+            if not self.section_h2:
+                self.section_h2 = self.section_hierarchy.h2
+            if not self.section_h3:
+                self.section_h3 = self.section_hierarchy.h3
 
     @field_validator("system")
     @classmethod
@@ -53,8 +75,15 @@ class SearchResult(BaseModel):
     title: str
     snippet: str
     relevance_score: float
+    section_h1: Optional[str] = None
+    section_h2: Optional[str] = None
+    section_h3: Optional[str] = None
     section_hierarchy: Optional[SectionHierarchy] = None
     context_path: Optional[str] = None
+    parent_doc_id: Optional[str] = None
+    chunk_index: Optional[int] = 0
+    allowed_roles: list[str] = Field(default_factory=list)
+    sensitivity: Optional[str] = "INTERNAL"
     source_uri: Optional[str] = None
     category: Optional[str] = None
     keywords: list[str] = Field(default_factory=list)
@@ -63,6 +92,23 @@ class SearchResult(BaseModel):
     expiry_date: Optional[str] = None
     is_deleted: bool = False
     is_truncated: bool = False
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.section_hierarchy is None and any([self.section_h1, self.section_h2, self.section_h3]):
+            self.section_hierarchy = SectionHierarchy(
+                h1=self.section_h1,
+                h2=self.section_h2,
+                h3=self.section_h3,
+            )
+        elif self.section_hierarchy is not None:
+            if not self.section_h1:
+                self.section_h1 = self.section_hierarchy.h1
+            if not self.section_h2:
+                self.section_h2 = self.section_hierarchy.h2
+            if not self.section_h3:
+                self.section_h3 = self.section_hierarchy.h3
+        if not self.context_path and self.section_hierarchy:
+            self.context_path = self.section_hierarchy.format_path()
 
     @field_validator("system")
     @classmethod

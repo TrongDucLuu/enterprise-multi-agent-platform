@@ -64,10 +64,11 @@ def test_mutation_inverted_ranking_fails_eval_quality_gate(monkeypatch):
     monkeypatch.setattr(InMemoryKnowledgeStore, "search", inverted_search)
 
     summary, passed = run_eval_suite()
-    precision_pct = summary["metrics"]["retrieval_precision_at_k_percent"]
+    hit_rate = summary["metrics"]["retrieval_hit_rate_percent"]
+    mrr_score = summary["metrics"]["retrieval_mrr_score"]
 
-    # Must fail the 80% gate and overall suite must be FAILED
-    assert precision_pct < 80.0, f"Expected precision < 80% under inverted ranking, got {precision_pct}%"
+    # Must fail the gate and overall suite must be FAILED
+    assert hit_rate < 80.0 or mrr_score < 0.80, f"Expected hit rate < 80% or MRR < 0.80 under inverted ranking, got hit_rate={hit_rate}%, MRR={mrr_score}"
     assert passed is False, "Overall eval suite must FAIL when search ranking is inverted"
     assert summary["quality_gates"]["overall_status"] == "FAILED"
 
@@ -76,7 +77,8 @@ def test_eval_precision_is_strictly_rank_sensitive():
     """
     🟠 P1.3 RANK SENSITIVITY TEST:
     Simulates case where target ground truth is at Rank 1 vs Rank 3.
-    Verifies that target at Rank 3 yields strictly lower precision score (0.333) than Rank 1 (1.0).
+    Verifies that target at Rank 3 yields strictly lower MRR score (0.333) than Rank 1 (1.0),
+    while Precision@k reflects the fraction of expected relevant items found in top-k.
     """
     class MockRankStore:
         def __init__(self, target_rank: int):
@@ -120,12 +122,19 @@ def test_eval_precision_is_strictly_rank_sensitive():
     # Evaluate when target is not in top-k
     res_miss = evaluate_retrieval_precision_at_k(test_case, MockRankStore(target_rank=99), k=3)
 
-    assert res_rank_1["precision_at_k"] == 1.0
+    # Precision@3 = 1 / 3 = 0.333 for both hits (1 relevant doc retrieved out of 3)
+    assert res_rank_1["precision_at_k"] == 0.333
+    assert res_rank_1["mrr"] == 1.0
     assert res_rank_1["rank"] == 1
+
     assert res_rank_3["precision_at_k"] == 0.333
+    assert res_rank_3["mrr"] == 0.333
     assert res_rank_3["rank"] == 3
+
     assert res_miss["precision_at_k"] == 0.0
+    assert res_miss["mrr"] == 0.0
     assert res_miss["rank"] is None
 
-    # Assert strict monotonic ordering: Rank 1 > Rank 3 > Miss
-    assert res_rank_1["precision_at_k"] > res_rank_3["precision_at_k"] > res_miss["precision_at_k"]
+    # Assert strict monotonic ordering for MRR: Rank 1 > Rank 3 > Miss
+    assert res_rank_1["mrr"] > res_rank_3["mrr"] > res_miss["mrr"]
+

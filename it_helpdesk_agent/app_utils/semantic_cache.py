@@ -135,6 +135,14 @@ class BaseSemanticCache(ABC):
         pass
 
     @abstractmethod
+    def invalidate(
+        self,
+        article_id: Optional[str] = None,
+        system: Optional[str] = None
+    ) -> int:
+        pass
+
+    @abstractmethod
     def get_stats(self) -> dict:
         pass
 
@@ -308,6 +316,33 @@ class InMemorySemanticCache(BaseSemanticCache):
         self._entries.clear()
         self._total_lookups = 0
         self._total_hits = 0
+
+    def invalidate(
+        self,
+        article_id: Optional[str] = None,
+        system: Optional[str] = None
+    ) -> int:
+        """
+        Invalidates and purges cached responses related to article_id or system.
+        Returns the number of removed entries.
+        """
+        initial_len = len(self._entries)
+        if article_id:
+            aid_clean = article_id.strip().upper()
+            self._entries = [
+                e for e in self._entries
+                if aid_clean not in (e.metadata.get("article_id") or "").upper()
+                and aid_clean not in e.response.upper()
+            ]
+        if system:
+            sys_clean = system.strip().upper()
+            self._entries = [
+                e for e in self._entries
+                if sys_clean != (e.metadata.get("system") or "").upper()
+            ]
+        removed = initial_len - len(self._entries)
+        logger.info("InMemorySemanticCache invalidated %d entries for article_id=%s, system=%s", removed, article_id, system)
+        return removed
 
     def get_stats(self) -> dict:
         active_entries = [e for e in self._entries if not e.is_expired()]
@@ -724,6 +759,66 @@ class RedisSemanticCache(BaseSemanticCache):
             self._record_redis_success()
         except Exception as e:
             self._record_redis_failure(e, "clear")
+
+    def invalidate(
+        self,
+        article_id: Optional[str] = None,
+        system: Optional[str] = None
+    ) -> int:
+        """
+        Scans and invalidates cached entries in Redis matching article_id or system.
+        """
+        if not self._allow_request() or self._redis is None:
+            return 0
+        try:
+            public_keys = list(self._redis.smembers("sem_cache:keys:public") or [])
+            candidate_ids = set(public_keys)
+            user_sets = list(self._redis.keys("sem_cache:keys:user:*") or [])
+            for u_set in user_sets:
+                candidate_ids.update(list(self._redis.smembers(u_set) or []))
+
+            if not candidate_ids:
+                return 0
+
+            entry_keys = [f"sem_cache:entry:{eid}" for eid in candidate_ids]
+            raw_entries = self._redis.mget(entry_keys)
+
+            ids_to_delete = []
+            aid_upper = article_id.strip().upper() if article_id else None
+            sys_upper = system.strip().upper() if system else None
+
+            for eid, raw_json in zip(candidate_ids, raw_entries):
+                if not raw_json:
+                    ids_to_delete.append(eid)
+                    continue
+                try:
+                    data = json.loads(raw_json)
+                    meta = data.get("metadata", {})
+                    resp = data.get("response", "")
+                    meta_aid = (meta.get("article_id") or "").upper()
+                    meta_sys = (meta.get("system") or "").upper()
+
+                    match_aid = aid_upper and (aid_upper in meta_aid or aid_upper in resp.upper())
+                    match_sys = sys_upper and (sys_upper == meta_sys)
+
+                    if match_aid or match_sys:
+                        ids_to_delete.append(eid)
+                except Exception:
+                    ids_to_delete.append(eid)
+
+            if ids_to_delete:
+                pipe = self._redis.pipeline()
+                pipe.delete(*[f"sem_cache:entry:{eid}" for eid in ids_to_delete])
+                pipe.srem("sem_cache:keys:public", *ids_to_delete)
+                for u_set in user_sets:
+                    pipe.srem(u_set, *ids_to_delete)
+                pipe.execute()
+                self._record_redis_success()
+                return len(ids_to_delete)
+            return 0
+        except Exception as e:
+            self._record_redis_failure(e, "invalidate")
+            return 0
 
     def get_stats(self) -> dict:
         """Returns statistics on semantic cache usage."""

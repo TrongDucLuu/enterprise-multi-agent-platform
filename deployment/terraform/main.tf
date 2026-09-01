@@ -84,7 +84,7 @@ resource "google_bigquery_table" "knowledge_articles" {
   dataset_id          = google_bigquery_dataset.kb_dataset.dataset_id
   table_id            = "knowledge_articles"
   friendly_name       = "Enterprise Knowledge Articles"
-  description         = "Knowledge base articles with 768-dimensional text-embedding-005 vectors for enterprise semantic search"
+  description         = "Knowledge base articles with 768-dimensional text-multilingual-embedding-002 vectors for enterprise semantic search"
   deletion_protection = var.environment == "production" ? true : false
 
   clustering = ["system", "category"]
@@ -96,6 +96,18 @@ resource "google_bigquery_table" "knowledge_articles" {
     "type": "STRING",
     "mode": "REQUIRED",
     "description": "Unique article identifier (e.g. ERP-KB-001)"
+  },
+  {
+    "name": "parent_doc_id",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Parent document identifier across chunk boundaries"
+  },
+  {
+    "name": "chunk_index",
+    "type": "INTEGER",
+    "mode": "NULLABLE",
+    "description": "Zero-based index of the chunk within the document"
   },
   {
     "name": "system",
@@ -134,6 +146,36 @@ resource "google_bigquery_table" "knowledge_articles" {
     "description": "Dense vector embedding (768 dimensions, text-embedding-005)"
   },
   {
+    "name": "section_h1",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Top-level heading (H1)"
+  },
+  {
+    "name": "section_h2",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Sub-heading (H2)"
+  },
+  {
+    "name": "section_h3",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Sub-sub-heading (H3)"
+  },
+  {
+    "name": "allowed_roles",
+    "type": "STRING",
+    "mode": "REPEATED",
+    "description": "Authorized SSO roles allowed to retrieve this article"
+  },
+  {
+    "name": "sensitivity",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Data sensitivity classification level (e.g. PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED)"
+  },
+  {
     "name": "source_uri",
     "type": "STRING",
     "mode": "NULLABLE",
@@ -147,13 +189,13 @@ resource "google_bigquery_table" "knowledge_articles" {
   },
   {
     "name": "effective_date",
-    "type": "STRING",
+    "type": "DATE",
     "mode": "NULLABLE",
     "description": "Effective date for document validity in ISO-8601 YYYY-MM-DD"
   },
   {
     "name": "expiry_date",
-    "type": "STRING",
+    "type": "DATE",
     "mode": "NULLABLE",
     "description": "Expiration date for document validity in ISO-8601 YYYY-MM-DD"
   },
@@ -198,32 +240,6 @@ resource "google_bigquery_table" "knowledge_articles" {
     "type": "STRING",
     "mode": "NULLABLE",
     "description": "SHA-256 hash of raw content for CDC change detection"
-  },
-  {
-    "name": "section_hierarchy",
-    "type": "RECORD",
-    "mode": "NULLABLE",
-    "description": "Hierarchical document outline (h1, h2, h3)",
-    "fields": [
-      {
-        "name": "h1",
-        "type": "STRING",
-        "mode": "NULLABLE",
-        "description": "Top-level heading (H1)"
-      },
-      {
-        "name": "h2",
-        "type": "STRING",
-        "mode": "NULLABLE",
-        "description": "Sub-heading (H2)"
-      },
-      {
-        "name": "h3",
-        "type": "STRING",
-        "mode": "NULLABLE",
-        "description": "Sub-sub-heading (H3)"
-      }
-    ]
   },
   {
     "name": "updated_at",
@@ -303,6 +319,30 @@ resource "google_bigquery_dataset_iam_member" "kb_dataset_viewer" {
   dataset_id = google_bigquery_dataset.kb_dataset.dataset_id
   role       = "roles/bigquery.dataViewer"
   member     = "serviceAccount:${google_service_account.agent_sa.email}"
+}
+
+# BigQuery Enterprise Edition Reservation for Vector Search Auto-scaling (Fluid Scaling)
+resource "google_bigquery_reservation" "enterprise_rag_reservation" {
+  count             = var.enable_bigquery_reservation ? 1 : 0
+  name              = "it-helpdesk-rag-reservation"
+  project           = var.project_id
+  location          = var.region
+  slot_capacity     = var.bigquery_baseline_slots
+  edition           = var.bigquery_edition
+  ignore_idle_slots = false
+
+  autoscale {
+    max_slots = var.bigquery_max_slots
+  }
+}
+
+resource "google_bigquery_reservation_assignment" "enterprise_rag_assignment" {
+  count       = var.enable_bigquery_reservation ? 1 : 0
+  project     = var.project_id
+  location    = var.region
+  reservation = google_bigquery_reservation.enterprise_rag_reservation[0].id
+  job_type    = "QUERY"
+  assignee    = "projects/${var.project_id}"
 }
 
 # 6. Firestore Database for Persistent Helpdesk Ticketing
@@ -567,6 +607,13 @@ check "production_model_sla" {
   assert {
     condition = !(var.environment == "production" && (can(regex("preview", var.fast_model_name)) || can(regex("preview", var.reasoning_model_name))))
     error_message = "PRODUCTION SLA WARNING: Preview models (e.g. gemini-3-flash-preview) do not have Google Cloud Vertex AI 99.9% uptime enterprise SLA commitments. For production deployments, ensure GA models (gemini-2.5-flash and gemini-2.5-pro) are selected."
+  }
+}
+
+check "production_knowledge_backend" {
+  assert {
+    condition = !(var.environment == "production" && var.knowledge_backend == "in_memory")
+    error_message = "CRITICAL CONFIGURATION ERROR: Production environment cannot use 'in_memory' knowledge backend. In-memory knowledge base loses all vector search, dynamic updates, and document governance capabilities. Set knowledge_backend = 'bigquery'."
   }
 }
 
