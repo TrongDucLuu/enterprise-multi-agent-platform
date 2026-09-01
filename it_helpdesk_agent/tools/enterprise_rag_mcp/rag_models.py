@@ -11,6 +11,33 @@ except ImportError:
             return {"ERP", "HRM", "CRM", "ALL"}
 
 
+class Fact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fact_id: str
+    domain: str
+    key: str
+    value: str
+    value_type: str  # 'int' | 'float' | 'string' | 'bool'
+    unit: Optional[str] = None
+    source_document: Optional[str] = None
+    date_updated: str
+    updated_by: str = "human"  # 'human' | 'agent'
+    status: str = "active"  # 'active' | 'deprecated' | 'superseded'
+    superseded_by: Optional[str] = None
+    notes: Optional[str] = None
+
+    def typed_value(self) -> Any:
+        vt = (self.value_type or "string").lower().strip()
+        if vt == "int":
+            return int(self.value)
+        elif vt == "float":
+            return float(self.value)
+        elif vt == "bool":
+            return str(self.value).lower() in ("true", "1", "yes")
+        return self.value
+
+
 class SectionHierarchy(BaseModel):
     """Hierarchical document section path (H1/H2/H3)."""
     h1: Optional[str] = None

@@ -9,11 +9,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 try:
-    from knowledge_store import get_knowledge_store, KnowledgeStoreUnavailableError, wrap_retrieved_document
-    from rag_models import SearchResult
+    from knowledge_store import get_knowledge_store, get_facts_store, KnowledgeStoreUnavailableError, wrap_retrieved_document
+    from rag_models import SearchResult, Fact
 except ImportError:
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import get_knowledge_store, KnowledgeStoreUnavailableError, wrap_retrieved_document
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult
+    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import get_knowledge_store, get_facts_store, KnowledgeStoreUnavailableError, wrap_retrieved_document
+    from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult, Fact
 
 try:
     from it_helpdesk_agent.app_utils.system_config import (
@@ -148,7 +148,60 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
 
 
 store = get_knowledge_store()
+facts_store = get_facts_store()
 mcp = FastMCP(name="EnterpriseKnowledgeRAG")
+
+
+@mcp.tool()
+def lookup_fact(key: str) -> dict:
+    """
+    Point-lookup một fact cứng (L1) theo key duy nhất, KHÔNG dùng vector search.
+    - key: Mã định danh fact dạng domain.entity.property (ví dụ: 'erp.po.sla_hours', 'crm.quote.discount_auto_approve_max_pct', 'hrm.timesheet.payroll_lock_day').
+    Trả về thông tin chi tiết của fact gồm value, typed_value, unit, source_document, status hoặc thông báo không tìm thấy.
+    """
+    if not key or not str(key).strip():
+        return {
+            "status": "error",
+            "message": "Key không được để trống.",
+        }
+    clean_key = str(key).strip()
+    try:
+        fact = facts_store.get_fact(clean_key)
+        if not fact:
+            return {
+                "status": "not_found",
+                "key": clean_key,
+                "message": f"Fact '{clean_key}' không tồn tại trong cơ sở tri thức L1 Facts Registry.",
+            }
+        return {
+            "status": "success",
+            "fact_id": fact.fact_id,
+            "domain": fact.domain,
+            "key": fact.key,
+            "value": fact.value,
+            "typed_value": fact.typed_value(),
+            "value_type": fact.value_type,
+            "unit": fact.unit,
+            "source_document": fact.source_document,
+            "date_updated": fact.date_updated,
+            "updated_by": fact.updated_by,
+            "status_lifecycle": fact.status,
+            "notes": fact.notes,
+        }
+    except KnowledgeStoreUnavailableError as e:
+        logger.error("Facts store unavailable: %s", e)
+        return {
+            "status": "error",
+            "key": clean_key,
+            "message": "Cơ sở dữ liệu L1 Facts Registry tạm thời gián đoạn. Vui lòng thử lại sau.",
+        }
+    except Exception as e:
+        logger.error("Error during lookup_fact: %s", e)
+        return {
+            "status": "error",
+            "key": clean_key,
+            "message": f"Lỗi tra cứu fact: {str(e)}",
+        }
 
 
 RETRIEVE_K = 20

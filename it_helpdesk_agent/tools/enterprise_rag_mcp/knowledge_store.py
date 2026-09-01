@@ -76,9 +76,9 @@ def wrap_retrieved_document(content: str, doc_id: str, system: str, title: str) 
 
 
 try:
-    from rag_models import KnowledgeArticle, SearchResult, DocumentSummary, SectionHierarchy
+    from rag_models import KnowledgeArticle, SearchResult, DocumentSummary, SectionHierarchy, Fact
 except ImportError:
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle, SearchResult, DocumentSummary, SectionHierarchy
+    from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle, SearchResult, DocumentSummary, SectionHierarchy, Fact
 
 try:
     from it_helpdesk_agent.app_utils.system_config import get_valid_system_filters, get_retrieval_config
@@ -1332,6 +1332,632 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             raise KnowledgeStoreUnavailableError(f"Truy xuất bài viết BigQuery thất bại: {e}") from e
 
 
+INITIAL_FACTS: list[Fact] = [
+    # ERP Facts
+    Fact(
+        fact_id="FACT-ERP-001",
+        domain="ERP",
+        key="erp.po.sla_hours",
+        value="2",
+        value_type="int",
+        unit="hours",
+        source_document="docs/erp_po_manual.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="SLA xử lý cấp quyền ME21N sau khi có phê duyệt",
+    ),
+    Fact(
+        fact_id="FACT-ERP-002",
+        domain="ERP",
+        key="erp.accounting.special_period_open_start_time",
+        value="17:00",
+        value_type="string",
+        unit="time",
+        source_document="docs/erp_period_lock.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Giờ bắt đầu khung giờ mở kỳ phụ OB52",
+    ),
+    Fact(
+        fact_id="FACT-ERP-003",
+        domain="ERP",
+        key="erp.accounting.special_period_open_end_time",
+        value="19:00",
+        value_type="string",
+        unit="time",
+        source_document="docs/erp_period_lock.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Giờ kết thúc khung giờ mở kỳ phụ OB52",
+    ),
+    Fact(
+        fact_id="FACT-ERP-004",
+        domain="ERP",
+        key="erp.accounting.exchange_rate_sync_time",
+        value="08:30",
+        value_type="string",
+        unit="time",
+        source_document="docs/erp_exchange_rates.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Thời điểm cronjob fetch tỷ giá TCURR hàng ngày",
+    ),
+    # HRM Facts
+    Fact(
+        fact_id="FACT-HRM-001",
+        domain="HRM",
+        key="hrm.biometric.server_ip",
+        value="10.0.12.55",
+        value_type="string",
+        unit="ip",
+        source_document="docs/hrm_timesheet_sync.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Địa chỉ IP máy chủ dịch vụ HR-Biometric-Sync",
+    ),
+    Fact(
+        fact_id="FACT-HRM-002",
+        domain="HRM",
+        key="hrm.timesheet.payroll_lock_day",
+        value="25",
+        value_type="int",
+        unit="day",
+        source_document="docs/hrm_timesheet_sync.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Ngày khóa bảng công tháng tự động",
+    ),
+    Fact(
+        fact_id="FACT-HRM-003",
+        domain="HRM",
+        key="hrm.onboarding.data_lead_days",
+        value="3",
+        value_type="int",
+        unit="days",
+        source_document="docs/hrm_onboarding.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Thời hạn nhập hồ sơ nhân sự trước ngày onboard",
+    ),
+    Fact(
+        fact_id="FACT-HRM-004",
+        domain="HRM",
+        key="hrm.onboarding.sync_cron_time",
+        value="00:00",
+        value_type="string",
+        unit="time",
+        source_document="docs/hrm_onboarding.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Giờ chạy job đồng bộ tài khoản Active Directory",
+    ),
+    Fact(
+        fact_id="FACT-HRM-005",
+        domain="HRM",
+        key="hrm.annual_leave.rollover_max_days",
+        value="5",
+        value_type="int",
+        unit="days",
+        source_document="docs/hrm_annual_leave.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Số ngày phép dư tối đa được chuyển sang Q1 năm sau",
+    ),
+    Fact(
+        fact_id="FACT-HRM-006",
+        domain="HRM",
+        key="hrm.annual_leave.manager_approval_max_days",
+        value="2",
+        value_type="int",
+        unit="days",
+        source_document="docs/hrm_annual_leave.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Số ngày nghỉ tối đa Quản lý trực tiếp được duyệt",
+    ),
+    Fact(
+        fact_id="FACT-HRM-007",
+        domain="HRM",
+        key="hrm.annual_leave.director_approval_min_days",
+        value="3",
+        value_type="int",
+        unit="days",
+        source_document="docs/hrm_annual_leave.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Số ngày nghỉ tối thiểu cần Giám đốc Khối duyệt",
+    ),
+    Fact(
+        fact_id="FACT-HRM-008",
+        domain="HRM",
+        key="hrm.tax.dependent_filing_day",
+        value="15",
+        value_type="int",
+        unit="day",
+        source_document="docs/hrm_tax_dependents.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Ngày C&B nộp hồ sơ giảm trừ gia cảnh thuế TNCN",
+    ),
+    Fact(
+        fact_id="FACT-HRM-009",
+        domain="HRM",
+        key="hrm.offboarding.ticket_lead_days",
+        value="7",
+        value_type="int",
+        unit="days",
+        source_document="docs/hrm_offboarding_process.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Thời hạn tạo ticket offboarding trước ngày nghỉ",
+    ),
+    Fact(
+        fact_id="FACT-HRM-010",
+        domain="HRM",
+        key="hrm.offboarding.account_lock_time",
+        value="18:00",
+        value_type="string",
+        unit="time",
+        source_document="docs/hrm_offboarding_process.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Giờ tự động khóa tài khoản SSO/Email ngày nghỉ",
+    ),
+    Fact(
+        fact_id="FACT-HRM-011",
+        domain="HRM",
+        key="hrm.performance_review.self_assessment_deadline_day",
+        value="20",
+        value_type="int",
+        unit="day",
+        source_document="docs/hrm_performance_review.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Hạn hoàn thành bản Tự đánh giá KPI/OKR cuối quý",
+    ),
+    Fact(
+        fact_id="FACT-HRM-012",
+        domain="HRM",
+        key="hrm.shift.night_shift_start_time",
+        value="22:00",
+        value_type="string",
+        unit="time",
+        source_document="docs/hrm_shift_scheduling.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Giờ bắt đầu ca đêm",
+    ),
+    Fact(
+        fact_id="FACT-HRM-013",
+        domain="HRM",
+        key="hrm.shift.night_shift_end_time",
+        value="06:00",
+        value_type="string",
+        unit="time",
+        source_document="docs/hrm_shift_scheduling.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Giờ kết thúc ca đêm",
+    ),
+    Fact(
+        fact_id="FACT-HRM-014",
+        domain="HRM",
+        key="hrm.shift.night_shift_allowance_pct",
+        value="30",
+        value_type="int",
+        unit="%",
+        source_document="docs/hrm_shift_scheduling.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Tỷ lệ phụ cấp lương làm việc ca đêm theo luật",
+    ),
+    Fact(
+        fact_id="FACT-HRM-015",
+        domain="HRM",
+        key="hrm.social_insurance.d02_filing_deadline_day",
+        value="20",
+        value_type="int",
+        unit="day",
+        source_document="docs/hrm_social_insurance.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Hạn nộp mẫu D02-LT cho cơ quan BHXH hàng tháng",
+    ),
+    Fact(
+        fact_id="FACT-HRM-016",
+        domain="HRM",
+        key="hrm.travel_expense.vat_invoice_deadline_days",
+        value="5",
+        value_type="int",
+        unit="days",
+        source_document="docs/hrm_travel_expense.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Hạn upload hóa đơn VAT sau khi đi công tác về",
+    ),
+    # CRM Facts
+    Fact(
+        fact_id="FACT-CRM-001",
+        domain="CRM",
+        key="crm.api.daily_limit_alert_threshold_pct",
+        value="90",
+        value_type="int",
+        unit="%",
+        source_document="docs/crm_lead_sync.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Ngưỡng cảnh báo giới hạn gọi API Daily Limit",
+    ),
+    Fact(
+        fact_id="FACT-CRM-002",
+        domain="CRM",
+        key="crm.quote.discount_auto_approve_max_pct",
+        value="10",
+        value_type="int",
+        unit="%",
+        source_document="docs/crm_quote_template.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Mức chiết khấu Quote tối đa được hệ thống tự duyệt",
+    ),
+    Fact(
+        fact_id="FACT-CRM-003",
+        domain="CRM",
+        key="crm.quote.discount_sales_director_max_pct",
+        value="20",
+        value_type="int",
+        unit="%",
+        source_document="docs/crm_quote_template.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Mức chiết khấu Quote cần Sales Director duyệt",
+    ),
+    Fact(
+        fact_id="FACT-CRM-004",
+        domain="CRM",
+        key="crm.data_quality.merge_contacts_max_count",
+        value="3",
+        value_type="int",
+        unit="records",
+        source_document="docs/crm_duplicate_rules.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Số lượng bản ghi Contact trùng tối đa cho phép gộp",
+    ),
+    Fact(
+        fact_id="FACT-CRM-005",
+        domain="CRM",
+        key="crm.reporting.dashboard_refresh_time",
+        value="08:00",
+        value_type="string",
+        unit="time",
+        source_document="docs/crm_dashboard_reports.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Thời gian tự động gửi email báo cáo sáng thứ Hai",
+    ),
+    Fact(
+        fact_id="FACT-CRM-006",
+        domain="CRM",
+        key="crm.marketing.dkim_key_size_bits",
+        value="2048",
+        value_type="int",
+        unit="bits",
+        source_document="docs/crm_email_deliverability.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Chuẩn độ dài khóa mã hóa DKIM Marketing Cloud",
+    ),
+    Fact(
+        fact_id="FACT-CRM-007",
+        domain="CRM",
+        key="crm.support.high_critical_case_response_sla_minutes",
+        value="15",
+        value_type="int",
+        unit="minutes",
+        source_document="docs/crm_omnichannel_routing.md",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="SLA cảnh báo Case High/Critical chưa phản hồi",
+    ),
+    # System & Pipeline Facts
+    Fact(
+        fact_id="FACT-SYS-001",
+        domain="SYSTEM",
+        key="pipeline.chunking.max_chunk_size",
+        value="1200",
+        value_type="int",
+        unit="chars",
+        source_document="config/systems.yaml",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Cỡ chunk tối đa của pipeline",
+    ),
+    Fact(
+        fact_id="FACT-SYS-002",
+        domain="SYSTEM",
+        key="pipeline.chunking.overlap",
+        value="150",
+        value_type="int",
+        unit="chars",
+        source_document="config/systems.yaml",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Độ dài overlap giữa các chunk",
+    ),
+    Fact(
+        fact_id="FACT-SYS-003",
+        domain="SYSTEM",
+        key="pipeline.chunking.well_structured_max_section_ratio",
+        value="0.65",
+        value_type="float",
+        unit="ratio",
+        source_document="config/systems.yaml",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Tỷ lệ tối đa của section so với toàn tài liệu",
+    ),
+    Fact(
+        fact_id="FACT-SYS-004",
+        domain="SYSTEM",
+        key="pipeline.chunking.well_structured_min_avg_section_length",
+        value="100",
+        value_type="int",
+        unit="chars",
+        source_document="config/systems.yaml",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Độ dài trung bình tối thiểu của section",
+    ),
+    Fact(
+        fact_id="FACT-SYS-005",
+        domain="SYSTEM",
+        key="pipeline.document_processing.document_ai_timeout_seconds",
+        value="60",
+        value_type="int",
+        unit="seconds",
+        source_document="config/systems.yaml",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Timeout gọi Document AI",
+    ),
+    Fact(
+        fact_id="FACT-SYS-006",
+        domain="SYSTEM",
+        key="pipeline.document_processing.document_ai_max_retries",
+        value="2",
+        value_type="int",
+        unit="count",
+        source_document="config/systems.yaml",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Số lần thử lại tối đa Document AI",
+    ),
+    Fact(
+        fact_id="FACT-SYS-007",
+        domain="SYSTEM",
+        key="pipeline.retrieval.fraction_lists_to_search",
+        value="0.05",
+        value_type="float",
+        unit="ratio",
+        source_document="config/systems.yaml",
+        date_updated="2025-01-01",
+        updated_by="human",
+        status="active",
+        notes="Tỷ lệ IVF list tìm kiếm trong vector search",
+    ),
+]
+
+
+class BaseFactsStore(ABC):
+    """Abstract Base Class for Facts Knowledge Stores (L1 Kernel Registry)."""
+
+    @abstractmethod
+    def get_fact(self, key: str) -> Optional[Fact]:
+        """Point-lookup an active fact by exact unique key."""
+        pass
+
+    @abstractmethod
+    def list_facts(self, domain: Optional[str] = None, status: str = "active") -> list[Fact]:
+        """Lists facts matching optional domain and status filter."""
+        pass
+
+
+class InMemoryFactsStore(BaseFactsStore):
+    """In-memory facts store for fast deterministic point-lookups (local dev & testing)."""
+
+    def __init__(self, facts: Optional[list[Fact]] = None):
+        self.facts = list(facts if facts is not None else INITIAL_FACTS)
+
+    def get_fact(self, key: str) -> Optional[Fact]:
+        if not key:
+            return None
+        clean_k = key.strip().lower()
+        for f in self.facts:
+            if f.key.lower() == clean_k and f.status == "active":
+                return f
+        return None
+
+    def list_facts(self, domain: Optional[str] = None, status: str = "active") -> list[Fact]:
+        clean_dom = domain.strip().upper() if domain else None
+        clean_status = status.strip().lower() if status else None
+        res = []
+        for f in self.facts:
+            if clean_dom and f.domain.upper() != clean_dom:
+                continue
+            if clean_status and f.status.lower() != clean_status:
+                continue
+            res.append(f)
+        return res
+
+
+class BigQueryFactsStore(BaseFactsStore):
+    """BigQuery backend for L1 deterministic facts point-lookup."""
+
+    def __init__(
+        self,
+        project_id: Optional[str] = None,
+        dataset_id: Optional[str] = None,
+        table_name: str = "facts",
+    ):
+        self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "test-project")
+        self.dataset_id = dataset_id or os.getenv("BIGQUERY_DATASET", "it_helpdesk_kb")
+        self.table_name = table_name
+        self.bq_client = None
+
+        if os.getenv("KNOWLEDGE_BACKEND", "").lower() == "bigquery" or os.getenv("FACTS_BACKEND", "").lower() == "bigquery":
+            try:
+                from google.cloud import bigquery
+                self.bq_client = bigquery.Client(project=self.project_id)
+            except Exception as e:
+                logger.error("Failed to initialize BigQuery client for facts store: %s", e)
+                raise KnowledgeStoreUnavailableError(f"Không thể khởi tạo kết nối BigQuery Facts Store: {e}") from e
+
+    def get_fact(self, key: str) -> Optional[Fact]:
+        if not self.bq_client:
+            raise KnowledgeStoreUnavailableError("Dịch vụ BigQuery Facts Store chưa được khởi tạo.")
+        if not key:
+            return None
+
+        clean_key = key.strip()
+        full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
+        sql = f"""
+        SELECT 
+            fact_id, domain, key, value, value_type, unit, source_document,
+            date_updated, updated_by, status, superseded_by, notes
+        FROM {full_table}
+        WHERE LOWER(key) = LOWER(@key) AND status = 'active'
+        LIMIT 1
+        """
+        try:
+            bq_timeout = float(os.getenv("BIGQUERY_QUERY_TIMEOUT_SECONDS", "3.0"))
+            from google.cloud import bigquery
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("key", "STRING", clean_key)
+                ],
+                job_timeout_ms=int(bq_timeout * 1000),
+            )
+            query_job = self.bq_client.query(sql, job_config=job_config)
+            try:
+                rows = list(query_job.result(timeout=bq_timeout))
+            except Exception as q_err:
+                try:
+                    query_job.cancel()
+                except Exception as c_err:
+                    logger.debug("Failed to cancel BigQuery get_fact query job: %s", c_err)
+                raise q_err
+
+            if not rows:
+                return None
+
+            r = rows[0]
+            return Fact(
+                fact_id=_extract_str(getattr(r, "fact_id", "")),
+                domain=_extract_str(getattr(r, "domain", "")),
+                key=_extract_str(getattr(r, "key", "")),
+                value=_extract_str(getattr(r, "value", "")),
+                value_type=_extract_str(getattr(r, "value_type", "string")),
+                unit=_extract_str(getattr(r, "unit", None)),
+                source_document=_extract_str(getattr(r, "source_document", None)),
+                date_updated=_extract_str(getattr(r, "date_updated", "")),
+                updated_by=_extract_str(getattr(r, "updated_by", "human")),
+                status=_extract_str(getattr(r, "status", "active")),
+                superseded_by=_extract_str(getattr(r, "superseded_by", None)),
+                notes=_extract_str(getattr(r, "notes", None)),
+            )
+        except Exception as e:
+            logger.error("BigQuery get_fact failed: %s", e)
+            raise KnowledgeStoreUnavailableError(f"Truy vấn BigQuery Facts Store thất bại: {e}") from e
+
+    def list_facts(self, domain: Optional[str] = None, status: str = "active") -> list[Fact]:
+        if not self.bq_client:
+            raise KnowledgeStoreUnavailableError("Dịch vụ BigQuery Facts Store chưa được khởi tạo.")
+        full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
+        where_clauses = ["status = @status"]
+        from google.cloud import bigquery
+        params = [bigquery.ScalarQueryParameter("status", "STRING", status)]
+        if domain:
+            where_clauses.append("UPPER(domain) = UPPER(@domain)")
+            params.append(bigquery.ScalarQueryParameter("domain", "STRING", domain))
+
+        sql = f"""
+        SELECT 
+            fact_id, domain, key, value, value_type, unit, source_document,
+            date_updated, updated_by, status, superseded_by, notes
+        FROM {full_table}
+        WHERE {" AND ".join(where_clauses)}
+        """
+        try:
+            bq_timeout = float(os.getenv("BIGQUERY_QUERY_TIMEOUT_SECONDS", "3.0"))
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=params,
+                job_timeout_ms=int(bq_timeout * 1000),
+            )
+            query_job = self.bq_client.query(sql, job_config=job_config)
+            rows = list(query_job.result(timeout=bq_timeout))
+            return [
+                Fact(
+                    fact_id=_extract_str(getattr(r, "fact_id", "")),
+                    domain=_extract_str(getattr(r, "domain", "")),
+                    key=_extract_str(getattr(r, "key", "")),
+                    value=_extract_str(getattr(r, "value", "")),
+                    value_type=_extract_str(getattr(r, "value_type", "string")),
+                    unit=_extract_str(getattr(r, "unit", None)),
+                    source_document=_extract_str(getattr(r, "source_document", None)),
+                    date_updated=_extract_str(getattr(r, "date_updated", "")),
+                    updated_by=_extract_str(getattr(r, "updated_by", "human")),
+                    status=_extract_str(getattr(r, "status", "active")),
+                    superseded_by=_extract_str(getattr(r, "superseded_by", None)),
+                    notes=_extract_str(getattr(r, "notes", None)),
+                )
+                for r in rows
+            ]
+        except Exception as e:
+            logger.error("BigQuery list_facts failed: %s", e)
+            raise KnowledgeStoreUnavailableError(f"Truy vấn BigQuery list_facts thất bại: {e}") from e
+
+
+def get_facts_store() -> BaseFactsStore:
+    backend = (os.getenv("FACTS_BACKEND") or os.getenv("KNOWLEDGE_BACKEND", "in_memory")).lower()
+    if backend == "bigquery":
+        return BigQueryFactsStore()
+    return InMemoryFactsStore()
+
+
 def get_knowledge_store() -> BaseKnowledgeStore:
     """
     Factory to retrieve the appropriate Knowledge Store backend based on environment configuration.
@@ -1347,3 +1973,4 @@ def get_knowledge_store() -> BaseKnowledgeStore:
 
 # Backward compatibility alias
 KnowledgeStore = InMemoryKnowledgeStore
+
