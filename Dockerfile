@@ -12,6 +12,7 @@ WORKDIR /code
 
 COPY ./pyproject.toml ./README.md ./uv.lock* ./
 COPY ./config ./config
+COPY ./domain_packs ./domain_packs
 COPY ./agent_core ./agent_core
 COPY ./data ./data
 COPY ./scripts ./scripts

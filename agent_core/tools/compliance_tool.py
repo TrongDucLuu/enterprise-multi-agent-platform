@@ -127,10 +127,10 @@ def list_contract_obligations(
 @register_tool("review_it_contract_sla")
 @register_tool("review_contract_sla")
 def review_it_contract_sla(
-    contract_ref: Optional[str] = None,
     contract_text: Optional[str] = None,
     vendor_name: str = "IT Vendor",
-    focus_area: str = "ALL"
+    focus_area: str = "ALL",
+    contract_ref: Optional[str] = None,
 ) -> dict:
     """
     Scans IT contracts, Vendor Service Level Agreements (SLA), and Data Protection Addendums (DPA).
@@ -149,40 +149,19 @@ def review_it_contract_sla(
             "vendor": vendor_name,
         }
 
-    # 2. Resolve contract content from reference (contract_ref) or direct text (contract_text)
-    content: Optional[str] = None
-    if contract_ref:
-        clean_path = contract_ref.replace("file://", "")
-        if os.path.exists(clean_path) and os.path.isfile(clean_path):
-            try:
-                with open(clean_path, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-            except Exception as e:
-                return {
-                    "status": "error",
-                    "error": "File Read Failure",
-                    "message": f"Không thể đọc hợp đồng từ tham chiếu '{contract_ref}': {e}",
-                    "vendor": vendor_name,
-                }
-        elif "\n" in contract_ref or len(contract_ref) > 260:
-            # Fallback if contract text was passed positionally as first argument
-            content = contract_ref
-        else:
-            return {
-                "status": "error",
-                "error": "Contract Reference Not Found",
-                "message": f"Tham chiếu hợp đồng '{contract_ref}' không tồn tại trên hệ thống lưu trữ.",
-                "vendor": vendor_name,
-            }
-    elif contract_text:
-        content = contract_text
-    else:
-        return {
-            "status": "error",
-            "error": "Missing Input",
-            "message": "Vui lòng cung cấp tham chiếu hợp đồng (contract_ref) hoặc chuỗi văn bản hợp đồng (contract_text).",
-            "vendor": vendor_name,
-        }
+    # 2. Resolve contract content safely from Cloud Storage reference (contract_ref) or direct text (contract_text)
+    from agent_core.app_utils.artifact_storage import resolve_artifact_content
+    effective_ref = contract_ref
+    effective_raw = contract_text
+    if effective_raw and not effective_ref and (effective_raw.startswith("gs://") or (os.path.exists(effective_raw) and "\n" not in effective_raw)):
+        effective_ref = effective_raw
+        effective_raw = None
+
+    content, err = resolve_artifact_content(ref=effective_ref, raw_text=effective_raw, resource_label="hợp đồng")
+    if err is not None:
+        err["vendor"] = vendor_name
+        return err
+
 
     text_lower = content.lower()
 

@@ -11,6 +11,9 @@ except ImportError:
             return {"ERP", "HRM", "CRM", "ALL"}
 
 
+from agent_core.knowledge.base import SecurityContext
+
+
 class Fact(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -26,6 +29,8 @@ class Fact(BaseModel):
     status: str = "active"  # 'active' | 'deprecated' | 'superseded'
     superseded_by: Optional[str] = None
     notes: Optional[str] = None
+    clearance_level: int = 1
+    allowed_roles: list[str] = Field(default_factory=list)
 
     def typed_value(self) -> Any:
         vt = (self.value_type or "string").lower().strip()

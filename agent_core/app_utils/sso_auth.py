@@ -390,6 +390,7 @@ class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
         "/healthz",
         "/health",
         "/readyz",
+        "/livez",
         "/docs",
         "/openapi.json",
         "/redoc",
@@ -408,6 +409,7 @@ class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
                 "/healthz",
                 "/health",
                 "/readyz",
+                "/livez",
                 "/favicon.ico",
             }
         return self.PUBLIC_PATHS

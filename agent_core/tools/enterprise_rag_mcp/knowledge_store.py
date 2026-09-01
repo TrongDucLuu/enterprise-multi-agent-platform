@@ -76,9 +76,15 @@ def wrap_retrieved_document(content: str, doc_id: str, system: str, title: str) 
 
 
 try:
-    from rag_models import KnowledgeArticle, SearchResult, DocumentSummary, SectionHierarchy, Fact
+    from rag_models import KnowledgeArticle, SearchResult, DocumentSummary, SectionHierarchy, Fact, SecurityContext
 except ImportError:
-    from agent_core.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle, SearchResult, DocumentSummary, SectionHierarchy, Fact
+    from agent_core.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle, SearchResult, DocumentSummary, SectionHierarchy, Fact, SecurityContext
+
+try:
+    from agent_core.knowledge.authorize import authorize_document, resolve_doc_clearance
+except ImportError:
+    from knowledge.authorize import authorize_document, resolve_doc_clearance
+
 
 try:
     from agent_core.app_utils.system_config import get_valid_system_filters, get_retrieval_config
@@ -656,7 +662,8 @@ class BaseKnowledgeStore(ABC):
         limit: int = 3,
         allowed_systems: Optional[list[str]] = None,
         user_roles: Optional[list[str]] = None,
-        user_clearance: int = 0,
+        user_clearance: Optional[int] = None,
+        security_context: Optional[SecurityContext] = None,
     ) -> list[SearchResult]:
         """Search knowledge articles matching the query, system filter, and authorized domain list."""
         pass
@@ -683,7 +690,8 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         limit: int = 3,
         allowed_systems: Optional[list[str]] = None,
         user_roles: Optional[list[str]] = None,
-        user_clearance: int = 0,
+        user_clearance: Optional[int] = None,
+        security_context: Optional[SecurityContext] = None,
     ) -> list[SearchResult]:
         """Search knowledge articles by query keywords, system filter, and authorized systems."""
         valid_systems = get_valid_system_filters()
@@ -693,35 +701,15 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
 
         allowed_upper = set(s.upper() for s in allowed_systems) if allowed_systems is not None else None
 
-        # Resolve effective user roles for document-level security trimming
-        effective_roles = user_roles
-        if effective_roles is None:
-            try:
-                from agent_core.app_utils.sso_auth import get_current_sso_user
-                user = get_current_sso_user()
-                if user:
-                    effective_roles = user.roles
-            except ImportError:
-                pass
-
-        clean_user_roles = [r.lower().strip() for r in effective_roles] if effective_roles is not None else None
-        is_admin_user = any(r in ("admin", "it_admin", "security_admin") for r in clean_user_roles) if clean_user_roles is not None else False
-
-        effective_clearance = user_clearance
-        if clean_user_roles is not None:
-            if is_admin_user:
-                effective_clearance = 3
-            elif any(r in ("hr_admin", "finance_admin", "compliance_officer", "legal_counsel", "hr_manager", "finance_manager") for r in clean_user_roles):
-                effective_clearance = 2
-            elif clean_user_roles:
-                effective_clearance = 1
-            else:
-                effective_clearance = 0
+        # Resolve effective security context (Fail-Closed when explicitly configured, default to employee in low-level tests)
+        if security_context is not None:
+            sec_ctx = security_context
+        elif user_roles is not None or (user_clearance is not None and user_clearance > 0):
+            sec_ctx = SecurityContext.from_user(roles=user_roles, clearance_level=user_clearance)
+        elif user_clearance == 0 and user_roles is None:
+            sec_ctx = SecurityContext.anonymous()
         else:
-            effective_clearance = user_clearance if user_clearance > 0 else 3
-
-        # Content Governance: Filter out expired and future-effective documents
-        today_str = datetime.date.today().isoformat()
+            sec_ctx = SecurityContext.from_user(roles=["employee", "user"], clearance_level=1)
 
         # Check if hybrid search is enabled in configuration
         retrieval_cfg = get_retrieval_config()
@@ -746,48 +734,22 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         results: list[tuple[float, KnowledgeArticle]] = []
 
         for article in self.articles:
-            # 1. Tombstone filter: Exclude deleted articles (Fail-Closed)
-            if getattr(article, "is_deleted", False):
+            # 1. Authorize document against SecurityContext (Tombstones, Expiry, Clearance, Roles)
+            if not authorize_document(article, sec_ctx):
                 continue
 
-            # 2. Content Governance date filtering
-            if article.expiry_date and article.expiry_date < today_str:
-                continue
-            if article.effective_date and article.effective_date > today_str:
-                continue
-
-            # 3. RBAC & System filter
+            # 2. RBAC & System filter
             art_sys = article.system.upper()
             if clean_system != "ALL" and art_sys != clean_system:
                 continue
             if allowed_upper is not None and art_sys not in allowed_upper:
                 continue
 
-            # 3b. Document-Level Clearance Level Pre-Filter
-            art_clearance = getattr(article, "clearance_level", None)
-            if art_clearance is None:
-                doc_sens = (getattr(article, "sensitivity", "INTERNAL") or "INTERNAL").upper()
-                art_clearance = 0 if doc_sens == "PUBLIC" else (2 if doc_sens == "CONFIDENTIAL" else (3 if doc_sens == "RESTRICTED" else 1))
-            if art_clearance > effective_clearance:
-                continue
-
-            # 3c. Document-Level RBAC: allowed_roles
-            doc_allowed = [r.lower().strip() for r in (getattr(article, "allowed_roles", None) or [])]
-            if doc_allowed and clean_user_roles is not None and not is_admin_user:
-                if not any(r in clean_user_roles for r in doc_allowed):
-                    continue
-
-            # 3d. Document-Level Sensitivity trimming
-            doc_sens = getattr(article, "sensitivity", "INTERNAL") or "INTERNAL"
-            if doc_sens.upper() in ("CONFIDENTIAL", "RESTRICTED") and clean_user_roles is not None and not is_admin_user:
-                if not any(r in clean_user_roles for r in doc_allowed) and not any(r in ("hr_admin", "finance_admin", "security_admin") for r in clean_user_roles):
-                    continue
-
             score = 0.0
             article_text = f"{article.title} {article.category} {article.content}".lower()
             article_keywords = [k.lower() for k in article.keywords]
 
-            # 4. Keyword matching & Exact match boosting (M_BEST_EKO, ME21N, OB52, etc.)
+            # 3. Keyword matching & Exact match boosting (M_BEST_EKO, ME21N, OB52, etc.)
             for term in terms:
                 # Exact phrase / code matching (case-insensitive)
                 if term in article.title.lower():
@@ -854,6 +816,7 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
                 is_truncated=is_truncated,
             ))
         return search_results
+
 
     def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
         """Retrieves an article by its unique ID, aggregating multi-chunk documents if present."""
@@ -989,7 +952,8 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
         limit: int = 3,
         allowed_systems: Optional[list[str]] = None,
         user_roles: Optional[list[str]] = None,
-        user_clearance: int = 0,
+        user_clearance: Optional[int] = None,
+        security_context: Optional[SecurityContext] = None,
     ) -> list[SearchResult]:
         """
         Searches BigQuery table using VECTOR_SEARCH with Pre-filtering subquery and scalar clearance level pre-filter.
@@ -1004,6 +968,15 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
         if clean_system not in valid_systems:
             clean_system = "ALL"
 
+        if security_context is not None:
+            sec_ctx = security_context
+        elif user_roles is not None or (user_clearance is not None and user_clearance > 0):
+            sec_ctx = SecurityContext.from_user(roles=user_roles, clearance_level=user_clearance)
+        elif user_clearance == 0 and user_roles is None:
+            sec_ctx = SecurityContext.anonymous()
+        else:
+            sec_ctx = SecurityContext.from_user(roles=["employee", "user"], clearance_level=1)
+
         try:
             query_vec = self._generate_embedding(query)
             full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
@@ -1011,36 +984,11 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             from google.cloud import bigquery
             today_iso = datetime.date.today().isoformat()
 
-            # Resolve effective roles and clearance
-            effective_roles = user_roles
-            if effective_roles is None:
-                try:
-                    from agent_core.app_utils.sso_auth import get_current_sso_user
-                    user = get_current_sso_user()
-                    if user:
-                        effective_roles = user.roles
-                except ImportError:
-                    pass
-
-            effective_clearance = user_clearance
-            if effective_roles is not None:
-                clean_roles = [r.lower().strip() for r in effective_roles]
-                if any(r in ("admin", "it_admin", "security_admin") for r in clean_roles):
-                    effective_clearance = 3
-                elif any(r in ("hr_admin", "finance_admin", "compliance_officer", "legal_counsel", "hr_manager", "finance_manager") for r in clean_roles):
-                    effective_clearance = 2
-                elif clean_roles:
-                    effective_clearance = 1
-                else:
-                    effective_clearance = 0
-            else:
-                effective_clearance = user_clearance if user_clearance > 0 else 3
-
             query_params = [
                 bigquery.ArrayQueryParameter("query_vector", "FLOAT64", query_vec),
-                bigquery.ScalarQueryParameter("limit", "INT64", limit),
+                bigquery.ScalarQueryParameter("limit", "INT64", max(limit * 2, 10)),  # Over-retrieve for post-filtering
                 bigquery.ScalarQueryParameter("today", "DATE", today_iso),
-                bigquery.ScalarQueryParameter("user_clearance", "INT64", effective_clearance),
+                bigquery.ScalarQueryParameter("user_clearance", "INT64", sec_ctx.clearance_level),
             ]
 
             # 1. Construct Pre-Filter Subquery for VECTOR_SEARCH (Tombstone + Dates + System RBAC + Scalar Clearance)
@@ -1146,6 +1094,151 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 job_timeout_ms=job_timeout_ms,
             )
             query_job = self.bq_client.query(sql, job_config=job_config)
+            try:
+                rows = query_job.result(timeout=bq_timeout)
+            except Exception as query_err:
+                try:
+                    query_job.cancel()
+                except Exception as cancel_err:
+                    logger.debug("Failed to cancel BigQuery query job: %s", cancel_err)
+                raise query_err
+
+            # Telemetry: Record and log BigQuery query resource consumption
+            try:
+                bytes_billed = getattr(query_job, "total_bytes_billed", None)
+                bytes_processed = getattr(query_job, "total_bytes_processed", None)
+                cache_hit = getattr(query_job, "cache_hit", None)
+                slot_ms = getattr(query_job, "slot_millis", None)
+                logger.info(
+                    "BigQuery Vector Search Telemetry: bytes_billed=%s, bytes_processed=%s, cache_hit=%s, slot_ms=%s, job_id=%s",
+                    bytes_billed, bytes_processed, cache_hit, slot_ms, getattr(query_job, "job_id", None)
+                )
+            except Exception as telem_err:
+                logger.debug("Error recording BigQuery telemetry: %s", telem_err)
+
+            results = []
+            for row in rows:
+                content_raw = getattr(row, "content", "")
+                content_str = str(content_raw) if content_raw is not None else ""
+                
+                dist_val = getattr(row, "distance", 0.0)
+                dist_float = float(dist_val) if isinstance(dist_val, (int, float)) else 0.0
+                relevance = round(max(0.0, min(1.0, 1.0 - dist_float)), 2)
+
+                sec_h1 = _extract_str(getattr(row, "section_h1", None))
+                sec_h2 = _extract_str(getattr(row, "section_h2", None))
+                sec_h3 = _extract_str(getattr(row, "section_h3", None))
+                
+                raw_hier = getattr(row, "section_hierarchy", None)
+                if raw_hier and not any([sec_h1, sec_h2, sec_h3]):
+                    hier_dict = dict(raw_hier) if hasattr(raw_hier, "items") else (raw_hier if isinstance(raw_hier, dict) else {})
+                    sec_h1 = _extract_str(hier_dict.get("h1"))
+                    sec_h2 = _extract_str(hier_dict.get("h2"))
+                    sec_h3 = _extract_str(hier_dict.get("h3"))
+
+                sec_hier = None
+                if any([sec_h1, sec_h2, sec_h3]):
+                    sec_hier = SectionHierarchy(h1=sec_h1, h2=sec_h2, h3=sec_h3)
+
+                art_id = _extract_str(getattr(row, "id", "")) or ""
+                art_sys = _extract_str(getattr(row, "system", "")) or ""
+                art_title = _extract_str(getattr(row, "title", "")) or ""
+                category = _extract_str(getattr(row, "category", None))
+                
+                context_path = sec_hier.format_path() if sec_hier else f"{art_sys} > {category or 'General'} > {art_title}"
+                
+                is_truncated = len(content_str) > 1200
+                raw_snippet = content_str[:1200].strip() + "..." if is_truncated else content_str.strip()
+                snippet = wrap_retrieved_document(
+                    content=raw_snippet,
+                    doc_id=art_id,
+                    system=art_sys,
+                    title=art_title,
+                )
+
+                candidate = SearchResult(
+                    article_id=art_id,
+                    parent_doc_id=_extract_str(getattr(row, "parent_doc_id", None)),
+                    chunk_index=getattr(row, "chunk_index", None) if isinstance(getattr(row, "chunk_index", None), int) else None,
+                    system=art_sys,
+                    title=art_title,
+                    snippet=snippet,
+                    relevance_score=relevance,
+                    section_h1=sec_h1,
+                    section_h2=sec_h2,
+                    section_h3=sec_h3,
+                    section_hierarchy=sec_hier,
+                    context_path=context_path,
+                    allowed_roles=_extract_list(getattr(row, "allowed_roles", None)),
+                    sensitivity=_extract_str(getattr(row, "sensitivity", None)),
+                    clearance_level=getattr(row, "clearance_level", None),
+                    source_uri=_extract_str(getattr(row, "source_uri", None)),
+                    category=category,
+                    keywords=_extract_list(getattr(row, "keywords", None)),
+                    owner=_extract_str(getattr(row, "owner", None)),
+                    effective_date=_extract_str(getattr(row, "effective_date", None)),
+                    expiry_date=_extract_str(getattr(row, "expiry_date", None)),
+                    is_deleted=_extract_bool(getattr(row, "is_deleted", False)),
+                    is_truncated=is_truncated,
+                )
+
+                if not authorize_document(candidate, sec_ctx):
+                    continue
+
+                results.append(candidate)
+
+            if retrieval_cfg.get("reranker_enabled", False) or os.getenv("USE_VERTEX_RERANKER", "false").lower() in ("true", "1", "yes"):
+                results = rerank_search_results(
+                    query=query,
+                    candidates=results,
+                    top_n=limit,
+                    project_id=self.project_id,
+                    ranking_model=retrieval_cfg.get("reranker_model", "semantic-ranker-512@latest"),
+                )
+            return results[:limit]
+        except Exception as e:
+            logger.error("BigQuery vector search failed (%s). Raising KnowledgeStoreUnavailableError.", e)
+            raise KnowledgeStoreUnavailableError(f"Truy vấn BigQuery Vector Search thất bại hoặc quá thời gian chờ: {e}") from e
+
+    def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
+        """Retrieves article by ID from BigQuery table, aggregating multi-chunk documents if present. Fails closed on failure."""
+        if not self.bq_client:
+            logger.error("BigQuery client is not initialized for get_article_by_id.")
+            raise KnowledgeStoreUnavailableError("Dịch vụ BigQuery Knowledge Store chưa được khởi tạo.")
+
+        clean_id = article_id.upper().strip()
+        full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
+        today_iso = datetime.date.today().isoformat()
+        sql = f"""
+        SELECT 
+            id, parent_doc_id, chunk_index, system, title, category, content, keywords,
+            section_h1, section_h2, section_h3, allowed_roles, sensitivity, clearance_level,
+            source_uri, owner, effective_date, expiry_date, is_deleted, deleted_at 
+        FROM {full_table} 
+        WHERE (is_deleted IS NOT TRUE)
+          AND (expiry_date IS NULL OR expiry_date >= @today)
+          AND (effective_date IS NULL OR effective_date <= @today)
+          AND (
+               UPPER(id) = @article_id 
+            OR UPPER(parent_doc_id) = @article_id 
+            OR UPPER(parent_doc_id) = (
+                SELECT UPPER(parent_doc_id) FROM {full_table} WHERE UPPER(id) = @article_id AND parent_doc_id IS NOT NULL LIMIT 1
+            )
+          )
+        ORDER BY chunk_index ASC
+        """
+        try:
+            bq_timeout = float(os.getenv("BIGQUERY_QUERY_TIMEOUT_SECONDS", "3.0"))
+            from google.cloud import bigquery
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("article_id", "STRING", clean_id),
+                    bigquery.ScalarQueryParameter("today", "DATE", today_iso),
+                ],
+                job_timeout_ms=int(bq_timeout * 1000),
+            )
+            query_job = self.bq_client.query(sql, job_config=job_config)
+
             try:
                 rows = query_job.result(timeout=bq_timeout)
             except Exception as query_err:
@@ -1407,12 +1500,22 @@ class VertexAISearchKnowledgeStore(BaseKnowledgeStore):
         limit: int = 3,
         allowed_systems: Optional[list[str]] = None,
         user_roles: Optional[list[str]] = None,
-        user_clearance: int = 0,
+        user_clearance: Optional[int] = None,
+        security_context: Optional[SecurityContext] = None,
     ) -> list[SearchResult]:
         if not query or not query.strip():
             return []
 
         clean_sys = system.upper().strip() if system else "ALL"
+
+        if security_context is not None:
+            sec_ctx = security_context
+        elif user_roles is not None or (user_clearance is not None and user_clearance > 0):
+            sec_ctx = SecurityContext.from_user(roles=user_roles, clearance_level=user_clearance)
+        elif user_clearance == 0 and user_roles is None:
+            sec_ctx = SecurityContext.anonymous()
+        else:
+            sec_ctx = SecurityContext.from_user(roles=["employee", "user"], clearance_level=1)
 
         # Build filter expression
         filter_parts = []
@@ -1554,6 +1657,10 @@ class VertexAISearchKnowledgeStore(BaseKnowledgeStore):
                 is_deleted=_extract_bool(doc_data.get("is_deleted")),
                 is_truncated=len(snippet_text) > 1200,
             )
+
+            if not authorize_document(res, sec_ctx):
+                continue
+
             search_results.append(res)
 
         # Apply reranker if enabled

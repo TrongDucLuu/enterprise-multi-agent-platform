@@ -104,6 +104,7 @@ except Exception:
 # 1. System Health & Readiness Endpoints (Used by Cloud Run startup/liveness probes & Load Balancer)
 @app.get("/healthz", tags=["Health"])
 @app.get("/health", tags=["Health"])
+@app.get("/livez", tags=["Health"])
 async def health_check():
     """Liveness probe endpoint confirming container availability and pack metadata."""
     return {

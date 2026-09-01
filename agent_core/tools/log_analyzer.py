@@ -8,10 +8,10 @@ from agent_core.tools.registry import register_tool
 @register_tool("analyze_log_rca")
 @register_tool("analyze_system_logs_for_rca")
 def analyze_system_logs_for_rca(
-    log_ref: Optional[str] = None,
     raw_logs: Optional[str] = None,
     system_name: str = "Core System",
-    incident_description: Optional[str] = None
+    incident_description: Optional[str] = None,
+    log_ref: Optional[str] = None,
 ) -> dict:
     """
     Parses application logs, stack traces, and syslog lines to identify root cause indicators.
@@ -29,40 +29,19 @@ def analyze_system_logs_for_rca(
             "system": system_name,
         }
 
-    # 2. Resolve log content from reference (log_ref) or direct text (raw_logs)
-    content: Optional[str] = None
-    if log_ref:
-        clean_path = log_ref.replace("file://", "")
-        if os.path.exists(clean_path) and os.path.isfile(clean_path):
-            try:
-                with open(clean_path, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-            except Exception as e:
-                return {
-                    "status": "error",
-                    "error": "File Read Failure",
-                    "message": f"Không thể đọc file log từ tham chiếu '{log_ref}': {e}",
-                    "system": system_name,
-                }
-        elif "\n" in log_ref or len(log_ref) > 260:
-            # Fallback if raw logs were passed positionally as first argument
-            content = log_ref
-        else:
-            return {
-                "status": "error",
-                "error": "Log Reference Not Found",
-                "message": f"Tham chiếu log '{log_ref}' không tồn tại trên hệ thống lưu trữ.",
-                "system": system_name,
-            }
-    elif raw_logs:
-        content = raw_logs
-    else:
-        return {
-            "status": "error",
-            "error": "Missing Input",
-            "message": "Vui lòng cung cấp tham chiếu file log (log_ref) hoặc chuỗi log (raw_logs).",
-            "system": system_name,
-        }
+    # 2. Resolve log content safely from Cloud Storage reference (log_ref) or direct text (raw_logs)
+    from agent_core.app_utils.artifact_storage import resolve_artifact_content
+    effective_ref = log_ref
+    effective_raw = raw_logs
+    if effective_raw and not effective_ref and (effective_raw.startswith("gs://") or (os.path.exists(effective_raw) and "\n" not in effective_raw)):
+        effective_ref = effective_raw
+        effective_raw = None
+
+    content, err = resolve_artifact_content(ref=effective_ref, raw_text=effective_raw, resource_label="file log")
+    if err is not None:
+        err["system"] = system_name
+        return err
+
 
     lines = content.strip().split("\n")
     error_lines = []

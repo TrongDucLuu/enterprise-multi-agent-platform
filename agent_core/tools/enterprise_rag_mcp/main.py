@@ -10,12 +10,18 @@ from starlette.responses import JSONResponse
 
 try:
     from knowledge_store import get_knowledge_store, get_facts_store, KnowledgeStoreUnavailableError, wrap_retrieved_document
-    from rag_models import SearchResult, Fact, Obligation
+    from rag_models import SearchResult, Fact, Obligation, SecurityContext
     from obligations_store import get_obligations_store
 except ImportError:
     from agent_core.tools.enterprise_rag_mcp.knowledge_store import get_knowledge_store, get_facts_store, KnowledgeStoreUnavailableError, wrap_retrieved_document
-    from agent_core.tools.enterprise_rag_mcp.rag_models import SearchResult, Fact, Obligation
+    from agent_core.tools.enterprise_rag_mcp.rag_models import SearchResult, Fact, Obligation, SecurityContext
     from agent_core.tools.obligations_store import get_obligations_store
+
+try:
+    from agent_core.knowledge.authorize import authorize_document
+except ImportError:
+    from knowledge.authorize import authorize_document
+
 
 try:
     from agent_core.tools.registry import register_tool
@@ -177,6 +183,26 @@ def lookup_fact(key: str) -> dict:
             "message": "Key không được để trống.",
         }
     clean_key = str(key).strip()
+
+    try:
+        from agent_core.app_utils.sso_auth import get_current_sso_user
+    except ImportError:
+        try:
+            from app_utils.sso_auth import get_current_sso_user
+        except ImportError:
+            def get_current_sso_user():
+                return None
+
+    current_user = get_current_sso_user()
+    if current_user:
+        sec_ctx = SecurityContext.from_user(
+            user_id=getattr(current_user, "email", getattr(current_user, "user_id", "anonymous")),
+            roles=getattr(current_user, "roles", []),
+            clearance_level=getattr(current_user, "clearance_level", None),
+        )
+    else:
+        sec_ctx = SecurityContext.from_user(user_id="internal-agent", roles=["employee", "user"], clearance_level=1)
+
     try:
         fact = facts_store.get_fact(clean_key)
         if not fact:
@@ -185,6 +211,15 @@ def lookup_fact(key: str) -> dict:
                 "key": clean_key,
                 "message": f"Fact '{clean_key}' không tồn tại trong cơ sở tri thức L1 Facts Registry.",
             }
+
+        if not authorize_document(fact, sec_ctx, resource_type="FACT"):
+            return {
+                "status": "forbidden",
+                "error": "Access Denied",
+                "key": clean_key,
+                "message": f"Fact '{clean_key}' bị từ chối truy cập do không đủ quyền hạn bảo mật.",
+            }
+
         return {
             "status": "success",
             "fact_id": fact.fact_id,
@@ -222,23 +257,26 @@ def get_obligation(obligation_id: str) -> dict:
     """
     Tra cứu nghĩa vụ pháp lý, điều khoản hợp đồng hoặc cam kết SLA chuẩn mực (L3 Obligations Registry).
     - obligation_id: Mã định danh nghĩa vụ (ví dụ: 'OBL-SAP-001', 'OBL-DPA-001', 'OBL-SEC-001').
-    Bảo vệ bởi RBAC: chỉ cho phép compliance_officer, it_admin, sys_admin, legal_counsel.
+    Bảo vệ bởi RBAC & Clearance: kiểm tra tính hợp lệ qua authorize_document.
     """
     try:
-        from agent_core.app_utils.sso_auth import require_role
+        from agent_core.app_utils.sso_auth import get_current_sso_user
     except ImportError:
         try:
-            from app_utils.sso_auth import require_role
+            from app_utils.sso_auth import get_current_sso_user
         except ImportError:
-            return {"status": "forbidden", "error": "Access Denied", "message": "Hệ thống xác thực không khả dụng."}
+            def get_current_sso_user():
+                return None
 
-    is_allowed, error_msg = require_role(["compliance_officer", "it_admin", "sys_admin", "legal_counsel"])
-    if not is_allowed:
-        return {
-            "status": "forbidden",
-            "error": "Access Denied",
-            "message": error_msg,
-        }
+    current_user = get_current_sso_user()
+    if current_user:
+        sec_ctx = SecurityContext.from_user(
+            user_id=getattr(current_user, "email", getattr(current_user, "user_id", "anonymous")),
+            roles=getattr(current_user, "roles", []),
+            clearance_level=getattr(current_user, "clearance_level", None),
+        )
+    else:
+        sec_ctx = SecurityContext.from_user(user_id="internal-agent", roles=["compliance_officer", "it_admin"], clearance_level=2)
 
     if not obligation_id or not str(obligation_id).strip():
         return {
@@ -255,6 +293,15 @@ def get_obligation(obligation_id: str) -> dict:
                 "obligation_id": clean_id,
                 "message": f"Nghĩa vụ pháp lý '{clean_id}' không tồn tại trong cơ sở L3 Obligations Registry.",
             }
+
+        if not authorize_document(ob, sec_ctx, resource_type="OBLIGATION"):
+            return {
+                "status": "forbidden",
+                "error": "Access Denied",
+                "obligation_id": clean_id,
+                "message": f"Nghĩa vụ pháp lý '{clean_id}' bị từ chối truy cập do không đủ quyền hạn bảo mật.",
+            }
+
         return {
             "status": "success",
             "obligation_id": ob.obligation_id,
@@ -291,29 +338,16 @@ RETRIEVE_K = 20
 FINAL_K = 3
 
 
-def _filter_by_role(results: list, user_roles: list[str] | None) -> list:
+def _filter_by_role(results: list, sec_ctx: SecurityContext) -> list:
     """
-    Post-filters retrieved candidates by allowed_roles after vector over-retrieval.
-    - If article has no allowed_roles (empty/None), keep it.
-    - If user has admin/security_admin role, allow all.
-    - If article specifies allowed_roles, require intersection with user_roles.
+    Post-filters retrieved candidates using single source of truth authorize_document.
     """
     if not results:
         return []
-    clean_user_roles = [r.lower().strip() for r in user_roles] if user_roles else []
-    if any(r in ("admin", "it_admin", "security_admin") for r in clean_user_roles):
-        return results
-
-    user_role_set = set(clean_user_roles)
     filtered = []
     for r in results:
-        doc_roles = getattr(r, "allowed_roles", None)
-        if not doc_roles:
+        if authorize_document(r, sec_ctx, resource_type="KNOWLEDGE_DOCUMENT"):
             filtered.append(r)
-        else:
-            clean_doc_roles = {role.lower().strip() for role in doc_roles}
-            if clean_doc_roles & user_role_set:
-                filtered.append(r)
     return filtered
 
 
@@ -353,16 +387,14 @@ def search_enterprise_knowledge(
                 return None
 
     current_user = get_current_sso_user()
-    user_roles = current_user.roles if current_user else None
-    user_clearance = 0
-    if current_user and current_user.roles:
-        clean_roles = [r.lower().strip() for r in current_user.roles]
-        if any(r in ("admin", "it_admin", "security_admin") for r in clean_roles):
-            user_clearance = 3
-        elif any(r in ("hr_admin", "finance_admin", "compliance_officer", "legal_counsel", "hr_manager", "finance_manager") for r in clean_roles):
-            user_clearance = 2
-        elif clean_roles:
-            user_clearance = 1
+    if current_user:
+        sec_ctx = SecurityContext.from_user(
+            user_id=getattr(current_user, "email", getattr(current_user, "user_id", "anonymous")),
+            roles=getattr(current_user, "roles", []),
+            clearance_level=getattr(current_user, "clearance_level", None),
+        )
+    else:
+        sec_ctx = SecurityContext.anonymous()
 
     if clean_sys != "ALL":
         is_allowed, error_msg = _check_system_access(clean_sys)
@@ -379,10 +411,9 @@ def search_enterprise_knowledge(
                 query=query,
                 system=clean_sys,
                 limit=RETRIEVE_K,
-                user_roles=user_roles,
-                user_clearance=user_clearance,
+                security_context=sec_ctx,
             )
-            filtered = _filter_by_role(results, user_roles)[:FINAL_K]
+            filtered = _filter_by_role(results, sec_ctx)[:FINAL_K]
             return [r.model_dump() for r in filtered]
         except KnowledgeStoreUnavailableError as e:
             logger.error("Knowledge store unavailable during search: %s", e)
@@ -405,10 +436,9 @@ def search_enterprise_knowledge(
             system="ALL",
             limit=RETRIEVE_K,
             allowed_systems=authorized_systems,
-            user_roles=user_roles,
-            user_clearance=user_clearance,
+            security_context=sec_ctx,
         )
-        filtered = _filter_by_role(results, user_roles)[:FINAL_K]
+        filtered = _filter_by_role(results, sec_ctx)[:FINAL_K]
         return [r.model_dump() for r in filtered]
     except KnowledgeStoreUnavailableError as e:
         logger.error("Knowledge store unavailable during search ALL: %s", e)
@@ -452,7 +482,6 @@ def get_system_manual(article_id: str) -> dict:
             "system": article.system,
         }
 
-    # Document-level RBAC & Sensitivity trimming
     try:
         from agent_core.app_utils.sso_auth import get_current_sso_user
     except ImportError:
@@ -463,29 +492,23 @@ def get_system_manual(article_id: str) -> dict:
                 return None
 
     current_user = get_current_sso_user()
-    current_roles = [r.lower().strip() for r in (current_user.roles if current_user else ["employee"])]
-    is_admin = any(r in ("admin", "it_admin", "security_admin") for r in current_roles)
+    if current_user:
+        sec_ctx = SecurityContext.from_user(
+            user_id=getattr(current_user, "email", getattr(current_user, "user_id", "anonymous")),
+            roles=getattr(current_user, "roles", []),
+            clearance_level=getattr(current_user, "clearance_level", None),
+        )
+    else:
+        sec_ctx = SecurityContext.anonymous()
 
-    doc_allowed = [r.lower().strip() for r in (getattr(article, "allowed_roles", None) or [])]
-    if doc_allowed and not is_admin:
-        if not any(r in current_roles for r in doc_allowed):
-            return {
-                "status": "forbidden",
-                "error": "Access Denied",
-                "message": f"Tài liệu '{article_id}' yêu cầu quyền truy cập đặc biệt: {article.allowed_roles}.",
-                "article_id": article_id,
-                "system": article.system,
-            }
-    doc_sens = (getattr(article, "sensitivity", "INTERNAL") or "INTERNAL").upper()
-    if doc_sens in ("CONFIDENTIAL", "RESTRICTED") and not is_admin:
-        if not any(r in current_roles for r in doc_allowed) and not any(r in ("hr_admin", "finance_admin", "security_admin") for r in current_roles):
-            return {
-                "status": "forbidden",
-                "error": "Access Denied",
-                "message": f"Tài liệu '{article_id}' có mức độ bảo mật {article.sensitivity}, bạn không có quyền truy cập.",
-                "article_id": article_id,
-                "system": article.system,
-            }
+    if not authorize_document(article, sec_ctx, resource_type="KNOWLEDGE_DOCUMENT"):
+        return {
+            "status": "forbidden",
+            "error": "Access Denied",
+            "message": f"Tài liệu '{article_id}' bị từ chối truy cập do không đủ quyền hạn bảo mật.",
+            "article_id": article_id,
+            "system": getattr(article, "system", "UNKNOWN"),
+        }
 
     art_dict = article.model_dump()
     raw_content = art_dict.get("content", "")
