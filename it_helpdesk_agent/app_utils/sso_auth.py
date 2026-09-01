@@ -400,11 +400,23 @@ class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
         "/assets/",
     )
 
+    @property
+    def public_paths(self) -> set[str]:
+        is_prod = os.getenv("ENVIRONMENT", "development").lower() == "production" or bool(os.getenv("K_SERVICE"))
+        if is_prod:
+            return {
+                "/healthz",
+                "/health",
+                "/readyz",
+                "/favicon.ico",
+            }
+        return self.PUBLIC_PATHS
+
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
         # 1. Allow public whitelisted paths
-        if path in self.PUBLIC_PATHS or any(path.startswith(p) for p in self.PUBLIC_PREFIXES):
+        if path in self.public_paths or any(path.startswith(p) for p in self.PUBLIC_PREFIXES):
             return await call_next(request)
 
         # 2. Extract Authorization Bearer token

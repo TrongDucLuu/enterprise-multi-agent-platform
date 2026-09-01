@@ -73,6 +73,11 @@ app: FastAPI = get_fast_api_app(
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
 IS_PRODUCTION = ENVIRONMENT == "production" or bool(os.getenv("K_SERVICE"))
 if IS_PRODUCTION:
+    _blocked = {"/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"}
+    app.router.routes = [
+        r for r in app.router.routes
+        if getattr(r, "path", None) not in _blocked
+    ]
     app.docs_url = None
     app.redoc_url = None
     app.openapi_url = None

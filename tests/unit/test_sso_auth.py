@@ -265,3 +265,57 @@ async def test_get_current_user_rejects_missing_credentials_in_prod(monkeypatch)
         await get_current_user(credentials=None)
     assert exc_info.value.status_code == 401
     assert "missing" in exc_info.value.detail.lower()
+
+
+def test_swagger_openapi_disabled_in_production(monkeypatch):
+    """
+    Verify that in production:
+    1. OpenAPI / Swagger routes are stripped from the router (returns 404).
+    2. Public health check routes (/healthz) remain accessible.
+    3. OpenAPI paths are not whitelisted in SSO middleware.
+    """
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
+
+    test_app = FastAPI(docs_url="/docs", redoc_url="/redoc", openapi_url="/openapi.json")
+
+    @test_app.get("/healthz")
+    def healthz():
+        return {"status": "ok"}
+
+    # Simulate production router route stripping
+    _blocked = {"/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"}
+    test_app.router.routes = [
+        r for r in test_app.router.routes
+        if getattr(r, "path", None) not in _blocked
+    ]
+    test_app.docs_url = None
+    test_app.redoc_url = None
+    test_app.openapi_url = None
+
+    test_app.add_middleware(SSOAuthenticationMiddleware)
+    client = TestClient(test_app)
+
+    # 1. Healthz is public (200)
+    assert client.get("/healthz").status_code == 200
+
+    # 2. Unauthenticated access to Swagger / OpenAPI is blocked with 401 (not in public_paths)
+    assert client.get("/openapi.json").status_code == 401
+    assert client.get("/docs").status_code == 401
+    assert client.get("/redoc").status_code == 401
+
+    # 3. Authenticated access to Swagger / OpenAPI returns 404 (stripped from router routes)
+    mock_payload = {
+        "sub": "user-valid",
+        "email": "user@company.com",
+        "email_verified": True,
+        "iss": "https://accounts.google.com",
+        "aud": SSO_CLIENT_ID,
+    }
+    with patch("google.oauth2.id_token.verify_oauth2_token", return_value=mock_payload):
+        token = _make_dummy_rs256_jwt({"sub": "user-valid", "iss": "https://accounts.google.com"})
+        auth_headers = {"Authorization": f"Bearer {token}"}
+        assert client.get("/openapi.json", headers=auth_headers).status_code == 404
+        assert client.get("/docs", headers=auth_headers).status_code == 404
+        assert client.get("/redoc", headers=auth_headers).status_code == 404
+
