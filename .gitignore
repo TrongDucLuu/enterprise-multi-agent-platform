@@ -34,7 +34,9 @@ wheels/
 .coverage
 htmlcov/
 
-# IDE
+# IDE & OS
+.DS_Store
 .vscode/
 .idea/
 *.swp
+
