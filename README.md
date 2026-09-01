@@ -182,8 +182,12 @@ cp .env.example .env
 | `USE_FIRESTORE_TICKETS`| Không | `false` | Bật Firestore backend cho ticket storage (tự động bật trên Cloud Run). |
 | `KNOWLEDGE_BACKEND` | Không | `in_memory` | Backend cho RAG (`in_memory` hoặc `bigquery`). |
 | `BIGQUERY_KB_DATASET` | Không | `it_helpdesk_kb`| Dataset BigQuery chứa tài liệu tri thức doanh nghiệp. |
+| `BIGQUERY_SEARCH_TIMEOUT_SECONDS` | Không | `15.0` | Timeout tối đa cho truy vấn BigQuery Vector Search (giây). |
 | `SEMANTIC_CACHE_ENABLED`| Không| `true` | Bật lớp bộ đệm ngữ nghĩa cho câu hỏi lặp lại. |
 | `SEMANTIC_CACHE_THRESHOLD`| Không| `0.92` | Ngưỡng tương đồng cosine để coi là trùng khớp câu hỏi. |
+| `TICKET_CACHE_TTL_SECONDS` | Không | `30` | Thời gian sống (TTL) của bộ nhớ đệm ticket trước khi đồng bộ Firestore. |
+| `MAX_LOCAL_TICKETS_CACHE` | Không | `1000` | Số lượng ticket tối đa lưu trong bộ nhớ LRU cache cục bộ. |
+| `RERANKER_TIMEOUT_SECONDS` | Không | `1.5` | Giới hạn thời gian tối đa cho Cross-Encoder Reranker chấm điểm tài liệu. |
 
 ---
 
@@ -198,7 +202,7 @@ uv sync
 ```bash
 uv run pytest tests/ -v
 ```
-*(Hiện tại toàn bộ **157/157 test cases** đều vượt qua $100\%$)*
+*(Hiện tại toàn bộ **229/229 test cases** đều vượt qua $100\%$)*
 
 ### Bước 3: Chạy Bộ Đo Đánh Giá Chất Lượng Tri Thức & Câu Hỏi Bẫy (Eval Harness)
 ```bash
@@ -302,38 +306,49 @@ it-helpdesk-agent/
 │   │   ├── env.py                   # Quản lý nạp biến môi trường, Secret Manager & Model Selection SLA
 │   │   ├── embedding_utils.py       # Embedding abstraction (Vertex AI + Fail-Closed)
 │   │   ├── rate_limiter.py          # Token-hash & IP Sliding Window Limiter + Soft Warning
+│   │   ├── reranker.py              # Enterprise Cross-Encoder Reranker (1.5s Timeout, XML Sanitization)
 │   │   ├── semantic_cache.py        # InMemory & Redis Vector Semantic Cache (Candidate Scan, Multi-tenant)
 │   │   ├── sso_auth.py              # Xác thực OIDC JWKS, Role Resolution, RBAC ContextVar & Memoization
 │   │   ├── system_config.py         # Dynamic loader cho systems.yaml & Domain Keyword Patterns
-│   │   └── telemetry.py             # OpenTelemetry tracking, Fail-Closed Privacy & PII redaction
+│   │   ├── telemetry.py             # OpenTelemetry tracking, Fail-Closed Privacy & PII redaction
+│   │   └── triage_rules.py          # Deterministic fast-path regex triage routing
 │   └── tools/
 │       ├── compliance_tool.py       # Công cụ phân tích SLA & hợp đồng IT (RBAC + Disclaimer)
 │       ├── log_analyzer.py          # Công cụ phân tích log RCA (RBAC + Confidence Level)
-│       ├── mcp_config.py            # Cấu hình Toolset Enterprise RAG MCP
-│       ├── ticketing_tool.py        # Quản lý Ticket (Firestore limit + bounded LRU cache + IDOR guard)
+│       ├── mcp_config.py            # Cấu hình Toolset Enterprise RAG MCP (Streamable HTTP / In-Memory)
+│       ├── ticketing_tool.py        # Quản lý Ticket (Firestore + TTL-bounded LRU cache + RBAC guard)
 │       └── enterprise_rag_mcp/      # Máy chủ Model Context Protocol (MCP) nội bộ
-│           ├── knowledge_store.py   # BaseKnowledgeStore (InMemory + BigQuery Vector Search)
-│           ├── main.py              # Server MCP FastMCP
-│           └── rag_models.py        # Schemas dữ liệu RAG
+│           ├── knowledge_store.py   # BaseKnowledgeStore (InMemory + Native BigQuery Vector Search)
+│           ├── main.py              # Server MCP FastMCP (Streamable HTTP + Header-Forwarded Auth)
+│           └── rag_models.py        # Schemas dữ liệu RAG (Strict Extra-Field Forbidding)
 └── tests/
     ├── test_redis_backends.py       # Test Redis cluster rate limiter & semantic cache
-    └── unit/                        # Bộ kiểm thử tự động (157 test cases)
+    └── unit/                        # Bộ kiểm thử tự động (229 test cases)
+        ├── test_agent_architecture_v10.py # Test kiến trúc và toolsets phân tầng V10
         ├── test_agent_hierarchy.py  # Test cấu trúc phân cấp agent và model
         ├── test_compliance_tool.py  # Test trích xuất SLA 2 chiều & RBAC
         ├── test_container_packaging.py # Test Dockerfile & Fail-closed container env
+        ├── test_embedding_cache.py  # Test in-memory LRU embedding cache
         ├── test_enterprise_rag.py   # Test MCP tra cứu tri thức & domain isolation
         ├── test_env.py              # Test nạp secret & env
+        ├── test_eval_precision.py   # Test tính toán metric precision & recall
         ├── test_ingestion_pipeline.py # Test chunking pipeline, Document AI & CDC dedup
         ├── test_knowledge_store_adapters.py # Test Adapter Pattern & BigQuery Store
+        ├── test_lifecycle_e2e.py    # Test toàn trình vòng đời Agent & Escalation
         ├── test_log_analyzer.py     # Test nhận diện lỗi OOM, DB, Disk, Null & RBAC
+        ├── test_mcp_auth.py         # Test FastMCP Streamable HTTP Auth & Header Forwarding
         ├── test_production_guardrails.py # Test Fail-closed cache, L3 disclaimer, Circuit breaker, SLA
         ├── test_rate_limiter.py     # Test rate limiter sliding window, token hash & soft warnings
         ├── test_rbac_provisioning.py # Test cấp role 4 tầng ưu tiên & SHA-256 process invariance
-        ├── test_security_adversarial.py # Test IDOR, SQLi injection, Cache isolation
+        ├── test_reranker.py         # Test Cross-Encoder Reranker timeout, XML sanitization & scoring
+        ├── test_schema_parity.py    # Test tính đồng bộ giữa BigQuery schema & KnowledgeDoc
+        ├── test_security_adversarial.py # Test IDOR, SQLi injection, Cache isolation, RBAC Trimming
         ├── test_semantic_cache.py   # Test Cosine Similarity, Cache Hit/Miss, TTL, LRU, Public FAQ
+        ├── test_semantic_cache_invalidation.py # Test vô hiệu hóa Semantic Cache khi cập nhật tri thức
         ├── test_sso_auth.py         # Test OIDC JWKS, Fail-closed domain, Role Resolution, Middleware
         ├── test_system_config.py    # Test dynamic systems.yaml loading, role mappings & fail-closed
         ├── test_telemetry.py        # Test Telemetry privacy, PII masking & regex system classification
-        └── test_ticketing_tool.py   # Test tạo, cập nhật, chuyển tiếp ticket & bounded LRU cache
+        ├── test_ticketing_tool.py   # Test tạo, cập nhật, chuyển tiếp ticket, TTL & LRU cache
+        └── test_triage_rules.py     # Test phân loại deterministic regex fast-path triage
 ```
 
