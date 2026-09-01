@@ -6,6 +6,7 @@ from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
     BaseKnowledgeStore,
     InMemoryKnowledgeStore,
     BigQueryVectorKnowledgeStore,
+    VertexAISearchKnowledgeStore,
     get_knowledge_store,
     KnowledgeArticle,
     KnowledgeStoreUnavailableError,
@@ -747,6 +748,191 @@ def test_bigquery_telemetry_and_job_timeout_cancel(caplog):
         store.search("Lỗi mạng LAN", system="ALL", limit=5)
 
     mock_fail_job.cancel.assert_called_once()
+
+
+def test_vertex_ai_search_store_initialization():
+    """Verifies that VertexAISearchKnowledgeStore properly configures resource paths."""
+    store = VertexAISearchKnowledgeStore(
+        project_id="my-gcp-project",
+        location="asia-southeast1",
+        data_store_id="my-datastore",
+        serving_config_id="my-search-config",
+        collection_id="my-collection",
+    )
+    assert isinstance(store, BaseKnowledgeStore)
+    expected_path = (
+        "projects/my-gcp-project/locations/asia-southeast1/collections/"
+        "my-collection/dataStores/my-datastore/servingConfigs/my-search-config"
+    )
+    assert store._get_serving_config_path() == expected_path
+
+
+def test_vertex_ai_search_store_search_single_system():
+    """Verifies search with single system filter, extraction of snippets and metadata."""
+    from types import SimpleNamespace
+    mock_client = MagicMock()
+
+    mock_doc = SimpleNamespace(
+        id="ERP-DOC-001",
+        struct_data={
+            "id": "ERP-KB-001",
+            "title": "Hướng dẫn cấp quyền ERP",
+            "system": "ERP",
+            "category": "Security",
+            "section_h1": "ERP Guide",
+            "section_h2": "Authorization",
+            "allowed_roles": ["it_admin", "user"],
+            "sensitivity": "INTERNAL",
+            "owner": "erp-admin@company.com",
+            "effective_date": "2025-01-01",
+            "is_deleted": False,
+        },
+        derived_struct_data={
+            "extractive_segments": [{"content": "Quy trình cấp quyền ME21N trên SAP..."}],
+            "snippets": [{"snippet": "Quy trình cấp quyền tcode..."}],
+        },
+    )
+    mock_item = SimpleNamespace(
+        document=mock_doc,
+        model_scores={"relevance": 0.92},
+        relevance_score=0.92,
+    )
+    mock_response = SimpleNamespace(results=[mock_item])
+    mock_client.search.return_value = mock_response
+
+    store = VertexAISearchKnowledgeStore(
+        project_id="test-proj",
+        location="global",
+        data_store_id="test-store",
+        search_client=mock_client,
+    )
+
+    results = store.search("cấp quyền SAP", system="ERP", limit=2)
+    assert len(results) == 1
+    assert results[0].article_id == "ERP-KB-001"
+    assert results[0].title == "Hướng dẫn cấp quyền ERP"
+    assert "Quy trình cấp quyền ME21N" in results[0].snippet
+    assert results[0].system == "ERP"
+    assert results[0].relevance_score == 0.92
+    assert results[0].section_hierarchy.h1 == "ERP Guide"
+    assert results[0].context_path == "ERP Guide > Authorization"
+    assert "it_admin" in results[0].allowed_roles
+
+    # Verify search request arguments
+    assert mock_client.search.called
+    req = mock_client.search.call_args[1].get("request")
+    assert req.query == "cấp quyền SAP"
+    assert req.filter == 'system: ANY("ERP")'
+    assert req.page_size == 2
+
+
+def test_vertex_ai_search_store_search_allowed_systems():
+    """Verifies search with allowed_systems security trimming."""
+    from types import SimpleNamespace
+    mock_client = MagicMock()
+    mock_response = SimpleNamespace(results=[])
+    mock_client.search.return_value = mock_response
+
+    store = VertexAISearchKnowledgeStore(
+        project_id="test-proj",
+        location="global",
+        data_store_id="test-store",
+        search_client=mock_client,
+    )
+
+    results = store.search(
+        "chính sách làm việc",
+        system="ALL",
+        limit=3,
+        allowed_systems=["HRM", "ERP"],
+    )
+    assert results == []
+    assert mock_client.search.called
+    req = mock_client.search.call_args[1].get("request")
+    assert req.filter == 'system: ANY("HRM", "ERP")'
+
+
+def test_vertex_ai_search_store_get_article_by_id():
+    """Verifies get_article_by_id retrieval."""
+    from types import SimpleNamespace
+    mock_client = MagicMock()
+
+    mock_doc = SimpleNamespace(
+        id="HRM-DOC-100",
+        struct_data={
+            "id": "HRM-KB-100",
+            "title": "Quy trình nghỉ phép",
+            "system": "HRM",
+            "category": "Policy",
+            "content": "Nội dung quy trình nghỉ phép năm...",
+            "allowed_roles": ["employee"],
+        },
+        derived_struct_data={},
+    )
+    mock_item = SimpleNamespace(
+        document=mock_doc,
+        model_scores={"relevance": 1.0},
+    )
+    mock_response = SimpleNamespace(results=[mock_item])
+    mock_client.search.return_value = mock_response
+
+    store = VertexAISearchKnowledgeStore(
+        project_id="test-proj",
+        location="global",
+        data_store_id="test-store",
+        search_client=mock_client,
+    )
+
+    article = store.get_article_by_id("HRM-KB-100")
+    assert article is not None
+    assert article.id == "HRM-KB-100"
+    assert article.title == "Quy trình nghỉ phép"
+    assert article.system == "HRM"
+
+    # Not found
+    not_found_article = store.get_article_by_id("NON_EXISTENT")
+    assert not_found_article is None
+
+    # Empty ID
+    assert store.get_article_by_id("") is None
+
+
+def test_vertex_ai_search_store_fail_closed_on_error():
+    """Verifies that VertexAISearchKnowledgeStore raises KnowledgeStoreUnavailableError on failures."""
+    mock_client = MagicMock()
+    mock_client.search.side_effect = TimeoutError("Vertex AI Search API timed out after 5.0s")
+
+    store = VertexAISearchKnowledgeStore(
+        project_id="test-proj",
+        location="global",
+        data_store_id="test-store",
+        search_client=mock_client,
+    )
+
+    with pytest.raises(KnowledgeStoreUnavailableError) as exc_info:
+        store.search("Lỗi SAP", system="ERP")
+    assert "Vertex AI Search" in str(exc_info.value)
+
+
+def test_get_knowledge_store_factory_vertex_ai_search():
+    """Verifies that get_knowledge_store returns VertexAISearchKnowledgeStore when configured."""
+    with patch.dict(os.environ, {"KNOWLEDGE_BACKEND": "vertex_ai_search"}):
+        store = get_knowledge_store()
+        assert isinstance(store, VertexAISearchKnowledgeStore)
+
+    with patch.dict(os.environ, {"KNOWLEDGE_BACKEND": "discoveryengine"}):
+        store = get_knowledge_store()
+        assert isinstance(store, VertexAISearchKnowledgeStore)
+
+    with patch.dict(os.environ, {"KNOWLEDGE_BACKEND": "bigquery"}):
+        with patch("google.cloud.bigquery.Client"):
+            store = get_knowledge_store()
+            assert isinstance(store, BigQueryVectorKnowledgeStore)
+
+    with patch.dict(os.environ, {"KNOWLEDGE_BACKEND": "in_memory"}):
+        store = get_knowledge_store()
+        assert isinstance(store, InMemoryKnowledgeStore)
+
 
 
 

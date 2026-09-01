@@ -178,8 +178,19 @@ Hệ thống trừu tượng hóa mô hình Ticket thành `CaseRecord` tổng qu
 - **Mục đích**: Lưu trữ các điều khoản cam kết pháp lý, thời gian phản hồi MTTR, điều khoản bảo mật DPA/GDPR có giá trị ràng buộc.
 - **Công cụ**: `@register_tool("get_obligation")` và `@register_tool("list_contract_obligations")` được bảo vệ nghiêm ngặt bằng phân quyền RBAC (`compliance_officer`, `legal_counsel`, `it_admin`).
 
-### 7.3. BigQuery Vector Search & Over-Retrieval Pipeline
-- **Truy vấn Vector Nâng cao**:
+### 7.3. Kiến Trúc Dual-Engine Knowledge Store (Adapter Pattern)
+Hệ thống trừu tượng hóa tầng lưu trữ tri thức qua `BaseKnowledgeStore`, hỗ trợ chuyển đổi linh hoạt qua biến môi trường `KNOWLEDGE_BACKEND`:
+
+| Tiêu chí | Engine 1: BigQuery SQL Vector Search (`bigquery`) | Engine 2: Native Vertex AI Search Grounding (`vertex_ai_search`) |
+| :--- | :--- | :--- |
+| **Phân loại** | Data Warehouse Serverless Vector Search | Managed Google Cloud Enterprise Search / Grounding |
+| **Cơ chế Tìm kiếm** | `VECTOR_SEARCH` (IVF Index, Cosine Distance) kết hợp SQL Pre-filtering & Reranker | Managed Hybrid Semantic Search, OCR tài liệu phức tạp, Extractive Segments |
+| **Kiểm soát Dữ liệu** | 100% Zero-Data Egress (Dữ liệu nằm trọn trong BigQuery Tables) | Managed Datastores (Google Discovery Engine) |
+| **Trích xuất Nội dung** | Full chunk aggregation + XML Document Isolation Boundary | Extractive Answers + Segments + Snippets + XML Boundary |
+| **Phù hợp với** | Doanh nghiệp muốn tối ưu chi phí hạ tầng, dữ liệu đã lưu sẵn trong Data Warehouse | Doanh nghiệp có lượng tài liệu PDF/DOCX/Slide lớn, muốn turnkey grounding |
+| **Khả năng Chịu lỗi** | Fail-Closed: Bắt timeout, hủy query (`query_job.cancel()`), ném `KnowledgeStoreUnavailableError` | Fail-Closed: Bắt timeout/API error, ném `KnowledgeStoreUnavailableError` |
+
+- **Truy vấn Vector Nâng cao trên BigQuery**:
   - **Pre-filtering**: Lọc `is_deleted IS NOT TRUE`, `effective_date <= @today`, `expiry_date >= @today`, và `clearance_level <= @user_clearance` ngay trong SQL.
   - **Over-Retrieval**: Thu hồi $k=20$ ứng viên từ BigQuery vector distance.
   - **Post-filtering**: Lọc chi tiết theo vai trò `allowed_roles` trong Python và trả về $k=3$ kết quả phù hợp nhất.
@@ -212,11 +223,13 @@ graph TB
         Redis["Memorystore for Redis (Shared Cache/RateLimit)"]
         BigQuery["BigQuery Dataset (Vectors, Facts, Obligations)"]
         Firestore["Firestore Database (Cases & Sessions)"]
+        VertexSearch["Vertex AI Search Datastore (Optional Grounding)"]
         VertexAI["Vertex AI (Gemini 2.5/3 & Embeddings)"]
         
         CloudRun --> Redis
         CloudRun --> BigQuery
         CloudRun --> Firestore
+        CloudRun --> VertexSearch
         CloudRun --> VertexAI
     end
 ```
@@ -254,10 +267,10 @@ Vô hiệu hóa `/docs`, `/redoc`, `/openapi.json` khi `ENVIRONMENT=production` 
 
 ## 11. QUY TRÌNH KIỂM THỬ VÀ ĐẢM BẢO CHẤT LƯỢNG (TESTING & QA)
 
-Hệ thống sở hữu bộ kiểm thử tự động toàn diện với **263 test cases**, đạt độ bao phủ mã nguồn **>90%** và tỷ lệ vượt qua **100% Pass**:
+Hệ thống sở hữu bộ kiểm thử tự động toàn diện với **269 test cases**, đạt độ bao phủ mã nguồn **>90%** và tỷ lệ vượt qua **100% Pass**:
 
 ```mermaid
-pie title Phân bổ Bộ Kiểm thử Đơn vị & Tích hợp (263 Test Cases)
+pie title Phân bổ Bộ Kiểm thử Đơn vị & Tích hợp (269 Test Cases)
     "Dynamic Agent Builder & Domain Pack Loading" : 7
     "Security, IDOR, Prompt Injection & RBAC" : 35
     "Facts Table & Obligations Registry" : 14
@@ -266,7 +279,7 @@ pie title Phân bổ Bộ Kiểm thử Đơn vị & Tích hợp (263 Test Cases)
     "Case & Ticketing Tool (TTL/Fallback)" : 5
     "System Config & Document Processing" : 14
     "Telemetry, Privacy & BigQuery Bytes Billed" : 6
-    "Enterprise RAG MCP & BigQuery Vector Store" : 18
+    "Enterprise RAG MCP (BigQuery & Vertex AI Search)" : 24
     "Rate Limiting & Sliding Window" : 11
     "Tiered Chunking, Parsers & Ingestion CDC" : 35
     "Other Utilities & Integration Flows" : 78
@@ -274,9 +287,9 @@ pie title Phân bổ Bộ Kiểm thử Đơn vị & Tích hợp (263 Test Cases)
 
 ### Lệnh Thực Thi Kiểm Thử:
 ```bash
-# Chạy toàn bộ 263 unit & integration tests
+# Chạy toàn bộ 269 unit & integration tests
 uv run pytest tests/ -v
 
 # Kết quả kiểm thử chuẩn:
-# ======================= 263 passed, 5 warnings in 41.46s =======================
+# ======================= 269 passed, 5 warnings in 45.18s =======================
 ```

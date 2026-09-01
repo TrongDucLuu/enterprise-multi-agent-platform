@@ -53,9 +53,31 @@ variable "allowed_domains" {
 }
 
 variable "knowledge_backend" {
-  description = "Knowledge base backend ('in_memory', 'bigquery')"
+  description = "Knowledge base backend ('in_memory', 'bigquery', 'vertex_ai_search')"
   type        = string
   default     = "in_memory"
+  validation {
+    condition     = contains(["in_memory", "bigquery", "vertex_ai_search"], var.knowledge_backend)
+    error_message = "knowledge_backend must be one of: 'in_memory', 'bigquery', 'vertex_ai_search'."
+  }
+}
+
+variable "vertex_search_data_store_id" {
+  description = "Vertex AI Search Datastore ID when using 'vertex_ai_search' backend"
+  type        = string
+  default     = "enterprise-knowledge-store"
+}
+
+variable "vertex_search_location" {
+  description = "Vertex AI Search Datastore location (e.g. 'global', 'asia-southeast1')"
+  type        = string
+  default     = "global"
+}
+
+variable "vertex_search_collection_id" {
+  description = "Vertex AI Search Collection ID"
+  type        = string
+  default     = "default_collection"
 }
 
 variable "bigquery_kb_dataset" {

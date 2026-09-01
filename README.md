@@ -76,8 +76,11 @@ Hệ thống được thiết kế theo mô hình **Độc Lập Hạ Tầng (In
 
 ## ⚡ 3. Tối Ưu Hiệu Năng & Chi Phí Hạ Tầng
 
-- **Redis Multi-Tenant Vector Semantic Cache**: Cắt giảm $pprox 100\%$ chi phí token và độ trễ xuống $\sim 20	ext{ms}$ cho các câu hỏi phổ biến với cơ chế candidate-set cosine matching.
-- **Serverless BigQuery Vector Search**: Chi phí duy trì **0 USD/tháng** khi không có truy vấn (so với \$100-\$300/tháng của dedicated endpoint).
+- **Redis Multi-Tenant Vector Semantic Cache**: Cắt giảm $\approx 100\%$ chi phí token và độ trễ xuống $\sim 20\text{ms}$ cho các câu hỏi phổ biến với cơ chế candidate-set cosine matching.
+- **Dual-Engine Enterprise Knowledge Store**: Chuyển đổi linh hoạt qua biến môi trường `KNOWLEDGE_BACKEND`:
+  - `bigquery` (Mặc định Data Warehouse): Serverless Vector Search với IVF Index, SQL pre-filtering, 100% Zero-Data Egress, chi phí duy trì **0 USD/tháng** khi rảnh rỗi.
+  - `vertex_ai_search` (Managed Enterprise Grounding): Tích hợp trực tiếp Google Cloud Vertex AI Search Discovery Engine, hỗ trợ OCR tài liệu đa định dạng, extractive segments và trích dẫn chuẩn xác.
+  - `in_memory`: Dành cho môi trường phát triển local và CI/CD siêu tốc.
 - **L1 Facts Registry & L3 Obligations**: Tra cứu thông số kỹ thuật và cam kết pháp lý với tốc độ và độ chính xác xác định tuyệt đối (Deterministic Point-Lookup), loại bỏ hoàn toàn hiện tượng ảo giác (hallucination).
 
 ---
@@ -91,15 +94,16 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 ```
 
-### Chạy Kiểm Thử Toàn Diện (260+ Test Cases)
+### Chạy Kiểm Thử Toàn Diện (269 Test Cases)
 ```bash
 uv run pytest tests/ -v
 ```
 
 ### Khởi Chạy API Server
 ```bash
-# Chọn domain pack cần chạy (mặc định: it-helpdesk)
+# Chọn domain pack và backend tri thức
 export DOMAIN_PACK="it-helpdesk"
+export KNOWLEDGE_BACKEND="bigquery" # hoặc "vertex_ai_search"
 export ENVIRONMENT="development"
 uv run python -m uvicorn agent_core.fast_api_app:app --host 0.0.0.0 --port 8000
 ```
@@ -117,5 +121,7 @@ curl http://localhost:8000/healthz
 
 Hệ thống tuân thủ nguyên tắc **Cách ly bằng biên giới hạ tầng (Infrastructure Isolation)**:
 1. Tạo một Google Cloud Project riêng biệt cho khách hàng mới.
-2. Thiết lập cấu hình biến môi trường (`PROJECT_ID`, `AI_ASSETS_BUCKET`, `DOMAIN_PACK`).
+2. Thiết lập cấu hình biến môi trường (`PROJECT_ID`, `AI_ASSETS_BUCKET`, `DOMAIN_PACK`, `KNOWLEDGE_BACKEND`).
 3. Triển khai Terraform stack trong thư mục `deployment/terraform/` lên Cloud Run.
+4. Tham khảo tài liệu chi tiết tại [Runbook Onboarding Khách Hàng](Runbook_Onboarding_Khach_Hang.md).
+

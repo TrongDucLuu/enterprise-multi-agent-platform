@@ -141,19 +141,40 @@ domain_packs/<client_domain_name>/
 
 ---
 
-### Bước 4: Chuẩn Bị & Nạp Dữ Liệu Vào BigQuery
-Hệ thống hỗ trợ 3 tầng dữ liệu:
+### Bước 4: Chuẩn Bị & Nạp Dữ Liệu Vào Knowledge Store (Tùy Chọn RAG Backend)
 
-1. **Tài Liệu Tri Thức (Knowledge Articles):**
-   ```bash
-   # Nạp tài liệu từ thư mục PDF/DOCX/MD của khách hàng vào BigQuery
-   python scripts/ingest_knowledge_base.py        --project-id="customer-gcp-project-id"        --dataset-id="enterprise_knowledge"        --table-name="knowledge_articles"        --source-dir="/path/to/customer/documents"        --default-system="ERP"
-   ```
+Hệ thống hỗ trợ lựa chọn 1 trong 2 cơ chế RAG thông qua biến môi trường `KNOWLEDGE_BACKEND`:
 
-2. **Bảng Tra Cứu Sự Thật Xác Định (L1 Facts):**
+#### Phương án A: BigQuery Serverless Vector Search (`KNOWLEDGE_BACKEND="bigquery"`)
+- **Phù hợp với:** Khách hàng muốn tối ưu hóa chi phí hạ tầng (0 USD/tháng khi rảnh rỗi), bảo toàn 100% dữ liệu trong Data Warehouse, không egress dữ liệu ra ngoài.
+- **Quy trình nạp tài liệu:**
+  ```bash
+  # Nạp tài liệu từ thư mục PDF/DOCX/MD của khách hàng vào BigQuery
+  python scripts/ingest_knowledge_base.py \
+      --project-id="customer-gcp-project-id" \
+      --dataset-id="enterprise_knowledge" \
+      --table-name="knowledge_articles" \
+      --source-dir="/path/to/customer/documents" \
+      --default-system="ERP"
+  ```
+
+#### Phương án B: Native Vertex AI Search Grounding (`KNOWLEDGE_BACKEND="vertex_ai_search"`)
+- **Phù hợp với:** Khách hàng có kho tài liệu phức tạp (PDF quét scan, slide, bảng biểu định dạng đa dạng), cần tính năng Managed OCR và Semantic Extractive Segments của Google Cloud.
+- **Quy trình nạp tài liệu:**
+  1. Tạo **Data Store** trên Vertex AI Search & Conversation (Discovery Engine).
+  2. Nạp dữ liệu từ Google Cloud Storage (`gs://customer-docs-bucket/`) vào Data Store.
+  3. Cấu hình biến môi trường:
+     - `VERTEX_SEARCH_DATA_STORE_ID="<customer-datastore-id>"`
+     - `VERTEX_SEARCH_LOCATION="global"` (hoặc region tương ứng).
+
+---
+
+#### Nạp Dữ Liệu Tri Thức Cứng (L1 Facts) & Cam Kết Hợp Đồng (L3 Obligations)
+
+1. **Bảng Tra Cứu Sự Thật Xác Định (L1 Facts):**
    - Soạn thảo danh sách Fact cứng vào bảng `enterprise_facts` trong BigQuery (IP, Port, ngưỡng SLA cứng, đầu mối liên hệ) để công cụ `lookup_fact` tra cứu không qua LLM.
 
-3. **Sổ Đăng Ký Cam Kết Hợp Đồng & Pháp Lý (L3 Obligations):**
+2. **Sổ Đăng Ký Cam Kết Hợp Đồng & Pháp Lý (L3 Obligations):**
    - Nạp các điều khoản hợp đồng/SLA có giá trị pháp lý vào bảng `contract_obligations` trong BigQuery để công cụ `get_obligation` tra cứu có phân quyền RBAC.
 
 ---
@@ -197,6 +218,7 @@ pytest tests/unit/test_agent_builder.py -v
    region                 = "asia-southeast1"
    domain_pack_id         = "customer_domain_name"
    allowed_sso_domains    = "customer.com,subsidiary.customer.com"
+   knowledge_backend      = "bigquery" # hoặc "vertex_ai_search"
    redis_enabled          = true
    redis_memory_size_gb   = 1
    min_instance_count     = 1
@@ -219,7 +241,7 @@ pytest tests/unit/test_agent_builder.py -v
 | **Tool Registry Integrity** | 100% tool trong `agents.yaml` đã được đăng ký bằng `@register_tool` | ✅ Bắt buộc |
 | **Prompt Injection Guard** | `INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION` được tự động tiêm | ✅ Bắt buộc |
 | **SSO Domain Shielding** | `ALLOWED_SSO_DOMAINS` đã được điền chính xác domain email công ty khách hàng | ✅ Bắt buộc |
-| **BigQuery Vector Search** | Bảng `knowledge_articles` đã nạp dữ liệu và tạo xong `VECTOR INDEX` | ✅ Bắt buộc |
+| **Knowledge Store Backend** | Bảng BigQuery hoặc Vertex AI Search Datastore đã nạp dữ liệu và cấu hình đúng | ✅ Bắt buộc |
 | **Facts & Obligations** | Các bảng `enterprise_facts` và `contract_obligations` đã sẵn sàng | ✅ Bắt buộc |
 | **Telemetry Privacy** | `TELEMETRY_ANONYMIZE_USERS=true`, `TELEMETRY_INCLUDE_QUERY=false` | ✅ Bắt buộc |
 | **Production Healthz** | `GET /healthz` trả về `core_version="2.0.0"` và đúng `pack_id` | ✅ Bắt buộc |

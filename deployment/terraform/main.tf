@@ -454,6 +454,18 @@ resource "google_cloud_run_v2_service" "default" {
         value = var.bigquery_kb_dataset
       }
       env {
+        name  = "VERTEX_SEARCH_DATA_STORE_ID"
+        value = var.vertex_search_data_store_id
+      }
+      env {
+        name  = "VERTEX_SEARCH_LOCATION"
+        value = var.vertex_search_location
+      }
+      env {
+        name  = "VERTEX_SEARCH_COLLECTION_ID"
+        value = var.vertex_search_collection_id
+      }
+      env {
         name  = "USE_FIRESTORE_TICKETS"
         value = tostring(var.use_firestore_tickets)
       }
