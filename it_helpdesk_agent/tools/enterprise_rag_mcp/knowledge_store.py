@@ -883,6 +883,12 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             try:
                 from google.cloud import bigquery
                 self.bq_client = bigquery.Client(project=self.project_id)
+            except ImportError as e:
+                logger.error("google-cloud-bigquery library is required for BigQueryVectorKnowledgeStore (%s).", e)
+                raise ImportError(
+                    "Thư viện 'google-cloud-bigquery' chưa được cài đặt. "
+                    "Hãy cài đặt google-cloud-bigquery để sử dụng backend BigQuery."
+                ) from e
             except Exception as e:
                 logger.error("Failed to initialize BigQuery Client for Vector Search (%s).", e)
                 self.bq_client = None
@@ -914,14 +920,14 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             rows = list(self.bq_client.query(sql).result(timeout=5.0))
             if rows:
                 cov = getattr(rows[0], "coverage_percentage", None)
-                is_active = (float(cov) > 0.0) if cov is not None else True
+                is_active = (float(cov) > 0.0) if cov is not None else False
             else:
-                is_active = True
+                is_active = False
             self._index_active_cache = (is_active, now)
             return is_active
         except Exception as e:
-            logger.debug("Could not verify vector index coverage (%s), assuming active by default if index exists.", e)
-            return True
+            logger.warning("Could not verify vector index coverage (%s), failing closed (assume inactive).", e)
+            return False
 
     def search(
         self,

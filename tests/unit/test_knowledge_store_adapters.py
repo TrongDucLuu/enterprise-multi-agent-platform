@@ -1,5 +1,5 @@
 import os
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 import pytest
 from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import (
     BaseKnowledgeStore,
@@ -56,6 +56,7 @@ def test_bigquery_vector_store_with_mock_client():
         keywords=["po", "sap"],
         distance=0.15,
         hybrid_score=0.85,
+        coverage_percentage=100.0,
     )
 
     mock_query_job = MagicMock()
@@ -621,5 +622,22 @@ def test_vector_index_active_check_conditional_options(monkeypatch):
     # Search SQL should NOT contain fraction_lists_to_search when index coverage is 0.0
     search_sql = mock_bq.query.call_args_list[1][0][0]
     assert "fraction_lists_to_search" not in search_sql
+
+
+def test_bigquery_knowledge_store_missing_library_raises_importerror():
+    """Verify that BigQueryVectorKnowledgeStore fails loud with ImportError when google-cloud-bigquery is not importable."""
+    import builtins
+    orig_import = builtins.__import__
+
+    def mock_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if (fromlist and "bigquery" in fromlist) or ("bigquery" in name):
+            raise ImportError("No module named 'google.cloud.bigquery'")
+        return orig_import(name, globals, locals, fromlist, level)
+
+    with patch("builtins.__import__", side_effect=mock_import):
+        with pytest.raises(ImportError) as exc_info:
+            BigQueryVectorKnowledgeStore(project_id="test-proj")
+        assert "google-cloud-bigquery" in str(exc_info.value)
+
 
 
