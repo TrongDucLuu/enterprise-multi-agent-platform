@@ -308,8 +308,8 @@ def test_redis_semantic_cache_deserialization_and_errors_log_warning(caplog):
     cache = RedisSemanticCache(redis_client=r, similarity_threshold=0.85)
 
     # Inject corrupted JSON into public cache
-    r.sadd("sem_cache:keys:public", "corrupted_eid")
-    r.set("sem_cache:entry:corrupted_eid", "NOT_A_VALID_JSON{")
+    r.sadd(cache.public_keys_set, "corrupted_eid")
+    r.set(cache.entry_key("corrupted_eid"), "NOT_A_VALID_JSON{")
 
     # get() should skip corrupted entry and log a warning
     res = cache.get("Hướng dẫn Wi-Fi")
@@ -439,6 +439,146 @@ async def test_l3_agent_cache_bypass_in_callbacks():
         assert cache.get(query_text) is None
     finally:
         current_sso_user.reset(token)
+
+
+def test_semantic_cache_public_ttl_default_4h():
+    """
+    0.8: Verifies that public cache entries default to 14400s (4h) TTL,
+    while private entries default to 86400s (24h) TTL.
+    """
+    import time
+    from it_helpdesk_agent.app_utils.semantic_cache import InMemorySemanticCache
+
+    cache = InMemorySemanticCache()
+    cache.clear()
+
+    # Public entry
+    pub_entry = cache.set(
+        query="Hướng dẫn cài đặt VPN",
+        response="Tải VPN Client",
+        is_public=True
+    )
+    assert pub_entry is not None
+    # TTL should be approx 14400s
+    remaining_pub_ttl = pub_entry.expires_at - time.time()
+    assert 14390 <= remaining_pub_ttl <= 14400
+
+    # Private entry
+    priv_entry = cache.set(
+        query="Reset mật khẩu cá nhân",
+        response="Truy cập link reset",
+        user_id="user_123",
+        is_public=False
+    )
+    assert priv_entry is not None
+    remaining_priv_ttl = priv_entry.expires_at - time.time()
+    assert 86390 <= remaining_priv_ttl <= 86400
+
+
+def test_is_safe_public_faq_first_turn_only():
+    """
+    0.8: Verifies that _is_safe_public_faq returns False when is_first_turn is False.
+    """
+    from it_helpdesk_agent.agent import _is_safe_public_faq
+
+    # Turn 1 -> Allowed
+    assert _is_safe_public_faq("wifi support", "l1_selfservice_agent", [], is_first_turn=True) is True
+    # Turn 2+ -> Rejected (multi-turn context risk)
+    assert _is_safe_public_faq("wifi support", "l1_selfservice_agent", [], is_first_turn=False) is False
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_multiturn_public_caching_restricted_to_turn_1():
+    """
+    0.8: Verifies that during a multi-turn conversation, only turn 1 is cached as public FAQ.
+    Turn 2+ queries are cached with user isolation (is_public=False) even if matching FAQ keywords.
+    """
+    from unittest.mock import MagicMock
+    from it_helpdesk_agent.agent import (
+        semantic_cache_after_model_callback,
+        current_sso_user,
+    )
+    from it_helpdesk_agent.app_utils.sso_auth import SSOUser
+    from google.genai import types
+    from google.adk.models import LlmResponse
+    from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
+
+    cache = get_semantic_cache()
+    cache.clear()
+
+    user = SSOUser(user_id="alice_turn_test", email="alice@corp.com", full_name="Alice", roles=["employee"])
+    token = current_sso_user.set(user)
+
+    try:
+        mock_ctx = MagicMock()
+        mock_ctx._invocation_context.agent.name = "l1_selfservice_agent"
+
+        # Turn 1: First user message
+        ev1 = MagicMock()
+        ev1.author = "user"
+        ev1.content.parts = [types.Part.from_text(text="Hướng dẫn cài đặt wifi văn phòng")]
+        mock_ctx._invocation_context._get_events.return_value = [ev1]
+        mock_ctx._invocation_context.session.events = [ev1]
+
+        resp1 = LlmResponse(
+            content=types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Kết nối vào SSID Corp-WiFi")]
+            )
+        )
+        await semantic_cache_after_model_callback(mock_ctx, resp1)
+
+        # Verify entry 1 is cached as public
+        hit1 = cache.get("Hướng dẫn cài đặt wifi văn phòng", user_id="bob_other_user")
+        assert hit1 is not None, "Turn 1 FAQ must be cached as public!"
+        assert hit1["is_public"] is True
+
+        # Turn 2: Follow-up question in the same session
+        ev2_model = MagicMock(author="model")
+        ev2_user = MagicMock()
+        ev2_user.author = "user"
+        ev2_user.content.parts = [types.Part.from_text(text="wifi văn phòng có hỗ trợ máy in không?")]
+        mock_ctx._invocation_context._get_events.return_value = [ev2_user]
+        mock_ctx._invocation_context.session.events = [ev1, ev2_model, ev2_user]
+
+        resp2 = LlmResponse(
+            content=types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Có, máy in kết nối qua SSID Corp-WiFi.")]
+            )
+        )
+        await semantic_cache_after_model_callback(mock_ctx, resp2)
+
+        # Bob should NOT be able to access turn 2 response as public cache
+        hit2_bob = cache.get("wifi văn phòng có hỗ trợ máy in không?", user_id="bob_other_user")
+        assert hit2_bob is None, "Turn 2 query must NOT be cached as public FAQ!"
+
+        # Alice should be able to access it via private user cache
+        hit2_alice = cache.get("wifi văn phòng có hỗ trợ máy in không?", user_id="alice_turn_test")
+        assert hit2_alice is not None
+        assert hit2_alice["is_public"] is False
+    finally:
+        current_sso_user.reset(token)
+
+
+def test_redis_semantic_cache_kb_version_namespace():
+    """
+    0.8: Verifies that RedisSemanticCache constructs namespace keys incorporating KB_VERSION.
+    """
+    import fakeredis
+    from it_helpdesk_agent.app_utils.semantic_cache import RedisSemanticCache
+
+    fake_server = fakeredis.FakeServer()
+    r = fakeredis.FakeStrictRedis(server=fake_server, decode_responses=True)
+
+    cache_v2 = RedisSemanticCache(redis_client=r, kb_version="2")
+    assert cache_v2.public_keys_set == "sem_cache:v2:keys:public"
+    assert cache_v2.user_keys_set("usr_1") == "sem_cache:v2:keys:user:usr_1"
+    assert cache_v2.entry_key("abc") == "sem_cache:v2:entry:abc"
+
+    cache_v2.set(query="Q1", response="A1", is_public=True)
+    assert r.sismember("sem_cache:v2:keys:public", cache_v2._get_entry_id("Q1", is_public=True))
+
 
 
 

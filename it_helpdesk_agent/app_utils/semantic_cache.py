@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import math
 import json
@@ -166,12 +167,16 @@ class InMemorySemanticCache(BaseSemanticCache):
         self,
         similarity_threshold: float = 0.92,
         default_ttl_seconds: int = 86400,
+        default_public_ttl_seconds: int = 14400,
         max_size: int = 1000,
         embedding_fn: Optional[Callable[[str], list[float]]] = None,
     ):
         super().__init__(similarity_threshold=similarity_threshold)
         self.default_ttl_seconds = int(
             os.getenv("SEMANTIC_CACHE_TTL_SECONDS", default_ttl_seconds)
+        )
+        self.default_public_ttl_seconds = int(
+            os.getenv("SEMANTIC_CACHE_PUBLIC_TTL_SECONDS", default_public_ttl_seconds)
         )
         self.max_size = max_size
         self._embedding_fn = embedding_fn
@@ -290,7 +295,12 @@ class InMemorySemanticCache(BaseSemanticCache):
             logger.debug("Skipping semantic cache set: embedding is None (Fail-Closed mode).")
             return None
 
-        ttl = ttl_seconds if ttl_seconds is not None else self.default_ttl_seconds
+        if ttl_seconds is not None:
+            ttl = ttl_seconds
+        elif is_public:
+            ttl = self.default_public_ttl_seconds
+        else:
+            ttl = self.default_ttl_seconds
         expires_at = time.time() + ttl if ttl > 0 else 0.0
 
         if len(self._entries) >= self.max_size:
@@ -323,41 +333,41 @@ class InMemorySemanticCache(BaseSemanticCache):
         system: Optional[str] = None
     ) -> int:
         """
-        Invalidates and purges cached responses related to article_id or system.
-        Returns the number of removed entries.
+        Scans and invalidates cached entries matching article_id or system.
         """
         initial_len = len(self._entries)
-        if article_id:
-            aid_clean = article_id.strip().upper()
-            self._entries = [
-                e for e in self._entries
-                if aid_clean not in (e.metadata.get("article_id") or "").upper()
-                and aid_clean not in e.response.upper()
-            ]
-        if system:
-            sys_clean = system.strip().upper()
-            self._entries = [
-                e for e in self._entries
-                if sys_clean != (e.metadata.get("system") or "").upper()
-            ]
-        removed = initial_len - len(self._entries)
-        logger.info("InMemorySemanticCache invalidated %d entries for article_id=%s, system=%s", removed, article_id, system)
-        return removed
+        aid_upper = article_id.strip().upper() if article_id else None
+        sys_upper = system.strip().upper() if system else None
+
+        def should_retain(entry: SemanticCacheEntry) -> bool:
+            meta = entry.metadata or {}
+            meta_aid = (meta.get("article_id") or "").upper()
+            meta_sys = (meta.get("system") or "").upper()
+            match_aid = aid_upper and (aid_upper in meta_aid or aid_upper in entry.response.upper())
+            match_sys = sys_upper and (sys_upper == meta_sys)
+            if match_aid or match_sys:
+                return False
+            return True
+
+        self._entries = [e for e in self._entries if should_retain(e)]
+        invalidated_count = initial_len - len(self._entries)
+        if invalidated_count > 0:
+            logger.info("InMemorySemanticCache invalidated %d entries for (article_id=%s, system=%s)", invalidated_count, article_id, system)
+        return invalidated_count
 
     def get_stats(self) -> dict:
-        active_entries = [e for e in self._entries if not e.is_expired()]
         hit_rate = (
             round(self._total_hits / self._total_lookups * 100, 2)
             if self._total_lookups > 0
             else 0.0
         )
         return {
-            "total_entries": len(active_entries),
+            "total_entries": len(self._entries),
             "total_lookups": self._total_lookups,
             "total_hits": self._total_hits,
             "hit_rate_percent": hit_rate,
             "similarity_threshold": self.similarity_threshold,
-            "backend": "in_memory"
+            "backend": "memory",
         }
 
 
@@ -382,14 +392,20 @@ class RedisSemanticCache(BaseSemanticCache):
         db: int = 0,
         similarity_threshold: float = 0.92,
         default_ttl_seconds: int = 86400,
+        default_public_ttl_seconds: int = 14400,
         socket_timeout: float = 2.0,
         cooldown_seconds: float = 30.0,
         embedding_fn: Optional[Callable[[str], list[float]]] = None,
+        kb_version: Optional[str] = None,
     ):
         super().__init__(similarity_threshold=similarity_threshold)
         self.default_ttl_seconds = int(
             os.getenv("SEMANTIC_CACHE_TTL_SECONDS", default_ttl_seconds)
         )
+        self.default_public_ttl_seconds = int(
+            os.getenv("SEMANTIC_CACHE_PUBLIC_TTL_SECONDS", default_public_ttl_seconds)
+        )
+        self.kb_version = kb_version or os.getenv("KB_VERSION", "1")
         self._embedding_fn = embedding_fn
         self._redis = redis_client
         self._host = host or os.getenv("REDIS_HOST", "localhost")
@@ -411,6 +427,19 @@ class RedisSemanticCache(BaseSemanticCache):
 
         if self._redis is None:
             self._init_redis()
+
+    @property
+    def public_keys_set(self) -> str:
+        return f"sem_cache:v{self.kb_version}:keys:public"
+
+    def user_keys_set(self, user_id: str) -> str:
+        return f"sem_cache:v{self.kb_version}:keys:user:{user_id}"
+
+    def entry_key(self, entry_id: str) -> str:
+        return f"sem_cache:v{self.kb_version}:entry:{entry_id}"
+
+    def user_keys_pattern(self) -> str:
+        return f"sem_cache:v{self.kb_version}:keys:user:*"
 
     def _allow_request(self) -> bool:
         """
@@ -448,54 +477,42 @@ class RedisSemanticCache(BaseSemanticCache):
                     self._cooldown_seconds,
                 )
             else:
-                logger.warning(
-                    "RedisSemanticCache probe failed in HALF_OPEN state (%s: %s). Circuit breaker remains OPEN for %.1fs.",
-                    context,
-                    error,
-                    self._cooldown_seconds,
-                )
+                logger.warning("RedisSemanticCache circuit breaker remains OPEN. Error in %s: %s", context, error)
         else:
-            logger.warning(
-                "RedisSemanticCache %s error: %s (Failure %d/%d). Soft Fail-Closed.",
-                context,
-                error,
-                self._consecutive_redis_failures,
-                self._failure_threshold,
-            )
+            logger.warning("RedisSemanticCache %s operation failed (consecutive: %d): %s. Soft Fail-Closed active.", context, self._consecutive_redis_failures, error)
 
     def _record_redis_success(self) -> None:
-        """Resets failure counter, clears failure timestamp, and restores circuit breaker to CLOSED."""
+        """Resets consecutive failures upon any successful Redis communication."""
         if self._consecutive_redis_failures > 0 or self._circuit_breaker_tripped:
-            logger.info(
-                "RedisSemanticCache recovered after %d failures. Circuit breaker reset to CLOSED.",
-                self._consecutive_redis_failures
-            )
-            self._consecutive_redis_failures = 0
-            self._circuit_breaker_tripped = False
-            self._last_failure_time = 0.0
+            logger.info("RedisSemanticCache connection healthy. Resetting circuit breaker to CLOSED.")
+        self._consecutive_redis_failures = 0
+        self._circuit_breaker_tripped = False
 
     def _init_redis(self) -> None:
+        """Initializes redis connection pool safely."""
+        if not self._allow_request():
+            return
         try:
             import redis
             self._redis = redis.Redis(
                 host=self._host,
                 port=self._port,
                 db=self._db,
-                socket_connect_timeout=self._socket_timeout,
                 socket_timeout=self._socket_timeout,
                 decode_responses=True,
             )
             self._redis.ping()
             self._record_redis_success()
-            logger.info(
-                "Connected to Redis Semantic Cache at %s:%s (db=%d)",
-                self._host, self._port, self._db
-            )
+            logger.info("RedisSemanticCache connected to %s:%d/%d", self._host, self._port, self._db)
         except Exception as e:
-            self._record_redis_failure(e, "connect")
+            self._record_redis_failure(e, "init")
             self._redis = None
 
     def _generate_embedding(self, text: str) -> Optional[list[float]]:
+        """
+        Generates embedding vector for caching and similarity search.
+        Fail-Closed in Production: Returns None if Vertex AI is not configured or fails.
+        """
         if self._embedding_fn:
             return self._embedding_fn(text)
 
@@ -515,7 +532,7 @@ class RedisSemanticCache(BaseSemanticCache):
                 logger.debug("Vertex AI embedding unavailable (%s), using local embedding.", e)
 
         if in_prod:
-            logger.warning("Fail-Closed: Semantic cache requires real Vertex AI embeddings in production (USE_VERTEX_EMBEDDING=true). Bypassing cache.")
+            logger.warning("Fail-Closed: Redis Semantic cache requires real Vertex AI embeddings in production (USE_VERTEX_EMBEDDING=true). Bypassing cache.")
             return None
 
         # Local development / test ASCII pseudo-vector fallback
@@ -532,10 +549,12 @@ class RedisSemanticCache(BaseSemanticCache):
         norm = math.sqrt(sum(x * x for x in vec)) or 1.0
         return [x / norm for x in vec]
 
-    def _get_entry_id(self, query: str, user_id: Optional[str], is_public: bool) -> str:
+    def _get_entry_id(self, query: str, user_id: Optional[str] = None, is_public: bool = False) -> str:
+        """Deterministic ID for key lookup in Redis."""
         scope = "public" if is_public else f"user_{user_id or 'anon'}"
-        raw = f"{scope}:{query.strip().lower()}"
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+        cleaned = re.sub(r"[^\w\s]", "", query.lower()).strip()
+        h = hashlib.sha256(f"{scope}:{cleaned}".encode("utf-8")).hexdigest()[:16]
+        return f"{scope}_{h}"
 
     def get(
         self,
@@ -545,8 +564,8 @@ class RedisSemanticCache(BaseSemanticCache):
         tier: Optional[str] = None,
     ) -> Optional[dict]:
         """
-        Retrieves cached response from Redis with vector cosine similarity.
-        Soft Fail-Closed: Returns None (Cache Miss) on Redis errors.
+        Fetches best semantic match from Redis.
+        Soft Fail-Closed: Returns None on any Redis error or circuit break.
         """
         if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
             return None
@@ -570,11 +589,11 @@ class RedisSemanticCache(BaseSemanticCache):
         # Multi-tenant Candidate-Set Scan with Vector Cosine Similarity
         try:
             candidate_entry_ids = set()
-            public_ids = self._redis.smembers("sem_cache:keys:public") or set()
+            public_ids = self._redis.smembers(self.public_keys_set) or set()
             candidate_entry_ids.update(public_ids)
 
             if user_id:
-                user_ids = self._redis.smembers(f"sem_cache:keys:user:{user_id}") or set()
+                user_ids = self._redis.smembers(self.user_keys_set(user_id)) or set()
                 candidate_entry_ids.update(user_ids)
 
             if not candidate_entry_ids:
@@ -582,7 +601,7 @@ class RedisSemanticCache(BaseSemanticCache):
                 return None
 
             # Fetch candidate entries in one batch
-            entry_keys = [f"sem_cache:entry:{eid}" for eid in candidate_entry_ids]
+            entry_keys = [self.entry_key(eid) for eid in candidate_entry_ids]
             raw_entries = self._redis.mget(entry_keys)
 
             best_match: Optional[SemanticCacheEntry] = None
@@ -618,9 +637,9 @@ class RedisSemanticCache(BaseSemanticCache):
             if expired_ids:
                 try:
                     pipe = self._redis.pipeline()
-                    pipe.srem("sem_cache:keys:public", *expired_ids)
+                    pipe.srem(self.public_keys_set, *expired_ids)
                     if user_id:
-                        pipe.srem(f"sem_cache:keys:user:{user_id}", *expired_ids)
+                        pipe.srem(self.user_keys_set(user_id), *expired_ids)
                     pipe.execute()
                 except Exception as cleanup_err:
                     logger.warning("RedisSemanticCache lazy cleanup error: %s", cleanup_err)
@@ -635,7 +654,7 @@ class RedisSemanticCache(BaseSemanticCache):
                 try:
                     pipe = self._redis.pipeline()
                     pipe.set(
-                        f"sem_cache:entry:{best_entry_id}",
+                        self.entry_key(best_entry_id),
                         json.dumps(best_match.to_dict()),
                         keepttl=True
                     )
@@ -688,7 +707,12 @@ class RedisSemanticCache(BaseSemanticCache):
             if self._redis is None:
                 return None
 
-        ttl = ttl_seconds if ttl_seconds is not None else self.default_ttl_seconds
+        if ttl_seconds is not None:
+            ttl = ttl_seconds
+        elif is_public:
+            ttl = self.default_public_ttl_seconds
+        else:
+            ttl = self.default_ttl_seconds
         expires_at = time.time() + ttl if ttl > 0 else 0.0
 
         entry = SemanticCacheEntry(
@@ -710,17 +734,17 @@ class RedisSemanticCache(BaseSemanticCache):
             pipe = self._redis.pipeline()
 
             # Store standard JSON entry & set indexing
-            entry_key = f"sem_cache:entry:{entry_id}"
+            entry_k = self.entry_key(entry_id)
             serialized = json.dumps(entry.to_dict())
             if ttl > 0:
-                pipe.set(entry_key, serialized, ex=ttl)
+                pipe.set(entry_k, serialized, ex=ttl)
             else:
-                pipe.set(entry_key, serialized)
+                pipe.set(entry_k, serialized)
 
             if is_public:
-                pipe.sadd("sem_cache:keys:public", entry_id)
+                pipe.sadd(self.public_keys_set, entry_id)
             elif user_id:
-                pipe.sadd(f"sem_cache:keys:user:{user_id}", entry_id)
+                pipe.sadd(self.user_keys_set(user_id), entry_id)
 
             pipe.execute()
             self._record_redis_success()
@@ -736,14 +760,14 @@ class RedisSemanticCache(BaseSemanticCache):
         if self._redis is None:
             return
         try:
-            public_keys = list(self._redis.smembers("sem_cache:keys:public") or [])
-            all_entry_keys = [f"sem_cache:entry:{eid}" for eid in public_keys]
+            public_keys = list(self._redis.smembers(self.public_keys_set) or [])
+            all_entry_keys = [self.entry_key(eid) for eid in public_keys]
 
             # Find user sets
-            user_sets = list(self._redis.keys("sem_cache:keys:user:*") or [])
+            user_sets = list(self._redis.keys(self.user_keys_pattern()) or [])
             for u_set in user_sets:
                 u_keys = list(self._redis.smembers(u_set) or [])
-                all_entry_keys.extend([f"sem_cache:entry:{eid}" for eid in u_keys])
+                all_entry_keys.extend([self.entry_key(eid) for eid in u_keys])
 
             if all_entry_keys or user_sets or public_keys:
                 pipe = self._redis.pipeline()
@@ -751,7 +775,7 @@ class RedisSemanticCache(BaseSemanticCache):
                     pipe.delete(*all_entry_keys)
                 if user_sets:
                     pipe.delete(*user_sets)
-                pipe.delete("sem_cache:keys:public")
+                pipe.delete(self.public_keys_set)
                 pipe.execute()
 
             self._local_lookups = 0
@@ -771,16 +795,16 @@ class RedisSemanticCache(BaseSemanticCache):
         if not self._allow_request() or self._redis is None:
             return 0
         try:
-            public_keys = list(self._redis.smembers("sem_cache:keys:public") or [])
+            public_keys = list(self._redis.smembers(self.public_keys_set) or [])
             candidate_ids = set(public_keys)
-            user_sets = list(self._redis.keys("sem_cache:keys:user:*") or [])
+            user_sets = list(self._redis.keys(self.user_keys_pattern()) or [])
             for u_set in user_sets:
                 candidate_ids.update(list(self._redis.smembers(u_set) or []))
 
             if not candidate_ids:
                 return 0
 
-            entry_keys = [f"sem_cache:entry:{eid}" for eid in candidate_ids]
+            entry_keys = [self.entry_key(eid) for eid in candidate_ids]
             raw_entries = self._redis.mget(entry_keys)
 
             ids_to_delete = []
@@ -808,8 +832,8 @@ class RedisSemanticCache(BaseSemanticCache):
 
             if ids_to_delete:
                 pipe = self._redis.pipeline()
-                pipe.delete(*[f"sem_cache:entry:{eid}" for eid in ids_to_delete])
-                pipe.srem("sem_cache:keys:public", *ids_to_delete)
+                pipe.delete(*[self.entry_key(eid) for eid in ids_to_delete])
+                pipe.srem(self.public_keys_set, *ids_to_delete)
                 for u_set in user_sets:
                     pipe.srem(u_set, *ids_to_delete)
                 pipe.execute()
@@ -825,9 +849,9 @@ class RedisSemanticCache(BaseSemanticCache):
         total_entries = 0
         if self._redis is not None:
             try:
-                public_count = self._redis.scard("sem_cache:keys:public") or 0
+                public_count = self._redis.scard(self.public_keys_set) or 0
                 total_entries += public_count
-                for u_set in self._redis.keys("sem_cache:keys:user:*") or []:
+                for u_set in self._redis.keys(self.user_keys_pattern()) or []:
                     total_entries += (self._redis.scard(u_set) or 0)
                 self._record_redis_success()
             except Exception as e:

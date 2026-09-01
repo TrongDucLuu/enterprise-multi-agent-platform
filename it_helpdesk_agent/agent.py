@@ -157,15 +157,18 @@ async def semantic_cache_before_model_callback(
     return None
 
 
-def _is_safe_public_faq(query: str, agent_name: str, tools_called: list) -> bool:
+def _is_safe_public_faq(query: str, agent_name: str, tools_called: list, is_first_turn: bool = True) -> bool:
     """
     Determines if a query and response are completely safe to cache with is_public=True.
     Criteria:
-    1. Executed by L1 Self-Service agent (agent_name == "l1_selfservice_agent").
-    2. Zero business tools called (pure informational FAQ/guidance).
-    3. No personal keywords or private state (password reset, account unlock, personal ticket IDs, payroll, salary, PII).
-    4. Matches general enterprise IT FAQ topics (Wi-Fi, printer setup, VPN guides, standard software, office policies).
+    1. First turn only (is_first_turn == True) in multi-turn conversation.
+    2. Executed by L1 Self-Service agent (agent_name == "l1_selfservice_agent").
+    3. Zero business tools called (pure informational FAQ/guidance).
+    4. No personal keywords or private state (password reset, account unlock, personal ticket IDs, payroll, salary, PII).
+    5. Matches general enterprise IT FAQ topics (Wi-Fi, printer setup, VPN guides, standard software, office policies).
     """
+    if not is_first_turn:
+        return False
     if agent_name != "l1_selfservice_agent":
         return False
     if tools_called and len(tools_called) > 0:
@@ -323,8 +326,15 @@ async def semantic_cache_after_model_callback(
         if not user or not user.user_id:
             return modified_response
 
-        # Classify if public FAQ or user-specific private query
-        is_safe_public = _is_safe_public_faq(user_query, agent_name, tools_called)
+        # Check if session is on first turn (first user query in session)
+        is_first_turn = True
+        if inv_ctx and getattr(inv_ctx, "session", None) and hasattr(inv_ctx.session, "events"):
+            user_events_count = sum(1 for ev in inv_ctx.session.events if getattr(ev, "author", "") == "user")
+            if user_events_count > 1:
+                is_first_turn = False
+
+        # Classify if public FAQ or user-specific private query (only turn 1 can be public)
+        is_safe_public = _is_safe_public_faq(user_query, agent_name, tools_called, is_first_turn=is_first_turn)
         cache = get_semantic_cache()
         cache.set(
             query=user_query,
