@@ -1,0 +1,20 @@
+categories:
+  - "General"
+  - "Inquiry"
+  - "Operation"
+priorities:
+  - "Low"
+  - "Medium"
+  - "High"
+  - "Critical"
+statuses:
+  - "Open"
+  - "In_Progress"
+  - "Pending"
+  - "Resolved"
+  - "Closed"
+tiers:
+  - "L1"
+  - "L2"
+  - "Specialist"
+default_initial_tier: "L1"

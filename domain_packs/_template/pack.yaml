@@ -1,0 +1,6 @@
+id: "template-pack"
+name: "Template Domain Pack"
+version: "1.0.0"
+min_core_version: "2.0.0"
+description: "Starter template domain pack for agent_core platform"
+entry_agent: "root_orchestrator"

@@ -90,15 +90,29 @@ app.add_middleware(SSOAuthenticationMiddleware)
 # 2. Outer layer: Rate Limiting Middleware (executes FIRST on incoming requests to drop DDoS/bot spam)
 app.add_middleware(RateLimitMiddleware)
 
+from agent_core import CORE_VERSION
+from agent_core.agent_builder import load_domain_pack
+
+try:
+    _pack_meta = load_domain_pack().get("pack_meta", {})
+    PACK_ID = str(_pack_meta.get("id", "it-helpdesk"))
+    PACK_VERSION = str(_pack_meta.get("version", "1.0.0"))
+except Exception:
+    PACK_ID = os.getenv("DOMAIN_PACK", "it-helpdesk")
+    PACK_VERSION = "1.0.0"
+
 # 1. System Health & Readiness Endpoints (Used by Cloud Run startup/liveness probes & Load Balancer)
 @app.get("/healthz", tags=["Health"])
 @app.get("/health", tags=["Health"])
 async def health_check():
-    """Liveness probe endpoint confirming container availability."""
+    """Liveness probe endpoint confirming container availability and pack metadata."""
     return {
         "status": "healthy",
         "service": "it-helpdesk-agent",
-        "timestamp": time.time()
+        "core_version": CORE_VERSION,
+        "pack_id": PACK_ID,
+        "pack_version": PACK_VERSION,
+        "timestamp": time.time(),
     }
 
 
@@ -107,7 +121,10 @@ async def readiness_check():
     """Readiness probe endpoint confirming system readiness."""
     return {
         "status": "ready",
-        "service": "it-helpdesk-agent"
+        "service": "it-helpdesk-agent",
+        "core_version": CORE_VERSION,
+        "pack_id": PACK_ID,
+        "pack_version": PACK_VERSION,
     }
 
 

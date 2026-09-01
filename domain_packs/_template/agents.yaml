@@ -1,0 +1,23 @@
+agents:
+  root_orchestrator:
+    name: "root_orchestrator"
+    description: "Root entry orchestrator agent"
+    model_type: "fast"
+    instruction: |
+      Bạn là Trưởng nhóm Điều phối chung. Tiếp nhận yêu cầu của người dùng, phân tích ý định và chuyển giao cho Sub-agent xử lý.
+    tools: []
+    sub_agents:
+      - specialist_agent
+
+  specialist_agent:
+    name: "specialist_agent"
+    description: "Domain specialist agent"
+    model_type: "fast"
+    instruction: |
+      Bạn là Chuyên viên xử lý nghiệp vụ chuyên sâu. Tra cứu kiến thức và xử lý yêu cầu của người dùng.
+    tools:
+      - create_case
+      - get_case
+      - update_case_status
+      - list_user_cases
+      - lookup_fact

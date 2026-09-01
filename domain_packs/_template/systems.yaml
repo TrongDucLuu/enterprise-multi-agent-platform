@@ -1,0 +1,7 @@
+systems:
+  CORE:
+    name: "Core System"
+    category: "Operations"
+    description: "Core operational system for this domain"
+    admin_roles:
+      - "domain_admin"
