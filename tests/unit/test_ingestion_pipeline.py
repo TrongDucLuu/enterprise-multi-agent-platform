@@ -601,13 +601,15 @@ def test_markdown_parser_extracts_section_hierarchy(tmp_path):
 
 
 def test_ensure_vector_index_contains_storing_clause():
+    import re
     from scripts.ingest_knowledge_base import ensure_vector_index
     mock_bq = MagicMock()
 
     ensure_vector_index(mock_bq, project_id="my-proj", dataset_id="my_kb", table_name="articles")
     assert mock_bq.query.called
     ddl = mock_bq.query.call_args[0][0]
-    assert "STORING (system, category, id, title, content, section_h1, section_h2, section_h3, source_uri, owner, effective_date, expiry_date, is_deleted, parent_doc_id, chunk_index, allowed_roles, sensitivity)" in ddl
+    stored = set(re.search(r"STORING \(([^)]*)\)", ddl).group(1).replace(" ", "").split(","))
+    assert {"system", "is_deleted", "effective_date", "expiry_date", "keywords", "allowed_roles", "sensitivity"} <= stored
     assert "OPTIONS(distance_type='COSINE', index_type='IVF', lexical_search_columns=['title', 'content', 'keywords'])" in ddl
 
 

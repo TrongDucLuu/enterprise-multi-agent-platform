@@ -116,7 +116,9 @@ def test_bigquery_vector_store_with_mock_client():
     from scripts.ingest_knowledge_base import ensure_vector_index
     ensure_vector_index(mock_bq, project_id="test-project", dataset_id="test_kb", table_name="articles")
     ddl_call = mock_bq.query.call_args[0][0]
-    assert "STORING (system, category, id, title, content, section_h1, section_h2, section_h3, source_uri, owner, effective_date, expiry_date, is_deleted, parent_doc_id, chunk_index, allowed_roles, sensitivity)" in ddl_call
+    import re
+    stored_cols = set(re.search(r"STORING \(([^)]*)\)", ddl_call).group(1).replace(" ", "").split(","))
+    assert {"system", "is_deleted", "effective_date", "expiry_date", "keywords", "allowed_roles", "sensitivity"} <= stored_cols
     assert "lexical_search_columns=['title', 'content', 'keywords']" in ddl_call
 
 

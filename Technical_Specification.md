@@ -466,7 +466,7 @@ flowchart TD
    ```sql
    CREATE VECTOR INDEX IF NOT EXISTS `knowledge_articles_vector_idx`
    ON `{project_id}.{dataset_id}.knowledge_articles`(embedding)
-   STORING (system, category, id, title, content, section_h1, section_h2, section_h3, source_uri, owner, effective_date, expiry_date, is_deleted, parent_doc_id, chunk_index, allowed_roles, sensitivity)
+   STORING (system, category, id, title, content, section_h1, section_h2, section_h3, source_uri, owner, effective_date, expiry_date, is_deleted, parent_doc_id, chunk_index, allowed_roles, sensitivity, keywords)
    OPTIONS(distance_type='COSINE', index_type='IVF', lexical_search_columns=['title', 'content', 'keywords']);
    ```
 
