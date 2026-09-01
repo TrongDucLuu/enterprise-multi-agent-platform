@@ -176,6 +176,12 @@ resource "google_bigquery_table" "knowledge_articles" {
     "description": "Data sensitivity classification level (e.g. PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED)"
   },
   {
+    "name": "clearance_level",
+    "type": "INTEGER",
+    "mode": "NULLABLE",
+    "description": "Numeric clearance level: 0=PUBLIC, 1=INTERNAL, 2=CONFIDENTIAL, 3=RESTRICTED"
+  },
+  {
     "name": "source_uri",
     "type": "STRING",
     "mode": "NULLABLE",

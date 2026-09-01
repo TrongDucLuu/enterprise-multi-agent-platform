@@ -656,6 +656,7 @@ class BaseKnowledgeStore(ABC):
         limit: int = 3,
         allowed_systems: Optional[list[str]] = None,
         user_roles: Optional[list[str]] = None,
+        user_clearance: int = 0,
     ) -> list[SearchResult]:
         """Search knowledge articles matching the query, system filter, and authorized domain list."""
         pass
@@ -682,6 +683,7 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         limit: int = 3,
         allowed_systems: Optional[list[str]] = None,
         user_roles: Optional[list[str]] = None,
+        user_clearance: int = 0,
     ) -> list[SearchResult]:
         """Search knowledge articles by query keywords, system filter, and authorized systems."""
         valid_systems = get_valid_system_filters()
@@ -704,6 +706,19 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
 
         clean_user_roles = [r.lower().strip() for r in effective_roles] if effective_roles is not None else None
         is_admin_user = any(r in ("admin", "it_admin", "security_admin") for r in clean_user_roles) if clean_user_roles is not None else False
+
+        effective_clearance = user_clearance
+        if clean_user_roles is not None:
+            if is_admin_user:
+                effective_clearance = 3
+            elif any(r in ("hr_admin", "finance_admin", "compliance_officer", "legal_counsel", "hr_manager", "finance_manager") for r in clean_user_roles):
+                effective_clearance = 2
+            elif clean_user_roles:
+                effective_clearance = 1
+            else:
+                effective_clearance = 0
+        else:
+            effective_clearance = user_clearance if user_clearance > 0 else 3
 
         # Content Governance: Filter out expired and future-effective documents
         today_str = datetime.date.today().isoformat()
@@ -748,13 +763,21 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
             if allowed_upper is not None and art_sys not in allowed_upper:
                 continue
 
-            # 3b. Document-Level RBAC: allowed_roles
+            # 3b. Document-Level Clearance Level Pre-Filter
+            art_clearance = getattr(article, "clearance_level", None)
+            if art_clearance is None:
+                doc_sens = (getattr(article, "sensitivity", "INTERNAL") or "INTERNAL").upper()
+                art_clearance = 0 if doc_sens == "PUBLIC" else (2 if doc_sens == "CONFIDENTIAL" else (3 if doc_sens == "RESTRICTED" else 1))
+            if art_clearance > effective_clearance:
+                continue
+
+            # 3c. Document-Level RBAC: allowed_roles
             doc_allowed = [r.lower().strip() for r in (getattr(article, "allowed_roles", None) or [])]
             if doc_allowed and clean_user_roles is not None and not is_admin_user:
                 if not any(r in clean_user_roles for r in doc_allowed):
                     continue
 
-            # 3c. Document-Level Sensitivity trimming
+            # 3d. Document-Level Sensitivity trimming
             doc_sens = getattr(article, "sensitivity", "INTERNAL") or "INTERNAL"
             if doc_sens.upper() in ("CONFIDENTIAL", "RESTRICTED") and clean_user_roles is not None and not is_admin_user:
                 if not any(r in clean_user_roles for r in doc_allowed) and not any(r in ("hr_admin", "finance_admin", "security_admin") for r in clean_user_roles):
@@ -820,6 +843,7 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
                 context_path=context_path,
                 allowed_roles=article.allowed_roles,
                 sensitivity=article.sensitivity,
+                clearance_level=getattr(article, "clearance_level", None),
                 source_uri=article.source_uri,
                 category=article.category,
                 keywords=article.keywords,
@@ -928,7 +952,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
         return generate_text_embedding(text, model_name=self.embedding_model, task_type=task_type)
 
     def _is_vector_index_active(self) -> bool:
-        """Checks if BigQuery Vector Index exists and has coverage > 0. Caches result for 60 seconds."""
+        """Checks if BigQuery Vector Index exists, status is ACTIVE, and coverage >= 95.0. Caches result for 60 seconds."""
         now = time.time()
         if self._index_active_cache is not None:
             active, cached_time = self._index_active_cache
@@ -940,15 +964,16 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
 
         try:
             sql = f"""
-            SELECT coverage_percentage 
+            SELECT index_status, coverage_percentage 
             FROM `{self.project_id}.{self.dataset_id}.INFORMATION_SCHEMA.VECTOR_INDEXES`
             WHERE table_name = '{self.table_name}'
             LIMIT 1
             """
             rows = list(self.bq_client.query(sql).result(timeout=5.0))
             if rows:
+                status = getattr(rows[0], "index_status", "UNKNOWN")
                 cov = getattr(rows[0], "coverage_percentage", None)
-                is_active = (float(cov) > 0.0) if cov is not None else False
+                is_active = (status == "ACTIVE" and cov is not None and float(cov) >= 95.0)
             else:
                 is_active = False
             self._index_active_cache = (is_active, now)
@@ -964,9 +989,10 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
         limit: int = 3,
         allowed_systems: Optional[list[str]] = None,
         user_roles: Optional[list[str]] = None,
+        user_clearance: int = 0,
     ) -> list[SearchResult]:
         """
-        Searches BigQuery table using VECTOR_SEARCH with Pre-filtering subquery and SQL-level security trimming.
+        Searches BigQuery table using VECTOR_SEARCH with Pre-filtering subquery and scalar clearance level pre-filter.
         Fails closed by raising KnowledgeStoreUnavailableError on backend failure.
         """
         if not self.bq_client:
@@ -983,12 +1009,9 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
 
             from google.cloud import bigquery
-            query_params = [
-                bigquery.ArrayQueryParameter("query_vector", "FLOAT64", query_vec),
-                bigquery.ScalarQueryParameter("limit", "INT64", limit),
-            ]
+            today_iso = datetime.date.today().isoformat()
 
-            # Resolve effective roles for document-level trimming
+            # Resolve effective roles and clearance
             effective_roles = user_roles
             if effective_roles is None:
                 try:
@@ -999,23 +1022,34 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 except ImportError:
                     pass
 
-            doc_rbac_sql = ""
+            effective_clearance = user_clearance
             if effective_roles is not None:
-                clean_user_roles = [r.lower().strip() for r in effective_roles]
-                query_params.append(bigquery.ArrayQueryParameter("user_roles_param", "STRING", clean_user_roles))
-                doc_rbac_sql = """ AND (
-                    ARRAY_LENGTH(allowed_roles) = 0 
-                    OR 'admin' IN UNNEST(allowed_roles)
-                    OR EXISTS (SELECT 1 FROM UNNEST(allowed_roles) AS r WHERE LOWER(r) IN UNNEST(@user_roles_param))
-                    OR EXISTS (SELECT 1 FROM UNNEST(@user_roles_param) AS ur WHERE ur IN ('admin', 'it_admin', 'security_admin'))
-                ) AND (
-                    sensitivity IN ('PUBLIC', 'INTERNAL')
-                    OR EXISTS (SELECT 1 FROM UNNEST(@user_roles_param) AS ur WHERE ur IN ('admin', 'it_admin', 'hr_admin', 'security_admin'))
-                    OR EXISTS (SELECT 1 FROM UNNEST(allowed_roles) AS r WHERE LOWER(r) IN UNNEST(@user_roles_param))
-                )"""
+                clean_roles = [r.lower().strip() for r in effective_roles]
+                if any(r in ("admin", "it_admin", "security_admin") for r in clean_roles):
+                    effective_clearance = 3
+                elif any(r in ("hr_admin", "finance_admin", "compliance_officer", "legal_counsel", "hr_manager", "finance_manager") for r in clean_roles):
+                    effective_clearance = 2
+                elif clean_roles:
+                    effective_clearance = 1
+                else:
+                    effective_clearance = 0
+            else:
+                effective_clearance = user_clearance if user_clearance > 0 else 3
 
-            # 1. Construct Pre-Filter Subquery for VECTOR_SEARCH (Tombstone + Dates + System RBAC + Doc RBAC)
-            base_filters = f"(is_deleted IS NOT TRUE OR is_deleted = FALSE) AND (expiry_date IS NULL OR expiry_date >= CURRENT_DATE()) AND (effective_date IS NULL OR effective_date <= CURRENT_DATE()){doc_rbac_sql}"
+            query_params = [
+                bigquery.ArrayQueryParameter("query_vector", "FLOAT64", query_vec),
+                bigquery.ScalarQueryParameter("limit", "INT64", limit),
+                bigquery.ScalarQueryParameter("today", "DATE", today_iso),
+                bigquery.ScalarQueryParameter("user_clearance", "INT64", effective_clearance),
+            ]
+
+            # 1. Construct Pre-Filter Subquery for VECTOR_SEARCH (Tombstone + Dates + System RBAC + Scalar Clearance)
+            base_filters = (
+                "(is_deleted IS NOT TRUE) "
+                "AND (expiry_date IS NULL OR expiry_date >= @today) "
+                "AND (effective_date IS NULL OR effective_date <= @today) "
+                "AND (clearance_level IS NULL OR clearance_level <= @user_clearance)"
+            )
             if clean_system != "ALL":
                 base_table_expr = f"(SELECT * FROM {full_table} WHERE system = @system_param AND {base_filters})"
                 query_params.append(bigquery.ScalarQueryParameter("system_param", "STRING", clean_system))
@@ -1051,6 +1085,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                     base.section_h3,
                     base.allowed_roles,
                     base.sensitivity,
+                    base.clearance_level,
                     base.source_uri,
                     base.category,
                     base.keywords,
@@ -1085,6 +1120,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                     base.section_h3,
                     base.allowed_roles,
                     base.sensitivity,
+                    base.clearance_level,
                     base.source_uri,
                     base.category,
                     base.keywords,
@@ -1117,7 +1153,6 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 dist_float = float(dist_val) if isinstance(dist_val, (int, float)) else 0.0
                 relevance = round(max(0.0, min(1.0, 1.0 - dist_float)), 2)
 
-                
                 sec_h1 = _extract_str(getattr(row, "section_h1", None))
                 sec_h2 = _extract_str(getattr(row, "section_h2", None))
                 sec_h3 = _extract_str(getattr(row, "section_h3", None))
@@ -1164,6 +1199,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                     context_path=context_path,
                     allowed_roles=_extract_list(getattr(row, "allowed_roles", None)),
                     sensitivity=_extract_str(getattr(row, "sensitivity", None)),
+                    clearance_level=getattr(row, "clearance_level", None),
                     source_uri=_extract_str(getattr(row, "source_uri", None)),
                     category=category,
                     keywords=_extract_list(getattr(row, "keywords", None)),

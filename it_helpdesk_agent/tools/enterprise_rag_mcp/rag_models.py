@@ -37,6 +37,7 @@ class KnowledgeArticle(BaseModel):
     chunk_index: Optional[int] = 0
     allowed_roles: list[str] = Field(default_factory=list)
     sensitivity: Optional[str] = "INTERNAL"
+    clearance_level: Optional[int] = None
     source_uri: Optional[str] = None
     owner: Optional[str] = None
     effective_date: Optional[str] = None
@@ -58,6 +59,17 @@ class KnowledgeArticle(BaseModel):
                 self.section_h2 = self.section_hierarchy.h2
             if not self.section_h3:
                 self.section_h3 = self.section_hierarchy.h3
+
+        if self.clearance_level is None:
+            sens = (self.sensitivity or "INTERNAL").upper()
+            if sens == "PUBLIC":
+                self.clearance_level = 0
+            elif sens == "CONFIDENTIAL":
+                self.clearance_level = 2
+            elif sens == "RESTRICTED":
+                self.clearance_level = 3
+            else:
+                self.clearance_level = 1
 
     @field_validator("system")
     @classmethod
@@ -86,6 +98,7 @@ class SearchResult(BaseModel):
     chunk_index: Optional[int] = 0
     allowed_roles: list[str] = Field(default_factory=list)
     sensitivity: Optional[str] = "INTERNAL"
+    clearance_level: Optional[int] = None
     source_uri: Optional[str] = None
     category: Optional[str] = None
     keywords: list[str] = Field(default_factory=list)
@@ -109,6 +122,17 @@ class SearchResult(BaseModel):
                 self.section_h2 = self.section_hierarchy.h2
             if not self.section_h3:
                 self.section_h3 = self.section_hierarchy.h3
+
+        if self.clearance_level is None:
+            sens = (self.sensitivity or "INTERNAL").upper()
+            if sens == "PUBLIC":
+                self.clearance_level = 0
+            elif sens == "CONFIDENTIAL":
+                self.clearance_level = 2
+            elif sens == "RESTRICTED":
+                self.clearance_level = 3
+            else:
+                self.clearance_level = 1
         if not self.context_path and self.section_hierarchy:
             self.context_path = self.section_hierarchy.format_path()
 

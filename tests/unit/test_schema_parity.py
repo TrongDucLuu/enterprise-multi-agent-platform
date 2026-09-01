@@ -50,9 +50,9 @@ def test_schema_parity_fields_and_types():
     py_schema = get_knowledge_articles_schema()
 
     # 1. Total field count check
-    assert len(tf_schema) == len(py_schema) == 26, (
+    assert len(tf_schema) == len(py_schema) == 27, (
         f"Schema count mismatch: Terraform has {len(tf_schema)} fields, "
-        f"Python loaders.py has {len(py_schema)} fields (Expected exactly 26)."
+        f"Python loaders.py has {len(py_schema)} fields (Expected exactly 27)."
     )
 
     tf_dict = {f["name"]: f for f in tf_schema}

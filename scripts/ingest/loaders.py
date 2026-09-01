@@ -36,7 +36,7 @@ def ensure_vector_index(
     ddl = f"""
     CREATE VECTOR INDEX IF NOT EXISTS `{index_name}`
     ON `{project_id}.{dataset_id}.{table_name}`(embedding)
-    STORING (system, category, id, title, content, section_h1, section_h2, section_h3, source_uri, owner, effective_date, expiry_date, is_deleted, parent_doc_id, chunk_index, allowed_roles, sensitivity, keywords)
+    STORING (system, category, id, title, content, section_h1, section_h2, section_h3, source_uri, owner, effective_date, expiry_date, is_deleted, parent_doc_id, chunk_index, allowed_roles, sensitivity, keywords, clearance_level)
     OPTIONS(distance_type='COSINE', index_type='IVF', lexical_search_columns=['title', 'content', 'keywords'])
     """
     try:
@@ -139,6 +139,7 @@ def get_knowledge_articles_schema() -> list[Any]:
         bigquery.SchemaField("section_h3", "STRING", mode="NULLABLE"),
         bigquery.SchemaField("allowed_roles", "STRING", mode="REPEATED"),
         bigquery.SchemaField("sensitivity", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("clearance_level", "INTEGER", mode="NULLABLE"),
         bigquery.SchemaField("source_uri", "STRING", mode="NULLABLE"),
         bigquery.SchemaField("owner", "STRING", mode="NULLABLE"),
         bigquery.SchemaField("effective_date", "DATE", mode="NULLABLE"),
@@ -383,6 +384,19 @@ def ingest_articles_to_bigquery(
         for idx, emb in zip(chunks_to_embed_indices, new_embeddings):
             articles[idx]["embedding"] = emb
 
+    # Ensure clearance_level is populated for all articles
+    for a in articles:
+        if a.get("clearance_level") is None:
+            sens = (a.get("sensitivity") or "INTERNAL").upper()
+            if sens == "PUBLIC":
+                a["clearance_level"] = 0
+            elif sens == "CONFIDENTIAL":
+                a["clearance_level"] = 2
+            elif sens == "RESTRICTED":
+                a["clearance_level"] = 3
+            else:
+                a["clearance_level"] = 1
+
     # 3. Create Temporary Staging Table
     staging_suffix = uuid.uuid4().hex[:8]
     staging_table_name = f"{table_name}_staging_{staging_suffix}"
@@ -429,6 +443,7 @@ def ingest_articles_to_bigquery(
             T.section_h3 = S.section_h3,
             T.allowed_roles = S.allowed_roles,
             T.sensitivity = S.sensitivity,
+            T.clearance_level = S.clearance_level,
             T.source_uri = S.source_uri,
             T.owner = S.owner,
             T.effective_date = S.effective_date,
@@ -444,14 +459,14 @@ def ingest_articles_to_bigquery(
         WHEN NOT MATCHED THEN
           INSERT (
             id, parent_doc_id, chunk_index, system, title, category, content, keywords, embedding,
-            section_h1, section_h2, section_h3, allowed_roles, sensitivity, source_uri,
+            section_h1, section_h2, section_h3, allowed_roles, sensitivity, clearance_level, source_uri,
             owner, effective_date, expiry_date, is_deleted, deleted_at,
             parser_version, chunker_version, embedding_model, embedding_dim,
             content_hash, updated_at
           )
           VALUES (
             S.id, S.parent_doc_id, S.chunk_index, S.system, S.title, S.category, S.content, S.keywords, S.embedding,
-            S.section_h1, S.section_h2, S.section_h3, S.allowed_roles, S.sensitivity, S.source_uri,
+            S.section_h1, S.section_h2, S.section_h3, S.allowed_roles, S.sensitivity, S.clearance_level, S.source_uri,
             S.owner, S.effective_date, S.expiry_date, S.is_deleted, S.deleted_at,
             S.parser_version, S.chunker_version, S.embedding_model, S.embedding_dim,
             S.content_hash, S.updated_at

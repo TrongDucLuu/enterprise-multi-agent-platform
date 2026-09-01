@@ -56,6 +56,8 @@ def test_bigquery_vector_store_with_mock_client():
         keywords=["po", "sap"],
         distance=0.15,
         hybrid_score=0.85,
+        clearance_level=1,
+        index_status="ACTIVE",
         coverage_percentage=100.0,
     )
 
@@ -90,26 +92,29 @@ def test_bigquery_vector_store_with_mock_client():
     assert "WHERE system = @system_param" in sql_arg
     assert "fraction_lists_to_search" in sql_arg
 
-    # 🔴 P0 Requirement: Verify that search() SQL generated on read path contains ALL 3 governance conditions
+    # 🔴 P0 Requirement: Verify that search() SQL generated on read path contains ALL governance conditions with @today and scalar clearance
     assert "is_deleted IS NOT TRUE" in sql_arg
-    assert "expiry_date IS NULL OR expiry_date >= CURRENT_DATE()" in sql_arg
-    assert "effective_date IS NULL OR effective_date <= CURRENT_DATE()" in sql_arg
+    assert "expiry_date IS NULL OR expiry_date >= @today" in sql_arg
+    assert "effective_date IS NULL OR effective_date <= @today" in sql_arg
+    assert "clearance_level IS NULL OR clearance_level <= @user_clearance" in sql_arg
 
     # 2. Test search with system="HRM"
     store.search("Chấm công", system="HRM", limit=3)
     sql_arg_hrm = mock_bq.query.call_args[0][0]
     assert "WHERE system = @system_param" in sql_arg_hrm
     assert "is_deleted IS NOT TRUE" in sql_arg_hrm
-    assert "expiry_date IS NULL OR expiry_date >= CURRENT_DATE()" in sql_arg_hrm
-    assert "effective_date IS NULL OR effective_date <= CURRENT_DATE()" in sql_arg_hrm
+    assert "expiry_date IS NULL OR expiry_date >= @today" in sql_arg_hrm
+    assert "effective_date IS NULL OR effective_date <= @today" in sql_arg_hrm
+    assert "clearance_level IS NULL OR clearance_level <= @user_clearance" in sql_arg_hrm
 
     # 3. Test search with system="ALL" and RBAC allowed_systems (Pre-filter with allowed systems)
     store.search("Reset password", system="ALL", limit=5, allowed_systems=["ERP", "HRM"])
     sql_arg_all = mock_bq.query.call_args[0][0]
     assert "WHERE system IN UNNEST(@allowed_systems_param)" in sql_arg_all
     assert "is_deleted IS NOT TRUE" in sql_arg_all
-    assert "expiry_date IS NULL OR expiry_date >= CURRENT_DATE()" in sql_arg_all
-    assert "effective_date IS NULL OR effective_date <= CURRENT_DATE()" in sql_arg_all
+    assert "expiry_date IS NULL OR expiry_date >= @today" in sql_arg_all
+    assert "effective_date IS NULL OR effective_date <= @today" in sql_arg_all
+    assert "clearance_level IS NULL OR clearance_level <= @user_clearance" in sql_arg_all
 
     # 4. Test Index DDL contains STORING clause and lexical_search_columns
     mock_bq.reset_mock()
@@ -118,7 +123,7 @@ def test_bigquery_vector_store_with_mock_client():
     ddl_call = mock_bq.query.call_args[0][0]
     import re
     stored_cols = set(re.search(r"STORING \(([^)]*)\)", ddl_call).group(1).replace(" ", "").split(","))
-    assert {"system", "is_deleted", "effective_date", "expiry_date", "keywords", "allowed_roles", "sensitivity"} <= stored_cols
+    assert {"system", "is_deleted", "effective_date", "expiry_date", "keywords", "allowed_roles", "sensitivity", "clearance_level"} <= stored_cols
     assert "lexical_search_columns=['title', 'content', 'keywords']" in ddl_call
 
 
@@ -147,20 +152,22 @@ def test_mutation_bigquery_search_omitting_base_filters_fails(monkeypatch):
 
     # Verify that the correct SQL passes
     assert "is_deleted IS NOT TRUE" in generated_sql
-    assert "expiry_date IS NULL OR expiry_date >= CURRENT_DATE()" in generated_sql
-    assert "effective_date IS NULL OR effective_date <= CURRENT_DATE()" in generated_sql
+    assert "expiry_date IS NULL OR expiry_date >= @today" in generated_sql
+    assert "effective_date IS NULL OR effective_date <= @today" in generated_sql
+    assert "clearance_level IS NULL OR clearance_level <= @user_clearance" in generated_sql
 
     # Simulate mutated SQL where governance filters are replaced with "TRUE"
     mutated_sql = generated_sql.replace(
-        "(is_deleted IS NOT TRUE OR is_deleted = FALSE) AND (expiry_date IS NULL OR expiry_date >= CURRENT_DATE()) AND (effective_date IS NULL OR effective_date <= CURRENT_DATE())",
+        "(is_deleted IS NOT TRUE) AND (expiry_date IS NULL OR expiry_date >= @today) AND (effective_date IS NULL OR effective_date <= @today) AND (clearance_level IS NULL OR clearance_level <= @user_clearance)",
         "TRUE"
     )
 
     # Assert that the mutated SQL fails the governance assertion
     with pytest.raises(AssertionError):
         assert "is_deleted IS NOT TRUE" in mutated_sql
-        assert "expiry_date IS NULL OR expiry_date >= CURRENT_DATE()" in mutated_sql
-        assert "effective_date IS NULL OR effective_date <= CURRENT_DATE()" in mutated_sql
+        assert "expiry_date IS NULL OR expiry_date >= @today" in mutated_sql
+        assert "effective_date IS NULL OR effective_date <= @today" in mutated_sql
+        assert "clearance_level IS NULL OR clearance_level <= @user_clearance" in mutated_sql
 
 
 def test_bigquery_hybrid_search_sql_generation_and_behavior(monkeypatch):
@@ -599,14 +606,14 @@ def test_bigquery_get_article_by_id_multi_chunk():
 def test_vector_index_active_check_conditional_options(monkeypatch):
     """
     P0.3 Conditional fraction_lists_to_search:
-    Verifies that options => '{"fraction_lists_to_search": ...}' is ONLY added when index coverage > 0.
+    Verifies that options => '{"fraction_lists_to_search": ...}' is ONLY added when index status is ACTIVE and coverage >= 95.0.
     """
     mock_bq = MagicMock()
     from types import SimpleNamespace
 
-    # Mock index coverage check query
+    # Mock index coverage check query: below 95% -> Inactive
     cov_job = MagicMock()
-    cov_job.result.return_value = [SimpleNamespace(coverage_percentage=0.0)]  # Inactive
+    cov_job.result.return_value = [SimpleNamespace(index_status="ACTIVE", coverage_percentage=80.0)]
     search_job = MagicMock()
     search_job.result.return_value = []
 
@@ -621,9 +628,56 @@ def test_vector_index_active_check_conditional_options(monkeypatch):
     )
 
     store.search("Lỗi kiểm thử", system="ERP", limit=2)
-    # Search SQL should NOT contain fraction_lists_to_search when index coverage is 0.0
+    # Search SQL should NOT contain fraction_lists_to_search when index coverage is < 95.0
     search_sql = mock_bq.query.call_args_list[1][0][0]
     assert "fraction_lists_to_search" not in search_sql
+
+
+def test_is_vector_index_active_fail_closed_and_threshold():
+    """Verify that _is_vector_index_active returns False on empty result, error, or coverage < 95.0, and True when ACTIVE and >= 95.0."""
+    from types import SimpleNamespace
+    mock_bq = MagicMock()
+    store = BigQueryVectorKnowledgeStore(
+        project_id="test-project",
+        dataset_id="test_kb",
+        table_name="articles",
+        bq_client=mock_bq,
+        embedding_fn=lambda t: [0.1] * 64,
+    )
+
+    # 1. Empty rows -> False
+    job_empty = MagicMock()
+    job_empty.result.return_value = []
+    mock_bq.query.return_value = job_empty
+    store._index_active_cache = None
+    assert store._is_vector_index_active() is False
+
+    # 2. Exception -> False (fail-closed)
+    mock_bq.query.side_effect = RuntimeError("BigQuery connection error")
+    store._index_active_cache = None
+    assert store._is_vector_index_active() is False
+    mock_bq.query.side_effect = None
+
+    # 3. Status PENDING / coverage 100 -> False
+    job_pending = MagicMock()
+    job_pending.result.return_value = [SimpleNamespace(index_status="PENDING", coverage_percentage=100.0)]
+    mock_bq.query.return_value = job_pending
+    store._index_active_cache = None
+    assert store._is_vector_index_active() is False
+
+    # 4. Status ACTIVE but coverage 94.9% -> False
+    job_low = MagicMock()
+    job_low.result.return_value = [SimpleNamespace(index_status="ACTIVE", coverage_percentage=94.9)]
+    mock_bq.query.return_value = job_low
+    store._index_active_cache = None
+    assert store._is_vector_index_active() is False
+
+    # 5. Status ACTIVE and coverage 95.0% -> True
+    job_ok = MagicMock()
+    job_ok.result.return_value = [SimpleNamespace(index_status="ACTIVE", coverage_percentage=95.0)]
+    mock_bq.query.return_value = job_ok
+    store._index_active_cache = None
+    assert store._is_vector_index_active() is True
 
 
 def test_bigquery_knowledge_store_missing_library_raises_importerror():

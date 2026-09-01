@@ -733,10 +733,14 @@ def test_bigquery_search_sql_contains_role_and_sensitivity_trimming():
     store.search("Chính sách bảo mật", system="ERP", user_roles=["employee"])
     assert mock_bq.query.called
     sql = mock_bq.query.call_args[0][0]
+    job_config = mock_bq.query.call_args[1]["job_config"]
+    param_names = [p.name for p in job_config.query_parameters]
 
-    assert "allowed_roles" in sql
-    assert "sensitivity" in sql
-    assert "@user_roles_param" in sql
+    assert "clearance_level" in sql
+    assert "clearance_level IS NULL OR clearance_level <= @user_clearance" in sql
+    assert "user_clearance" in param_names
+    user_clearance_param = next(p for p in job_config.query_parameters if p.name == "user_clearance")
+    assert user_clearance_param.value == 1
 
 
 

@@ -187,6 +187,15 @@ def search_enterprise_knowledge(
 
     current_user = get_current_sso_user()
     user_roles = current_user.roles if current_user else None
+    user_clearance = 0
+    if current_user and current_user.roles:
+        clean_roles = [r.lower().strip() for r in current_user.roles]
+        if any(r in ("admin", "it_admin", "security_admin") for r in clean_roles):
+            user_clearance = 3
+        elif any(r in ("hr_admin", "finance_admin", "compliance_officer", "legal_counsel") for r in clean_roles):
+            user_clearance = 2
+        elif any(r in ("employee", "user", "sales_rep", "engineer") for r in clean_roles):
+            user_clearance = 1
 
     if clean_sys != "ALL":
         is_allowed, error_msg = _check_system_access(clean_sys)
@@ -199,7 +208,13 @@ def search_enterprise_knowledge(
                 "score": 0.0,
             }]
         try:
-            results = store.search(query=query, system=clean_sys, limit=3, user_roles=user_roles)
+            results = store.search(
+                query=query,
+                system=clean_sys,
+                limit=3,
+                user_roles=user_roles,
+                user_clearance=user_clearance,
+            )
             return [r.model_dump() for r in results]
         except KnowledgeStoreUnavailableError as e:
             logger.error("Knowledge store unavailable during search: %s", e)
@@ -223,6 +238,7 @@ def search_enterprise_knowledge(
             limit=3,
             allowed_systems=authorized_systems,
             user_roles=user_roles,
+            user_clearance=user_clearance,
         )
         return [r.model_dump() for r in results]
     except KnowledgeStoreUnavailableError as e:
