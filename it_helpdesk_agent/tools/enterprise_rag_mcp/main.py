@@ -151,6 +151,36 @@ store = get_knowledge_store()
 mcp = FastMCP(name="EnterpriseKnowledgeRAG")
 
 
+RETRIEVE_K = 20
+FINAL_K = 3
+
+
+def _filter_by_role(results: list, user_roles: list[str] | None) -> list:
+    """
+    Post-filters retrieved candidates by allowed_roles after vector over-retrieval.
+    - If article has no allowed_roles (empty/None), keep it.
+    - If user has admin/security_admin role, allow all.
+    - If article specifies allowed_roles, require intersection with user_roles.
+    """
+    if not results:
+        return []
+    clean_user_roles = [r.lower().strip() for r in user_roles] if user_roles else []
+    if any(r in ("admin", "it_admin", "security_admin") for r in clean_user_roles):
+        return results
+
+    user_role_set = set(clean_user_roles)
+    filtered = []
+    for r in results:
+        doc_roles = getattr(r, "allowed_roles", None)
+        if not doc_roles:
+            filtered.append(r)
+        else:
+            clean_doc_roles = {role.lower().strip() for role in doc_roles}
+            if clean_doc_roles & user_role_set:
+                filtered.append(r)
+    return filtered
+
+
 @mcp.tool()
 def search_enterprise_knowledge(
     query: str,
@@ -192,9 +222,9 @@ def search_enterprise_knowledge(
         clean_roles = [r.lower().strip() for r in current_user.roles]
         if any(r in ("admin", "it_admin", "security_admin") for r in clean_roles):
             user_clearance = 3
-        elif any(r in ("hr_admin", "finance_admin", "compliance_officer", "legal_counsel") for r in clean_roles):
+        elif any(r in ("hr_admin", "finance_admin", "compliance_officer", "legal_counsel", "hr_manager", "finance_manager") for r in clean_roles):
             user_clearance = 2
-        elif any(r in ("employee", "user", "sales_rep", "engineer") for r in clean_roles):
+        elif clean_roles:
             user_clearance = 1
 
     if clean_sys != "ALL":
@@ -211,11 +241,12 @@ def search_enterprise_knowledge(
             results = store.search(
                 query=query,
                 system=clean_sys,
-                limit=3,
+                limit=RETRIEVE_K,
                 user_roles=user_roles,
                 user_clearance=user_clearance,
             )
-            return [r.model_dump() for r in results]
+            filtered = _filter_by_role(results, user_roles)[:FINAL_K]
+            return [r.model_dump() for r in filtered]
         except KnowledgeStoreUnavailableError as e:
             logger.error("Knowledge store unavailable during search: %s", e)
             return [{
@@ -235,12 +266,13 @@ def search_enterprise_knowledge(
         results = store.search(
             query=query,
             system="ALL",
-            limit=3,
+            limit=RETRIEVE_K,
             allowed_systems=authorized_systems,
             user_roles=user_roles,
             user_clearance=user_clearance,
         )
-        return [r.model_dump() for r in results]
+        filtered = _filter_by_role(results, user_roles)[:FINAL_K]
+        return [r.model_dump() for r in filtered]
     except KnowledgeStoreUnavailableError as e:
         logger.error("Knowledge store unavailable during search ALL: %s", e)
         return [{

@@ -96,15 +96,31 @@ def test_enterprise_rag_rbac_allowed_for_hr_role():
 
 def test_search_is_truncated_flag():
     store = KnowledgeStore()
-    # ERP-KB-001 has content > 200 chars -> is_truncated must be True
+    # ERP-KB-001 has content ~450 chars (< 1200 chars) -> is_truncated must be False
     results = store.search(query="purchase order sap", system="ERP")
     assert len(results) > 0
-    assert results[0].is_truncated is True
+    assert results[0].is_truncated is False
+
+    # Insert a long article > 1200 chars to verify truncation flag
+    from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle
+    long_article = KnowledgeArticle(
+        id="ERP-KB-LONG",
+        system="ERP",
+        title="Long ERP Troubleshooting Guide",
+        category="ERP Testing",
+        content="A" * 1500,
+        keywords=["long", "erp", "troubleshooting", "guide"],
+        source_uri="docs/long.md",
+        owner="erp@company.com",
+    )
+    store.articles.append(long_article)
+    long_results = store.search(query="long erp troubleshooting", system="ERP")
+    assert any(r.article_id == "ERP-KB-LONG" and r.is_truncated is True for r in long_results)
 
     # Test via main search_enterprise_knowledge tool
     mcp_res = search_enterprise_knowledge("purchase order sap", system="ERP")
     assert len(mcp_res) > 0
-    assert mcp_res[0]["is_truncated"] is True
+    assert mcp_res[0]["is_truncated"] is False
 
 def test_draft_email_response():
     email = draft_email_response(

@@ -817,8 +817,8 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
 
         search_results = []
         for score, article in results[:limit]:
-            is_truncated = len(article.content) > 200
-            raw_snippet = article.content[:200].strip() + "..." if is_truncated else article.content.strip()
+            is_truncated = len(article.content) > 1200
+            raw_snippet = article.content[:1200].strip() + "..." if is_truncated else article.content.strip()
             snippet = wrap_retrieved_document(
                 content=raw_snippet,
                 doc_id=article.id,
@@ -1175,8 +1175,8 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 
                 context_path = sec_hier.format_path() if sec_hier else f"{art_sys} > {category or 'General'} > {art_title}"
                 
-                is_truncated = len(content_str) > 200
-                raw_snippet = content_str[:200].strip() + "..." if is_truncated else content_str.strip()
+                is_truncated = len(content_str) > 1200
+                raw_snippet = content_str[:1200].strip() + "..." if is_truncated else content_str.strip()
                 snippet = wrap_retrieved_document(
                     content=raw_snippet,
                     doc_id=art_id,

@@ -743,5 +743,106 @@ def test_bigquery_search_sql_contains_role_and_sensitivity_trimming():
     assert user_clearance_param.value == 1
 
 
+def test_confidential_document_not_returned_to_employee_role(monkeypatch):
+    """
+    0.5b Adversarial Security Test:
+    Verify that an authenticated employee (role='hr_specialist', clearance=1) cannot retrieve
+    CONFIDENTIAL documents (clearance=2, allowed_roles=['hr_admin', 'c_level']) via search_enterprise_knowledge.
+    """
+    from it_helpdesk_agent.tools.enterprise_rag_mcp import main as mcp_main
+    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import (
+        InMemoryKnowledgeStore,
+        KnowledgeArticle,
+    )
+    from it_helpdesk_agent.app_utils.sso_auth import SSOUser
+
+    # Mock SSO user as HR specialist (authorized for HRM domain, but not confidential C-Level docs)
+    monkeypatch.setattr(
+        "it_helpdesk_agent.app_utils.sso_auth.get_current_sso_user",
+        lambda: SSOUser(
+            user_id="emp-hr-001",
+            email="hr.emp@company.com",
+            name="HR Specialist",
+            roles=["hr_specialist"],
+            picture=None,
+            hosted_domain="company.com",
+        ),
+    )
+
+    test_store = InMemoryKnowledgeStore()
+    test_store.articles = [
+        KnowledgeArticle(
+            id="HRM-CONF-ESOP",
+            system="HRM",
+            title="Kế hoạch ESOP và Thưởng Ban Điều Hành",
+            category="Compensation",
+            content="Chi tiết gói thưởng cổ phiếu và chi trả cổ tức cho lãnh đạo.",
+            allowed_roles=["hr_admin", "c_level"],
+            sensitivity="CONFIDENTIAL",
+            keywords=["esop", "thuong", "ban", "dieu", "hanh", "luong"],
+        ),
+        KnowledgeArticle(
+            id="HRM-PUB-POLICY",
+            system="HRM",
+            title="Quy chế nghỉ lễ và ngày làm việc công ty",
+            category="General Policy",
+            content="Thời gian làm việc từ thứ Hai đến thứ Sáu, nghỉ lễ theo quy định.",
+            allowed_roles=[],
+            sensitivity="INTERNAL",
+            keywords=["nghi", "le", "quy", "che", "lam", "viec"],
+        ),
+    ]
+    monkeypatch.setattr(mcp_main, "store", test_store)
+
+    results = mcp_main.search_enterprise_knowledge("thưởng và ngày làm việc", system="HRM")
+    article_ids = [r["article_id"] for r in results]
+
+    assert "HRM-CONF-ESOP" not in article_ids
+    assert "HRM-PUB-POLICY" in article_ids
+
+
+def test_public_faq_returned_regardless_of_clearance():
+    """
+    0.5b Adversarial Security Test:
+    Verify that an anonymous or low-clearance user (clearance=0, no roles) can retrieve
+    PUBLIC FAQ articles (clearance=0, sensitivity='PUBLIC', allowed_roles=[]) via KnowledgeStore search.
+    """
+    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import (
+        InMemoryKnowledgeStore,
+        KnowledgeArticle,
+    )
+
+    test_store = InMemoryKnowledgeStore()
+    test_store.articles = [
+        KnowledgeArticle(
+            id="FAQ-PUB-WIFI",
+            system="ERP",
+            title="Hướng dẫn kết nối WiFi Guest dành cho khách",
+            category="Network",
+            content="Mật khẩu WiFi Guest được cấp tại lễ tân tòa nhà.",
+            allowed_roles=[],
+            sensitivity="PUBLIC",
+            keywords=["wifi", "guest", "ket", "noi", "khach"],
+        ),
+        KnowledgeArticle(
+            id="ERP-INT-CONFIG",
+            system="ERP",
+            title="Cấu hình hệ thống ERP Production và Port Database",
+            category="Infrastructure",
+            content="Danh sách IP và port kết nối cơ sở dữ liệu SAP ERP nội bộ.",
+            allowed_roles=["it_admin"],
+            sensitivity="INTERNAL",
+            keywords=["erp", "production", "ip", "port", "database"],
+        ),
+    ]
+
+    # User with clearance 0 (anonymous/public) searching
+    results = test_store.search("wifi guest kết nối", system="ERP", user_clearance=0)
+    article_ids = [r.article_id for r in results]
+
+    assert "FAQ-PUB-WIFI" in article_ids
+    assert "ERP-INT-CONFIG" not in article_ids
+
+
 
 
