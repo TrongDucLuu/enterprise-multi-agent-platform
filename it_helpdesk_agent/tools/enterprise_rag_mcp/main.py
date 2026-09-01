@@ -176,6 +176,18 @@ def search_enterprise_knowledge(
             "score": 0.0,
         }]
 
+    try:
+        from it_helpdesk_agent.app_utils.sso_auth import get_current_sso_user
+    except ImportError:
+        try:
+            from app_utils.sso_auth import get_current_sso_user
+        except ImportError:
+            def get_current_sso_user():
+                return None
+
+    current_user = get_current_sso_user()
+    user_roles = current_user.roles if current_user else None
+
     if clean_sys != "ALL":
         is_allowed, error_msg = _check_system_access(clean_sys)
         if not is_allowed:
@@ -187,7 +199,7 @@ def search_enterprise_knowledge(
                 "score": 0.0,
             }]
         try:
-            results = store.search(query=query, system=clean_sys, limit=3)
+            results = store.search(query=query, system=clean_sys, limit=3, user_roles=user_roles)
             return [r.model_dump() for r in results]
         except KnowledgeStoreUnavailableError as e:
             logger.error("Knowledge store unavailable during search: %s", e)
@@ -209,7 +221,8 @@ def search_enterprise_knowledge(
             query=query,
             system="ALL",
             limit=3,
-            allowed_systems=authorized_systems
+            allowed_systems=authorized_systems,
+            user_roles=user_roles,
         )
         return [r.model_dump() for r in results]
     except KnowledgeStoreUnavailableError as e:
@@ -227,7 +240,7 @@ def search_enterprise_knowledge(
 def get_system_manual(article_id: str) -> dict:
     """
     Retrieves the complete technical manual or troubleshooting guide for a specific article ID.
-    Enforces domain-level RBAC for sensitive enterprise system operational guides.
+    Enforces domain-level and document-level RBAC for sensitive enterprise system operational guides.
     """
     try:
         article = store.get_article_by_id(article_id)
@@ -252,6 +265,41 @@ def get_system_manual(article_id: str) -> dict:
             "article_id": article_id,
             "system": article.system,
         }
+
+    # Document-level RBAC & Sensitivity trimming
+    try:
+        from it_helpdesk_agent.app_utils.sso_auth import get_current_sso_user
+    except ImportError:
+        try:
+            from app_utils.sso_auth import get_current_sso_user
+        except ImportError:
+            def get_current_sso_user():
+                return None
+
+    current_user = get_current_sso_user()
+    current_roles = [r.lower().strip() for r in (current_user.roles if current_user else ["employee"])]
+    is_admin = any(r in ("admin", "it_admin", "security_admin") for r in current_roles)
+
+    doc_allowed = [r.lower().strip() for r in (getattr(article, "allowed_roles", None) or [])]
+    if doc_allowed and not is_admin:
+        if not any(r in current_roles for r in doc_allowed):
+            return {
+                "status": "forbidden",
+                "error": "Access Denied",
+                "message": f"Tài liệu '{article_id}' yêu cầu quyền truy cập đặc biệt: {article.allowed_roles}.",
+                "article_id": article_id,
+                "system": article.system,
+            }
+    doc_sens = (getattr(article, "sensitivity", "INTERNAL") or "INTERNAL").upper()
+    if doc_sens in ("CONFIDENTIAL", "RESTRICTED") and not is_admin:
+        if not any(r in current_roles for r in doc_allowed) and not any(r in ("hr_admin", "finance_admin", "security_admin") for r in current_roles):
+            return {
+                "status": "forbidden",
+                "error": "Access Denied",
+                "message": f"Tài liệu '{article_id}' có mức độ bảo mật {article.sensitivity}, bạn không có quyền truy cập.",
+                "article_id": article_id,
+                "system": article.system,
+            }
 
     art_dict = article.model_dump()
     raw_content = art_dict.get("content", "")

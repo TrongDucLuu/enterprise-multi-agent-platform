@@ -663,4 +663,81 @@ def test_fastmcp_get_system_manual_delimiter_escaping():
         mcp_main.store = orig_store
 
 
+# -------------------------------------------------------------
+# 8. Document-Level Security: allowed_roles & sensitivity Trimming
+# -------------------------------------------------------------
+
+def test_confidential_document_not_returned_to_employee():
+    """
+    C-3 Document-Level RBAC:
+    Verify that articles with sensitivity='CONFIDENTIAL' or restricted allowed_roles
+    are never returned to standard employees during search or get_system_manual.
+    """
+    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import KnowledgeArticle
+
+    pub_doc = KnowledgeArticle(
+        id="HRM-PUB-001",
+        system="HRM",
+        title="Quy chế nghỉ phép năm 2025",
+        category="Policy",
+        content="Mỗi nhân viên có 12 ngày phép hàng năm theo luật lao động.",
+        allowed_roles=[],
+        sensitivity="INTERNAL",
+        keywords=["nghi", "phep", "nam"]
+    )
+    conf_doc = KnowledgeArticle(
+        id="HRM-CONF-001",
+        system="HRM",
+        title="Chính sách thưởng và chia cổ tức ban điều hành",
+        category="Compensation",
+        content="Chi tiết mức thưởng EBITDA và quyền mua cổ phiếu ESOP dành riêng cho C-Level.",
+        allowed_roles=["hr_admin", "director"],
+        sensitivity="CONFIDENTIAL",
+        keywords=["thuong", "co", "tuc", "ban", "dieu", "hanh"]
+    )
+
+    store = InMemoryKnowledgeStore()
+    store.articles = [pub_doc, conf_doc]
+
+    # 1. Employee searching should only see public/internal document
+    emp_results = store.search("chính sách thưởng và nghỉ phép ban điều hành", system="HRM", user_roles=["employee"])
+    emp_ids = [r.article_id for r in emp_results]
+    assert "HRM-CONF-001" not in emp_ids
+    assert "HRM-PUB-001" in emp_ids
+
+    # 2. HR Admin searching should be able to see the confidential document
+    hr_results = store.search("chính sách thưởng và nghỉ phép ban điều hành", system="HRM", user_roles=["hr_admin"])
+    hr_ids = [r.article_id for r in hr_results]
+    assert "HRM-CONF-001" in hr_ids
+
+
+def test_bigquery_search_sql_contains_role_and_sensitivity_trimming():
+    """
+    C-3 Document-Level RBAC (BigQuery):
+    Verify that BigQueryVectorKnowledgeStore.search() includes allowed_roles and sensitivity
+    predicates in its pre-filtering subquery when user_roles are provided.
+    """
+    mock_bq = MagicMock()
+    mock_query_job = MagicMock()
+    mock_query_job.result.return_value = []
+    mock_bq.query.return_value = mock_query_job
+
+    store = BigQueryVectorKnowledgeStore(
+        project_id="test-project",
+        dataset_id="test_kb",
+        table_name="articles",
+        bq_client=mock_bq,
+        embedding_fn=lambda t: [0.1] * 64
+    )
+
+    store.search("Chính sách bảo mật", system="ERP", user_roles=["employee"])
+    assert mock_bq.query.called
+    sql = mock_bq.query.call_args[0][0]
+
+    assert "allowed_roles" in sql
+    assert "sensitivity" in sql
+    assert "@user_roles_param" in sql
+
+
+
 

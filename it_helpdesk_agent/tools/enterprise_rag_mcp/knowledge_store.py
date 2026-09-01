@@ -654,7 +654,8 @@ class BaseKnowledgeStore(ABC):
         query: str,
         system: str = "ALL",
         limit: int = 3,
-        allowed_systems: Optional[list[str]] = None
+        allowed_systems: Optional[list[str]] = None,
+        user_roles: Optional[list[str]] = None,
     ) -> list[SearchResult]:
         """Search knowledge articles matching the query, system filter, and authorized domain list."""
         pass
@@ -679,7 +680,8 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         query: str,
         system: str = "ALL",
         limit: int = 3,
-        allowed_systems: Optional[list[str]] = None
+        allowed_systems: Optional[list[str]] = None,
+        user_roles: Optional[list[str]] = None,
     ) -> list[SearchResult]:
         """Search knowledge articles by query keywords, system filter, and authorized systems."""
         valid_systems = get_valid_system_filters()
@@ -688,6 +690,20 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
             clean_system = "ALL"
 
         allowed_upper = set(s.upper() for s in allowed_systems) if allowed_systems is not None else None
+
+        # Resolve effective user roles for document-level security trimming
+        effective_roles = user_roles
+        if effective_roles is None:
+            try:
+                from it_helpdesk_agent.app_utils.sso_auth import get_current_sso_user
+                user = get_current_sso_user()
+                if user:
+                    effective_roles = user.roles
+            except ImportError:
+                pass
+
+        clean_user_roles = [r.lower().strip() for r in effective_roles] if effective_roles is not None else None
+        is_admin_user = any(r in ("admin", "it_admin", "security_admin") for r in clean_user_roles) if clean_user_roles is not None else False
 
         # Content Governance: Filter out expired and future-effective documents
         today_str = datetime.date.today().isoformat()
@@ -731,6 +747,18 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
                 continue
             if allowed_upper is not None and art_sys not in allowed_upper:
                 continue
+
+            # 3b. Document-Level RBAC: allowed_roles
+            doc_allowed = [r.lower().strip() for r in (getattr(article, "allowed_roles", None) or [])]
+            if doc_allowed and clean_user_roles is not None and not is_admin_user:
+                if not any(r in clean_user_roles for r in doc_allowed):
+                    continue
+
+            # 3c. Document-Level Sensitivity trimming
+            doc_sens = getattr(article, "sensitivity", "INTERNAL") or "INTERNAL"
+            if doc_sens.upper() in ("CONFIDENTIAL", "RESTRICTED") and clean_user_roles is not None and not is_admin_user:
+                if not any(r in clean_user_roles for r in doc_allowed) and not any(r in ("hr_admin", "finance_admin", "security_admin") for r in clean_user_roles):
+                    continue
 
             score = 0.0
             article_text = f"{article.title} {article.category} {article.content}".lower()
@@ -934,7 +962,8 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
         query: str,
         system: str = "ALL",
         limit: int = 3,
-        allowed_systems: Optional[list[str]] = None
+        allowed_systems: Optional[list[str]] = None,
+        user_roles: Optional[list[str]] = None,
     ) -> list[SearchResult]:
         """
         Searches BigQuery table using VECTOR_SEARCH with Pre-filtering subquery and SQL-level security trimming.
@@ -959,8 +988,34 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 bigquery.ScalarQueryParameter("limit", "INT64", limit),
             ]
 
-            # 1. Construct Pre-Filter Subquery for VECTOR_SEARCH (Tombstone + Dates + System RBAC)
-            base_filters = "(is_deleted IS NOT TRUE OR is_deleted = FALSE) AND (expiry_date IS NULL OR expiry_date >= CURRENT_DATE()) AND (effective_date IS NULL OR effective_date <= CURRENT_DATE())"
+            # Resolve effective roles for document-level trimming
+            effective_roles = user_roles
+            if effective_roles is None:
+                try:
+                    from it_helpdesk_agent.app_utils.sso_auth import get_current_sso_user
+                    user = get_current_sso_user()
+                    if user:
+                        effective_roles = user.roles
+                except ImportError:
+                    pass
+
+            doc_rbac_sql = ""
+            if effective_roles is not None:
+                clean_user_roles = [r.lower().strip() for r in effective_roles]
+                query_params.append(bigquery.ArrayQueryParameter("user_roles_param", "STRING", clean_user_roles))
+                doc_rbac_sql = """ AND (
+                    ARRAY_LENGTH(allowed_roles) = 0 
+                    OR 'admin' IN UNNEST(allowed_roles)
+                    OR EXISTS (SELECT 1 FROM UNNEST(allowed_roles) AS r WHERE LOWER(r) IN UNNEST(@user_roles_param))
+                    OR EXISTS (SELECT 1 FROM UNNEST(@user_roles_param) AS ur WHERE ur IN ('admin', 'it_admin', 'security_admin'))
+                ) AND (
+                    sensitivity IN ('PUBLIC', 'INTERNAL')
+                    OR EXISTS (SELECT 1 FROM UNNEST(@user_roles_param) AS ur WHERE ur IN ('admin', 'it_admin', 'hr_admin', 'security_admin'))
+                    OR EXISTS (SELECT 1 FROM UNNEST(allowed_roles) AS r WHERE LOWER(r) IN UNNEST(@user_roles_param))
+                )"""
+
+            # 1. Construct Pre-Filter Subquery for VECTOR_SEARCH (Tombstone + Dates + System RBAC + Doc RBAC)
+            base_filters = f"(is_deleted IS NOT TRUE OR is_deleted = FALSE) AND (expiry_date IS NULL OR expiry_date >= CURRENT_DATE()) AND (effective_date IS NULL OR effective_date <= CURRENT_DATE()){doc_rbac_sql}"
             if clean_system != "ALL":
                 base_table_expr = f"(SELECT * FROM {full_table} WHERE system = @system_param AND {base_filters})"
                 query_params.append(bigquery.ScalarQueryParameter("system_param", "STRING", clean_system))
