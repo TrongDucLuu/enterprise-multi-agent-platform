@@ -164,9 +164,13 @@ def test_bigquery_hybrid_search_sql_generation_and_behavior(monkeypatch):
     """
     🔴 P0 NATIVE HYBRID SEARCH TEST:
     Verifies that when hybrid_search_enabled=True, BigQueryVectorKnowledgeStore generates
-    native BigQuery VECTOR_SEARCH with mode => 'HYBRID' and query_text_column => 'query_text',
-    and when False, generates pure vector SQL without lexical parameters.
-    Also verifies absence of manual LIKE CONCAT / re.split tokenizer noise.
+    native BigQuery VECTOR_SEARCH (Form 1 single query) with:
+      - query_value => @query_vector
+      - lexical_search_columns => ['title', 'content', 'keywords']
+      - lexical_search_query_value => @query_text
+    And when hybrid_search_enabled=False, generates pure vector SQL with query_value => @query_vector
+    without lexical_search_columns.
+    Also verifies absence of manual LIKE CONCAT / re.split tokenizer noise and incorrect parameters (mode, query_text_column).
     """
     mock_bq = MagicMock()
     mock_query_job = MagicMock()
@@ -193,12 +197,17 @@ def test_bigquery_hybrid_search_sql_generation_and_behavior(monkeypatch):
     job_config_hybrid = mock_bq.query.call_args[1]["job_config"]
     param_names = [p.name for p in job_config_hybrid.query_parameters]
 
-    # Native hybrid mode checks
+    # Native hybrid mode checks (Form 1 single query)
     assert "FROM VECTOR_SEARCH(" in sql_hybrid
-    assert "mode => 'HYBRID'" in sql_hybrid
-    assert "query_text_column => 'query_text'" in sql_hybrid
-    assert "(SELECT @query_vector AS embedding, @query_text AS query_text)" in sql_hybrid
+    assert "query_value => @query_vector" in sql_hybrid
+    assert "lexical_search_columns => ['title', 'content', 'keywords']" in sql_hybrid
+    assert "lexical_search_query_value => @query_text" in sql_hybrid
     assert "query_text" in param_names
+    
+    # Verify complete elimination of incorrect AI.SEARCH / Form 2 parameters
+    assert "mode => 'HYBRID'" not in sql_hybrid
+    assert "query_text_column" not in sql_hybrid
+    assert "(SELECT @query_vector" not in sql_hybrid
     
     # Verify complete elimination of manual tokenizer / LIKE CONCAT
     assert "LIKE CONCAT" not in sql_hybrid
@@ -222,9 +231,12 @@ def test_bigquery_hybrid_search_sql_generation_and_behavior(monkeypatch):
     param_names_pure = [p.name for p in job_config_pure.query_parameters]
 
     assert "FROM VECTOR_SEARCH(" in sql_pure_vec
+    assert "query_value => @query_vector" in sql_pure_vec
+    assert "lexical_search_columns" not in sql_pure_vec
+    assert "lexical_search_query_value" not in sql_pure_vec
     assert "mode => 'HYBRID'" not in sql_pure_vec
-    assert "query_text_column => 'query_text'" not in sql_pure_vec
-    assert "(SELECT @query_vector AS embedding)" in sql_pure_vec
+    assert "query_text_column" not in sql_pure_vec
+    assert "(SELECT @query_vector" not in sql_pure_vec
     assert "query_text" not in param_names_pure
     assert "LIKE CONCAT" not in sql_pure_vec
 
@@ -429,8 +441,9 @@ def test_hybrid_search_enabled_unified_default_across_backends(monkeypatch):
     param_names = [p.name for p in job_config_bq.query_parameters]
 
     # Since default is True, native BigQuery hybrid SQL must be generated
-    assert "mode => 'HYBRID'" in sql_bq
-    assert "query_text_column => 'query_text'" in sql_bq
+    assert "query_value => @query_vector" in sql_bq
+    assert "lexical_search_columns => ['title', 'content', 'keywords']" in sql_bq
+    assert "lexical_search_query_value => @query_text" in sql_bq
     assert "query_text" in param_names
 
 

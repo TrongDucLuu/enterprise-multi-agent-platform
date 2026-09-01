@@ -1001,11 +1001,11 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 FROM VECTOR_SEARCH(
                     {base_table_expr},
                     'embedding',
-                    (SELECT @query_vector AS embedding, @query_text AS query_text),
-                    query_text_column => 'query_text',
+                    query_value => @query_vector,
+                    lexical_search_columns => ['title', 'content', 'keywords'],
+                    lexical_search_query_value => @query_text,
                     top_k => @limit,
-                    distance_type => 'COSINE',
-                    mode => 'HYBRID'{options_clause}
+                    distance_type => 'COSINE'{options_clause}
                 )
                 ORDER BY distance ASC
                 """
@@ -1035,7 +1035,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 FROM VECTOR_SEARCH(
                     {base_table_expr},
                     'embedding',
-                    (SELECT @query_vector AS embedding),
+                    query_value => @query_vector,
                     top_k => @limit,
                     distance_type => 'COSINE'{options_clause}
                 )
