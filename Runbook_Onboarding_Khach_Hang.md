@@ -360,4 +360,43 @@ locust -f scripts/load_test/locustfile.py --host="https://helpdesk.customer.corp
      cache.invalidate(article_id="ERP-001")
      ```
 
+---
+
+## 7. Hướng Dẫn Kích Hoạt BigQuery Fluid Scaling (Thao Tác 1 Lần Của Cloud Admin)
+
+> [!NOTE]
+> Resource Terraform `google_bigquery_reservation` đã tự động khai báo Enterprise Edition và Autoscaling Slots (`max_slots`). Tuy nhiên, cơ chế **Fluid Scaling** (Fluid Autoscaling) của Google Cloud yêu cầu kích hoạt opt-in ở cấp **Organization / Admin Project** (ngoài phạm vi Terraform cấp project).
+
+### Lợi Ích Cốt Lõi Của Fluid Scaling
+1. **Loại bỏ 60-Second Billing Floor:** BigQuery Editions thông thường tính phí tối thiểu 60 giây cho mỗi chu kỳ scale-up slot. Khi bật Fluid Scaling, hệ thống tính phí chính xác theo từng giây thực tế của burst query, giảm tới 40–60% chi phí slot nhàn rỗi.
+2. **Dynamic Slot Sharing:** Chia sẻ slots linh hoạt giữa các reservation pools trong cùng tổ chức khi có lưu lượng đột biến.
+
+### Quy Trình Kích Hoạt Dành Cho Cloud Admin
+
+#### Cách 1: Qua Google Cloud Console (Giao diện web)
+1. **Đăng nhập GCP Console** bằng tài khoản có vai trò `roles/bigquery.admin` hoặc `roles/bigquery.resourceAdmin` tại Admin Project / Organization.
+2. Điều hướng tới: **BigQuery** > Menu bên trái chọn **Capacity Management** (Quản lý dung lượng).
+3. Chọn tab **Reservations** > Nhấp chọn reservation `helpdesk-reservation` (tại region `asia-southeast1` hoặc region triển khai).
+4. Nhấp vào nút **Edit** (Chỉnh sửa) ở góc trên.
+5. Tại mục **Autoscaling Configuration**, tích chọn **Enable Fluid Autoscaling** (hoặc gạt công tắc *Fluid Scaling* sang trạng thái **ON**).
+6. Nhấp **Save** để lưu thay đổi.
+
+#### Cách 2: Qua gcloud CLI
+Thực hiện lệnh sau với quyền Cloud Admin:
+```bash
+# Kích hoạt Fluid Scaling cho Reservation
+gcloud alpha bq reservations update helpdesk-reservation \
+  --project=PROJECT_ADMIN_ID \
+  --location=asia-southeast1 \
+  --enable-fluid-autoscaling=true
+
+# Kiểm tra xác nhận trạng thái
+gcloud alpha bq reservations describe helpdesk-reservation \
+  --project=PROJECT_ADMIN_ID \
+  --location=asia-southeast1 \
+  --format="yaml(name,edition,autoscale)"
+```
+Sau khi hoàn tất, hệ thống sẽ tự động hưởng toàn bộ lợi ích tối ưu hóa cước phí slot của BigQuery Fluid Scaling.
+
+
 

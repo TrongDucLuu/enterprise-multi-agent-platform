@@ -37,7 +37,7 @@ def ensure_vector_index(
     CREATE VECTOR INDEX IF NOT EXISTS `{index_name}`
     ON `{project_id}.{dataset_id}.{table_name}`(embedding)
     STORING (system, category, id, title, content, section_h1, section_h2, section_h3, source_uri, owner, effective_date, expiry_date, is_deleted, parent_doc_id, chunk_index, allowed_roles, sensitivity)
-    OPTIONS(distance_type='COSINE', index_type='IVF')
+    OPTIONS(distance_type='COSINE', index_type='IVF', lexical_search_columns=['title', 'content', 'keywords'])
     """
     try:
         logger.info("Verifying / Creating BigQuery Vector Index '%s' with STORING columns...", index_name)
@@ -482,6 +482,23 @@ def ingest_articles_to_bigquery(
             if isinstance(deleted_count, (int, float)) and deleted_count > 0:
                 logger.info("Cleaned up %d orphaned chunks for updated documents.", int(deleted_count))
 
+        # Invalidate semantic cache for updated/inserted articles
+        try:
+            from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
+            cache = get_semantic_cache()
+            updated_doc_ids = set()
+            for art in articles:
+                parent_id = art.get("parent_doc_id") or art.get("id")
+                sys_name = art.get("system")
+                if parent_id:
+                    updated_doc_ids.add((parent_id, sys_name))
+            for parent_id, sys_name in updated_doc_ids:
+                cache.invalidate(article_id=parent_id, system=sys_name)
+            if updated_doc_ids:
+                logger.info("Invalidated semantic cache for %d updated documents.", len(updated_doc_ids))
+        except Exception as cache_err:
+            logger.warning("Semantic cache invalidation during ingest encountered soft error: %s", cache_err)
+
     finally:
         # 7. Drop Temporary Staging Table
         try:
@@ -544,6 +561,28 @@ def reconcile_deleted_documents(
         affected = getattr(job, "num_dml_affected_rows", 0) or 0
         if affected > 0:
             logger.warning("Tombstoned %d chunks corresponding to deleted source documents.", affected)
+            try:
+                from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
+                cache = get_semantic_cache()
+                find_tombstoned_sql = f"""
+                SELECT DISTINCT id, parent_doc_id, system
+                FROM {full_target_table}
+                WHERE is_deleted = TRUE AND deleted_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 5 MINUTE)
+                """
+                tombstoned_query_job = bq_client.query(find_tombstoned_sql)
+                tombstoned_rows = tombstoned_query_job.result()
+                tombstoned_ids = set()
+                for row in tombstoned_rows:
+                    doc_id = getattr(row, "parent_doc_id", None) or getattr(row, "id", None)
+                    sys_name = getattr(row, "system", None)
+                    if doc_id:
+                        tombstoned_ids.add((doc_id, sys_name))
+                for doc_id, sys_name in tombstoned_ids:
+                    cache.invalidate(article_id=doc_id, system=sys_name)
+                if tombstoned_ids:
+                    logger.info("Invalidated semantic cache for %d tombstoned documents.", len(tombstoned_ids))
+            except Exception as cache_err:
+                logger.warning("Semantic cache invalidation during reconciliation encountered soft error: %s", cache_err)
         else:
             logger.info("Reconciliation complete: 0 documents required tombstoning.")
         return int(affected)

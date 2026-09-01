@@ -608,7 +608,7 @@ def test_ensure_vector_index_contains_storing_clause():
     assert mock_bq.query.called
     ddl = mock_bq.query.call_args[0][0]
     assert "STORING (system, category, id, title, content, section_h1, section_h2, section_h3, source_uri, owner, effective_date, expiry_date, is_deleted, parent_doc_id, chunk_index, allowed_roles, sensitivity)" in ddl
-    assert "OPTIONS(distance_type='COSINE', index_type='IVF')" in ddl
+    assert "OPTIONS(distance_type='COSINE', index_type='IVF', lexical_search_columns=['title', 'content', 'keywords'])" in ddl
 
 
 def test_check_vector_index_coverage_diagnostics(caplog):

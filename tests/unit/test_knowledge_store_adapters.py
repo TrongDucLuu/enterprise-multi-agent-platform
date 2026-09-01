@@ -110,12 +110,13 @@ def test_bigquery_vector_store_with_mock_client():
     assert "expiry_date IS NULL OR expiry_date >= CURRENT_DATE()" in sql_arg_all
     assert "effective_date IS NULL OR effective_date <= CURRENT_DATE()" in sql_arg_all
 
-    # 4. Test Index DDL contains STORING clause
+    # 4. Test Index DDL contains STORING clause and lexical_search_columns
     mock_bq.reset_mock()
     from scripts.ingest_knowledge_base import ensure_vector_index
     ensure_vector_index(mock_bq, project_id="test-project", dataset_id="test_kb", table_name="articles")
     ddl_call = mock_bq.query.call_args[0][0]
     assert "STORING (system, category, id, title, content, section_h1, section_h2, section_h3, source_uri, owner, effective_date, expiry_date, is_deleted, parent_doc_id, chunk_index, allowed_roles, sensitivity)" in ddl_call
+    assert "lexical_search_columns=['title', 'content', 'keywords']" in ddl_call
 
 
 def test_mutation_bigquery_search_omitting_base_filters_fails(monkeypatch):
@@ -161,9 +162,11 @@ def test_mutation_bigquery_search_omitting_base_filters_fails(monkeypatch):
 
 def test_bigquery_hybrid_search_sql_generation_and_behavior(monkeypatch):
     """
-    🟡 P2.4 HYBRID SEARCH TEST:
+    🔴 P0 NATIVE HYBRID SEARCH TEST:
     Verifies that when hybrid_search_enabled=True, BigQueryVectorKnowledgeStore generates
-    hybrid scoring CTE and parameterizes exact search tokens, and when False, generates pure vector SQL.
+    native BigQuery VECTOR_SEARCH with mode => 'HYBRID' and query_text_column => 'query_text',
+    and when False, generates pure vector SQL without lexical parameters.
+    Also verifies absence of manual LIKE CONCAT / re.split tokenizer noise.
     """
     mock_bq = MagicMock()
     mock_query_job = MagicMock()
@@ -184,43 +187,78 @@ def test_bigquery_hybrid_search_sql_generation_and_behavior(monkeypatch):
         lambda: {"fraction_lists_to_search": 0.05, "hybrid_search_enabled": True}
     )
 
-    store.search("Lỗi phân quyền M_BEST_EKO khi tạo ME21N", system="ERP", limit=3)
+    query_str = "Lỗi phân quyền M_BEST_EKO khi tạo ME21N"
+    store.search(query_str, system="ERP", limit=3)
     sql_hybrid = mock_bq.query.call_args[0][0]
     job_config_hybrid = mock_bq.query.call_args[1]["job_config"]
     param_names = [p.name for p in job_config_hybrid.query_parameters]
 
-    assert "WITH vector_matches AS" in sql_hybrid
-    assert "UNNEST(@query_tokens_param)" in sql_hybrid
-    assert "hybrid_score" in sql_hybrid
-    assert "ORDER BY hybrid_score DESC" in sql_hybrid
-    assert "query_tokens_param" in param_names
-    assert "candidate_limit" in param_names
+    # Native hybrid mode checks
+    assert "FROM VECTOR_SEARCH(" in sql_hybrid
+    assert "mode => 'HYBRID'" in sql_hybrid
+    assert "query_text_column => 'query_text'" in sql_hybrid
+    assert "(SELECT @query_vector AS embedding, @query_text AS query_text)" in sql_hybrid
+    assert "query_text" in param_names
+    
+    # Verify complete elimination of manual tokenizer / LIKE CONCAT
+    assert "LIKE CONCAT" not in sql_hybrid
+    assert "query_tokens_param" not in param_names
+    assert "WITH vector_matches AS" not in sql_hybrid
 
-    # Check extracted tokens
-    tokens_param = next(p for p in job_config_hybrid.query_parameters if p.name == "query_tokens_param")
-    assert "M_BEST_EKO" in tokens_param.values
-    assert "ME21N" in tokens_param.values
+    # Parameter value check
+    query_text_param = next(p for p in job_config_hybrid.query_parameters if p.name == "query_text")
+    assert query_text_param.value == query_str
 
-    # 2. Test with hybrid_search_enabled = False
+    # 2. Test with hybrid_search_enabled = False (Pure Vector mode)
     mock_bq.reset_mock()
     monkeypatch.setattr(
         "it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store.get_retrieval_config",
         lambda: {"fraction_lists_to_search": 0.05, "hybrid_search_enabled": False}
     )
 
-    store.search("Lỗi phân quyền M_BEST_EKO khi tạo ME21N", system="ERP", limit=3)
+    store.search(query_str, system="ERP", limit=3)
     sql_pure_vec = mock_bq.query.call_args[0][0]
     job_config_pure = mock_bq.query.call_args[1]["job_config"]
     param_names_pure = [p.name for p in job_config_pure.query_parameters]
 
-    assert "WITH vector_matches AS" not in sql_pure_vec
-    assert "UNNEST(@query_tokens_param)" not in sql_pure_vec
-    assert "hybrid_score" not in sql_pure_vec
-    assert "ORDER BY distance ASC" in sql_pure_vec
-    assert "query_tokens_param" not in param_names_pure
+    assert "FROM VECTOR_SEARCH(" in sql_pure_vec
+    assert "mode => 'HYBRID'" not in sql_pure_vec
+    assert "query_text_column => 'query_text'" not in sql_pure_vec
+    assert "(SELECT @query_vector AS embedding)" in sql_pure_vec
+    assert "query_text" not in param_names_pure
+    assert "LIKE CONCAT" not in sql_pure_vec
 
-    # Proves the flag directly alters generated SQL behavior in BigQuery production branch
+    # Proves the hybrid flag alters generated SQL behavior in BigQuery production branch
     assert sql_hybrid != sql_pure_vec
+
+
+def test_vietnamese_query_produces_no_token_fragmentation_noise():
+    """
+    🔴 P0 VIETNAMESE TOKENIZATION TEST:
+    Verifies that complex non-ASCII Vietnamese queries ("lỗi phân quyền đơn hàng")
+    pass cleanly to native BigQuery query_text without tokenizer splitting noise (e.g. ['PH', 'QUY', 'NG']).
+    """
+    mock_bq = MagicMock()
+    mock_query_job = MagicMock()
+    mock_query_job.result.return_value = []
+    mock_bq.query.return_value = mock_query_job
+
+    store = BigQueryVectorKnowledgeStore(
+        project_id="test-project",
+        dataset_id="test_kb",
+        table_name="articles",
+        bq_client=mock_bq,
+        embedding_fn=lambda t: [0.1] * 64
+    )
+
+    vn_query = "lỗi phân quyền đơn hàng"
+    store.search(vn_query, system="ERP", limit=3)
+
+    job_config = mock_bq.query.call_args[1]["job_config"]
+    query_text_param = next(p for p in job_config.query_parameters if p.name == "query_text")
+    # Preserves full authentic Vietnamese query string for BigQuery server-side NLP analyzer
+    assert query_text_param.value == "lỗi phân quyền đơn hàng"
+
 
 
 def test_in_memory_knowledge_store_section_hierarchy():
@@ -364,7 +402,7 @@ def test_hybrid_search_enabled_unified_default_across_backends(monkeypatch):
     """
     P1.3 Hybrid Search Default Parity:
     Verifies that when hybrid_search_enabled is omitted from config,
-    both InMemoryKnowledgeStore and BigQueryVectorKnowledgeStore resolve to True.
+    both InMemoryKnowledgeStore and BigQueryVectorKnowledgeStore resolve to True (Native HYBRID mode).
     """
     monkeypatch.setattr(
         "it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store.get_retrieval_config",
@@ -387,16 +425,20 @@ def test_hybrid_search_enabled_unified_default_across_backends(monkeypatch):
 
     store_bq.search("Lỗi ME21N", system="ERP", limit=3)
     sql_bq = mock_bq.query.call_args[0][0]
-    # Since default is True, hybrid SQL with UNNEST(@query_tokens_param) must be generated
-    assert "UNNEST(@query_tokens_param)" in sql_bq
-    assert "WITH vector_matches AS" in sql_bq
+    job_config_bq = mock_bq.query.call_args[1]["job_config"]
+    param_names = [p.name for p in job_config_bq.query_parameters]
+
+    # Since default is True, native BigQuery hybrid SQL must be generated
+    assert "mode => 'HYBRID'" in sql_bq
+    assert "query_text_column => 'query_text'" in sql_bq
+    assert "query_text" in param_names
 
 
-def test_hybrid_search_token_capping_50_words(monkeypatch):
+def test_hybrid_search_long_query_native_parameterization(monkeypatch):
     """
-    P1.4 Hybrid Search Token Capping:
-    Verifies that a 50-word input query is capped to at most 10 unique tokens in BigQuery SQL,
-    prioritizing longer technical/transaction tokens.
+    🔴 P0 NATIVE HYBRID SEARCH LONG QUERY TEST:
+    Verifies that a complex 50-word technical query passes cleanly to @query_text parameter
+    for BigQuery's native full-text/BM25 analyzer without artificial token truncation.
     """
     mock_bq = MagicMock()
     mock_query_job = MagicMock()
@@ -420,12 +462,10 @@ def test_hybrid_search_token_capping_50_words(monkeypatch):
 
     store_bq.search(long_50_word_query, system="ERP", limit=3)
     job_config = mock_bq.query.call_args[1]["job_config"]
-    tokens_param = next(p for p in job_config.query_parameters if p.name == "query_tokens_param")
+    query_text_param = next(p for p in job_config.query_parameters if p.name == "query_text")
 
-    assert len(tokens_param.values) <= 10
-    # Long technical tokens should be present
-    assert "ZFI_POSTING_001" in tokens_param.values
-    assert "AUTHORIZATION" in tokens_param.values or "M_BEST_EKO" in tokens_param.values
+    assert query_text_param.value == long_50_word_query.strip()
+
 
 
 def test_in_memory_multi_chunk_aggregation():

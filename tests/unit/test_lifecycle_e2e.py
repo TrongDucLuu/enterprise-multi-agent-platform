@@ -205,7 +205,7 @@ def test_bigquery_reconciliation_and_purge_sql_generation():
     assert affected == 5
     assert mock_bq.query.called
 
-    rec_sql = mock_bq.query.call_args[0][0]
+    rec_sql = mock_bq.query.call_args_list[0][0][0]
     assert "UPDATE `corp-ai.kb_prod.articles`" in rec_sql
     assert "SET is_deleted = TRUE, deleted_at = CURRENT_TIMESTAMP()" in rec_sql
     assert "source_uri NOT IN UNNEST(@active_source_uris)" in rec_sql

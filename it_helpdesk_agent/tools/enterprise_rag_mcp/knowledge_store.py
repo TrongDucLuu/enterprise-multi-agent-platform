@@ -975,63 +975,39 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             index_active = self._is_vector_index_active()
             options_clause = f", options => '{{\"fraction_lists_to_search\": {fraction_lists_to_search}}}'" if index_active else ""
 
-            # Extract search tokens / keywords for hybrid ranking (capped at 10, prioritizing longer technical tokens)
-            raw_tokens = [t.strip().upper() for t in re.split(r'[^a-zA-Z0-9_\-]+', query) if len(t.strip()) >= 2]
-            unique_tokens = list(dict.fromkeys(raw_tokens))
-            unique_tokens.sort(key=len, reverse=True)
-            tokens = unique_tokens[:10]
-
-            if hybrid_enabled and tokens:
-                candidate_k = max(limit * 4, 10)
-                query_params.append(bigquery.ScalarQueryParameter("candidate_limit", "INT64", candidate_k))
-                query_params.append(bigquery.ArrayQueryParameter("query_tokens_param", "STRING", tokens))
+            if hybrid_enabled:
+                query_params.append(bigquery.ScalarQueryParameter("query_text", "STRING", query.strip()))
                 sql = f"""
-                WITH vector_matches AS (
-                    SELECT 
-                        base.id, 
-                        base.parent_doc_id,
-                        base.chunk_index,
-                        base.system, 
-                        base.title, 
-                        base.content, 
-                        base.section_h1,
-                        base.section_h2,
-                        base.section_h3,
-                        base.allowed_roles,
-                        base.sensitivity,
-                        base.source_uri,
-                        base.category,
-                        base.keywords,
-                        base.owner,
-                        base.effective_date,
-                        base.expiry_date,
-                        base.is_deleted,
-                        distance
-                    FROM VECTOR_SEARCH(
-                        {base_table_expr},
-                        'embedding',
-                        (SELECT @query_vector AS embedding),
-                        top_k => @candidate_limit,
-                        distance_type => 'COSINE'{options_clause}
-                    )
-                )
                 SELECT 
-                    *,
-                    -- Hybrid scoring: vector cosine similarity + exact keyword / transaction code match bonus
-                    (1.0 - distance) + (
-                        SELECT COALESCE(SUM(
-                            CASE 
-                                WHEN UPPER(title) LIKE CONCAT('%', tok, '%') THEN 0.35
-                                WHEN UPPER(content) LIKE CONCAT('%', tok, '%') THEN 0.20
-                                WHEN EXISTS (SELECT 1 FROM UNNEST(keywords) kw WHERE UPPER(kw) = tok) THEN 0.45
-                                ELSE 0.0 
-                            END
-                        ), 0.0)
-                        FROM UNNEST(@query_tokens_param) tok
-                    ) AS hybrid_score
-                FROM vector_matches
-                ORDER BY hybrid_score DESC
-                LIMIT @limit
+                    base.id, 
+                    base.parent_doc_id,
+                    base.chunk_index,
+                    base.system, 
+                    base.title, 
+                    base.content, 
+                    base.section_h1,
+                    base.section_h2,
+                    base.section_h3,
+                    base.allowed_roles,
+                    base.sensitivity,
+                    base.source_uri,
+                    base.category,
+                    base.keywords,
+                    base.owner,
+                    base.effective_date,
+                    base.expiry_date,
+                    base.is_deleted,
+                    distance
+                FROM VECTOR_SEARCH(
+                    {base_table_expr},
+                    'embedding',
+                    (SELECT @query_vector AS embedding, @query_text AS query_text),
+                    query_text_column => 'query_text',
+                    top_k => @limit,
+                    distance_type => 'COSINE',
+                    mode => 'HYBRID'{options_clause}
+                )
+                ORDER BY distance ASC
                 """
             else:
                 # 3. Pure Vector Search SQL with BigQuery VECTOR_SEARCH Pre-Filtering & Stored Fields
@@ -1076,14 +1052,10 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 content_raw = getattr(row, "content", "")
                 content_str = str(content_raw) if content_raw is not None else ""
                 
-                # Hybrid score vs distance
-                hybrid_val = getattr(row, "hybrid_score", None)
-                if hybrid_val is not None and isinstance(hybrid_val, (int, float)):
-                    relevance = round(max(0.0, min(1.0, float(hybrid_val))), 2)
-                else:
-                    dist_val = getattr(row, "distance", 0.0)
-                    dist_float = float(dist_val) if isinstance(dist_val, (int, float)) else 0.0
-                    relevance = round(max(0.0, min(1.0, 1.0 - dist_float)), 2)
+                dist_val = getattr(row, "distance", 0.0)
+                dist_float = float(dist_val) if isinstance(dist_val, (int, float)) else 0.0
+                relevance = round(max(0.0, min(1.0, 1.0 - dist_float)), 2)
+
                 
                 sec_h1 = _extract_str(getattr(row, "section_h1", None))
                 sec_h2 = _extract_str(getattr(row, "section_h2", None))
