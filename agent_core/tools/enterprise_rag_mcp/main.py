@@ -18,6 +18,14 @@ except ImportError:
     from agent_core.tools.obligations_store import get_obligations_store
 
 try:
+    from agent_core.tools.registry import register_tool
+except ImportError:
+    def register_tool(name: str):
+        def deco(fn):
+            return fn
+        return deco
+
+try:
     from agent_core.app_utils.system_config import (
         get_configured_systems,
         get_valid_system_filters,
@@ -155,6 +163,7 @@ obligations_store = get_obligations_store()
 mcp = FastMCP(name="EnterpriseKnowledgeRAG")
 
 
+@register_tool("lookup_fact")
 @mcp.tool()
 def lookup_fact(key: str) -> dict:
     """
@@ -207,6 +216,7 @@ def lookup_fact(key: str) -> dict:
         }
 
 
+@register_tool("mcp_get_obligation")
 @mcp.tool()
 def get_obligation(obligation_id: str) -> dict:
     """
@@ -307,6 +317,7 @@ def _filter_by_role(results: list, user_roles: list[str] | None) -> list:
     return filtered
 
 
+@register_tool("search_enterprise_knowledge")
 @mcp.tool()
 def search_enterprise_knowledge(
     query: str,
@@ -410,6 +421,7 @@ def search_enterprise_knowledge(
         }]
 
 
+@register_tool("get_system_manual")
 @mcp.tool()
 def get_system_manual(article_id: str) -> dict:
     """
@@ -486,6 +498,7 @@ def get_system_manual(article_id: str) -> dict:
     return {"status": "success", "article": art_dict}
 
 
+@register_tool("draft_email_response")
 @mcp.tool()
 def draft_email_response(
     user_name: str,

@@ -13,6 +13,7 @@ from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 @pytest.fixture(autouse=True)
 def default_ticket_admin():
     """Sets an authorized IT support/admin user in context for general ticket tool tests."""
+    _TICKETS_DB.clear()
     user = SSOUser(
         user_id="it-admin-01",
         email="admin@company.com",
@@ -21,9 +22,6 @@ def default_ticket_admin():
     token = current_sso_user.set(user)
     yield user
     current_sso_user.reset(token)
-
-
-def setup_function():
     _TICKETS_DB.clear()
 
 def test_create_and_get_ticket():

@@ -1,0 +1,7 @@
+{"query": "Làm thế nào để reset mật khẩu Active Directory?", "expected_tier": "l1_selfservice_agent", "category": "FAQ"}
+{"query": "Hướng dẫn cài đặt máy in văn phòng tầng 4", "expected_tier": "l1_selfservice_agent", "category": "FAQ"}
+{"query": "Tôi không kết nối được VPN văn phòng", "expected_tier": "l1_selfservice_agent", "category": "Troubleshooting"}
+{"query": "Quy trình phê duyệt Purchase Order trên hệ thống SAP ERP", "expected_tier": "l2_enterprise_rag_agent", "category": "ERP"}
+{"query": "Lỗi khóa kỳ kế toán trên hệ thống ERP", "expected_tier": "l2_enterprise_rag_agent", "category": "ERP"}
+{"query": "Phân tích nguyên nhân lỗi OutOfMemoryError từ stack trace sau: java.lang.OutOfMemoryError: Java heap space", "expected_tier": "l3_deep_diagnostics_agent", "category": "RCA"}
+{"query": "Rà soát điều khoản Uptime 99.9% và MTTR 4 giờ trong hợp đồng SAP", "expected_tier": "l3_deep_diagnostics_agent", "category": "Compliance"}

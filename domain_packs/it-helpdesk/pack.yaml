@@ -1,0 +1,7 @@
+id: it-helpdesk
+name: "IT Helpdesk & Enterprise Support"
+version: "1.0.0"
+description: "Production-ready 3-tier IT helpdesk system supporting ERP, HRM, CRM."
+author: "TrongDucLuu"
+min_core_version: "2.0.0"
+entry_agent: root_triage_orchestrator

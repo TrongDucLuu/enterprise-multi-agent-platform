@@ -1,0 +1,162 @@
+# Enterprise Systems & RBAC Configuration
+# Customer-specific business systems, descriptions, vendors, and role requirements.
+
+shared_admin_roles:
+  - "it_admin"
+  - "sys_admin"
+  - "admin"
+  - "support_agent"
+  - "helpdesk_operator"
+  - "lead_engineer"
+
+# Enterprise User / Service Role Mappings
+# Maps authenticated email addresses to enterprise RBAC roles
+user_role_mappings:
+  "admin@company.com":
+    - "it_admin"
+    - "sys_admin"
+  "it.admin@company.com":
+    - "it_admin"
+  "erp.user@company.com":
+    - "erp_user"
+  "finance.lead@company.com":
+    - "finance_user"
+    - "accountant"
+  "hr.manager@company.com":
+    - "hr_manager"
+    - "hr_specialist"
+  "sales.director@company.com":
+    - "sales_manager"
+    - "sales_rep"
+
+systems:
+  ERP:
+    display_name: "Enterprise Resource Planning (ERP)"
+    vendor_examples: "SAP / Oracle"
+    description: "Hệ thống quản lý nguồn lực doanh nghiệp, phân quyền Purchase Order (PO), kỳ kế toán, đồng bộ kho vận."
+    common_issues:
+      - "Lỗi phân quyền Purchase Order (PO)"
+      - "Khóa kỳ kế toán (Fiscal Period Closure)"
+      - "Lỗi đồng bộ dữ liệu kho hàng (Inventory Sync Error)"
+    roles:
+      - "erp_user"
+      - "finance_user"
+      - "accountant"
+      - "procurement_specialist"
+      - "procurement_manager"
+
+  HRM:
+    display_name: "Human Resource Management (HRM)"
+    vendor_examples: "Workday / BambooHR"
+    description: "Hệ thống quản trị nhân sự, chấm công vân tay, bảng lương Payroll và quy trình Onboarding nhân sự."
+    common_issues:
+      - "Lỗi chấm công vân tay / Timesheet sync"
+      - "Khóa bảng lương Payroll"
+      - "Quy trình Onboarding nhân sự mới"
+    roles:
+      - "hr_specialist"
+      - "hr_manager"
+      - "payroll_admin"
+      - "hr_operations"
+
+  CRM:
+    display_name: "Customer Relationship Management (CRM)"
+    vendor_examples: "Salesforce / HubSpot"
+    description: "Hệ thống quan hệ khách hàng, phân quyền Territory, quản lý Lead/Pipeline và API limits."
+    common_issues:
+      - "Lỗi phân quyền Territory & chuyển giao Account khách hàng"
+      - "Lỗi đồng bộ Lead / Contact từ Webform"
+      - "Vượt giới hạn API Daily Limit"
+    roles:
+      - "sales_rep"
+      - "sales_manager"
+      - "marketing"
+      - "crm_admin"
+
+# Centralized Domain Classification Keywords
+# Used with word-boundary (\b) regex for intent routing and telemetry
+domain_keywords:
+  ERP:
+    - "ERP"
+    - "SAP"
+    - "ORACLE"
+    - "ME21N"
+    - "PURCHASE ORDER"
+    - "PO"
+    - "KHO HÀNG"
+    - "KẾ TOÁN"
+    - "INVENTORY"
+    - "TÀI CHÍNH"
+  HRM:
+    - "HRM"
+    - "WORKDAY"
+    - "BAMBOOHR"
+    - "CHẤM CÔNG"
+    - "TIMESHEET"
+    - "BẢNG LƯƠNG"
+    - "PAYROLL"
+    - "ONBOARDING"
+    - "BHXH"
+    - "NGHỈ PHÉP"
+    - "NHÂN SỰ"
+  CRM:
+    - "CRM"
+    - "SALESFORCE"
+    - "HUBSPOT"
+    - "LEAD"
+    - "PIPELINE"
+    - "TERRITORY"
+    - "OPPORTUNITY"
+    - "SALES"
+    - "KHÁCH HÀNG"
+  L3_DIAGNOSTICS:
+    - "ROOT CAUSE"
+    - "STACK TRACE"
+    - "MEMORY LEAK"
+    - "THREAD DUMP"
+    - "HEAP DUMP"
+    - "CORRUPT"
+    - "SEGFAULT"
+    - "KERNEL PANIC"
+    - "OUT OF MEMORY"
+    - "DEADLOCK"
+    - "CRASH LOG"
+    - "CORE DUMP"
+  TRAP_REFUSAL:
+    - "THỜI TIẾT"
+    - "WEATHER"
+    - "VIẾT THƠ"
+    - "POEM"
+    - "LÀM THƠ"
+    - "CHỨNG KHOÁN"
+    - "BITCOIN"
+    - "CRYPTO"
+    - "NẤU ĂN"
+    - "RECIPE"
+    - "XEM PHIM"
+    - "BÓNG ĐÁ"
+    - "TỬ VI"
+
+# Tiered Chunking Pipeline Strategy Configuration
+chunking:
+  default_strategy: "auto"                    # "auto" (section-aware with fallback), "fixed", "semantic"
+  max_chunk_size: 1200                        # Maximum characters per chunk
+  overlap: 150                                # Overlap characters between chunks
+  well_structured_max_section_ratio: 0.65     # Section must not exceed 65% of total document length
+  well_structured_min_avg_section_length: 100 # Average section length must be >= 100 characters
+  systems:
+    HRM:
+      strategy: "semantic"                    # Example manual override flag for complex policy documents
+
+# Document Processing & PDF Parsing Configuration
+document_processing:
+  pdf_parser: "pypdf_flat"                    # "pypdf_flat" (default, lightweight) or "document_ai"
+  document_ai_processor_id: ""                # Mandatory if pdf_parser is "document_ai"
+  document_ai_timeout_seconds: 60             # API timeout per call
+  document_ai_max_retries: 2                  # Retry attempts with exponential backoff
+
+# Enterprise RAG & BigQuery Retrieval Configuration
+retrieval:
+  fraction_lists_to_search: 0.05              # Fraction of IVF lists to search (0.0 to 1.0)
+  hybrid_search_enabled: true                 # Enable lexical BM25/keyword boost alongside vector search
+

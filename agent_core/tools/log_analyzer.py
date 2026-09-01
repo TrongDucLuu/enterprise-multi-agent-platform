@@ -2,7 +2,11 @@ import os
 import re
 from typing import Optional
 from agent_core.app_utils.sso_auth import require_role
+from agent_core.tools.registry import register_tool
 
+
+@register_tool("analyze_log_rca")
+@register_tool("analyze_system_logs_for_rca")
 def analyze_system_logs_for_rca(
     log_ref: Optional[str] = None,
     raw_logs: Optional[str] = None,

@@ -5,10 +5,12 @@ from typing import Optional
 from agent_core.app_utils.sso_auth import require_role
 from agent_core.tools.obligations_store import get_obligations_store
 from agent_core.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStoreUnavailableError
+from agent_core.tools.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
 
+@register_tool("get_obligation")
 def get_obligation(obligation_id: str) -> dict:
     """
     Tra cứu nghĩa vụ pháp lý, điều khoản hợp đồng hoặc cam kết SLA chuẩn mực (L3 Obligations Registry).
@@ -72,6 +74,7 @@ def get_obligation(obligation_id: str) -> dict:
         }
 
 
+@register_tool("list_contract_obligations")
 def list_contract_obligations(
     source_id: Optional[str] = None,
     applies_to: Optional[str] = None,
@@ -121,6 +124,8 @@ def list_contract_obligations(
         }
 
 
+@register_tool("review_it_contract_sla")
+@register_tool("review_contract_sla")
 def review_it_contract_sla(
     contract_ref: Optional[str] = None,
     contract_text: Optional[str] = None,

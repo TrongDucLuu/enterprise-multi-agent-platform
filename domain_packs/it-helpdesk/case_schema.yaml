@@ -1,0 +1,29 @@
+categories:
+  - General
+  - Hardware
+  - Software
+  - Access_Permissions
+  - Network
+  - ERP
+  - HRM
+  - CRM
+  - Other
+priorities:
+  - Low
+  - Medium
+  - High
+  - Critical
+tiers:
+  - L1_SelfService
+  - L2_Enterprise_RAG
+  - L3_Deep_Diagnostics
+  - Human_Ops
+statuses:
+  - Open
+  - In_Progress
+  - Escalated
+  - Resolved
+  - Closed
+initial_tier: L1_SelfService
+default_category: General
+default_priority: Medium
