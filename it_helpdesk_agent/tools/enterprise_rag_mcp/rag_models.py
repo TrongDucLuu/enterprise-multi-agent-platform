@@ -38,6 +38,24 @@ class Fact(BaseModel):
         return self.value
 
 
+class Obligation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    obligation_id: str
+    source_id: str
+    source_title: str
+    authority: str
+    article: Optional[str] = None
+    description: str
+    severity: str  # 'critical' | 'high' | 'medium' | 'low'
+    applies_to: str  # 'vendor' | 'customer' | 'both'
+    date_added: str  # YYYY-MM-DD
+    date_effective: str  # YYYY-MM-DD
+    date_expires: Optional[str] = None  # YYYY-MM-DD
+    status: str = "active"  # 'active' | 'superseded' | 'expired'
+    source_document_path: Optional[str] = None
+
+
 class SectionHierarchy(BaseModel):
     """Hierarchical document section path (H1/H2/H3)."""
     h1: Optional[str] = None

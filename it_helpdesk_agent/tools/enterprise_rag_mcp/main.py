@@ -10,10 +10,12 @@ from starlette.responses import JSONResponse
 
 try:
     from knowledge_store import get_knowledge_store, get_facts_store, KnowledgeStoreUnavailableError, wrap_retrieved_document
-    from rag_models import SearchResult, Fact
+    from rag_models import SearchResult, Fact, Obligation
+    from obligations_store import get_obligations_store
 except ImportError:
     from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import get_knowledge_store, get_facts_store, KnowledgeStoreUnavailableError, wrap_retrieved_document
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult, Fact
+    from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult, Fact, Obligation
+    from it_helpdesk_agent.tools.obligations_store import get_obligations_store
 
 try:
     from it_helpdesk_agent.app_utils.system_config import (
@@ -149,6 +151,7 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
 
 store = get_knowledge_store()
 facts_store = get_facts_store()
+obligations_store = get_obligations_store()
 mcp = FastMCP(name="EnterpriseKnowledgeRAG")
 
 
@@ -201,6 +204,76 @@ def lookup_fact(key: str) -> dict:
             "status": "error",
             "key": clean_key,
             "message": f"Lỗi tra cứu fact: {str(e)}",
+        }
+
+
+@mcp.tool()
+def get_obligation(obligation_id: str) -> dict:
+    """
+    Tra cứu nghĩa vụ pháp lý, điều khoản hợp đồng hoặc cam kết SLA chuẩn mực (L3 Obligations Registry).
+    - obligation_id: Mã định danh nghĩa vụ (ví dụ: 'OBL-SAP-001', 'OBL-DPA-001', 'OBL-SEC-001').
+    Bảo vệ bởi RBAC: chỉ cho phép compliance_officer, it_admin, sys_admin, legal_counsel.
+    """
+    try:
+        from it_helpdesk_agent.app_utils.sso_auth import require_role
+    except ImportError:
+        try:
+            from app_utils.sso_auth import require_role
+        except ImportError:
+            return {"status": "forbidden", "error": "Access Denied", "message": "Hệ thống xác thực không khả dụng."}
+
+    is_allowed, error_msg = require_role(["compliance_officer", "it_admin", "sys_admin", "legal_counsel"])
+    if not is_allowed:
+        return {
+            "status": "forbidden",
+            "error": "Access Denied",
+            "message": error_msg,
+        }
+
+    if not obligation_id or not str(obligation_id).strip():
+        return {
+            "status": "error",
+            "message": "obligation_id không được để trống.",
+        }
+
+    clean_id = str(obligation_id).strip()
+    try:
+        ob = obligations_store.get_obligation(clean_id)
+        if not ob:
+            return {
+                "status": "not_found",
+                "obligation_id": clean_id,
+                "message": f"Nghĩa vụ pháp lý '{clean_id}' không tồn tại trong cơ sở L3 Obligations Registry.",
+            }
+        return {
+            "status": "success",
+            "obligation_id": ob.obligation_id,
+            "source_id": ob.source_id,
+            "source_title": ob.source_title,
+            "authority": ob.authority,
+            "article": ob.article,
+            "description": ob.description,
+            "severity": ob.severity,
+            "applies_to": ob.applies_to,
+            "date_added": ob.date_added,
+            "date_effective": ob.date_effective,
+            "date_expires": ob.date_expires,
+            "status_lifecycle": ob.status,
+            "source_document_path": ob.source_document_path,
+        }
+    except KnowledgeStoreUnavailableError as e:
+        logger.error("Obligations store unavailable: %s", e)
+        return {
+            "status": "error",
+            "obligation_id": clean_id,
+            "message": "Cơ sở dữ liệu L3 Obligations Registry tạm thời gián đoạn. Vui lòng thử lại sau.",
+        }
+    except Exception as e:
+        logger.error("Error during get_obligation: %s", e)
+        return {
+            "status": "error",
+            "obligation_id": clean_id,
+            "message": f"Lỗi tra cứu nghĩa vụ: {str(e)}",
         }
 
 

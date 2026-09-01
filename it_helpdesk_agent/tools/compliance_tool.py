@@ -1,7 +1,125 @@
 import os
 import re
+import logging
 from typing import Optional
 from it_helpdesk_agent.app_utils.sso_auth import require_role
+from it_helpdesk_agent.tools.obligations_store import get_obligations_store
+from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStoreUnavailableError
+
+logger = logging.getLogger(__name__)
+
+
+def get_obligation(obligation_id: str) -> dict:
+    """
+    Tra cứu nghĩa vụ pháp lý, điều khoản hợp đồng hoặc cam kết SLA chuẩn mực (L3 Obligations Registry).
+    - obligation_id: Mã định danh nghĩa vụ (ví dụ: 'OBL-SAP-001', 'OBL-DPA-001', 'OBL-SEC-001').
+    Bảo vệ bởi RBAC: chỉ cho phép compliance_officer, it_admin, sys_admin, legal_counsel.
+    """
+    # 1. RBAC Authorization Gate
+    is_allowed, error_msg = require_role(["compliance_officer", "it_admin", "sys_admin", "legal_counsel"])
+    if not is_allowed:
+        return {
+            "status": "forbidden",
+            "error": "Access Denied",
+            "message": error_msg,
+        }
+
+    if not obligation_id or not str(obligation_id).strip():
+        return {
+            "status": "error",
+            "message": "obligation_id không được để trống.",
+        }
+
+    clean_id = str(obligation_id).strip()
+    try:
+        store = get_obligations_store()
+        ob = store.get_obligation(clean_id)
+        if not ob:
+            return {
+                "status": "not_found",
+                "obligation_id": clean_id,
+                "message": f"Nghĩa vụ pháp lý '{clean_id}' không tồn tại trong cơ sở L3 Obligations Registry.",
+            }
+        return {
+            "status": "success",
+            "obligation_id": ob.obligation_id,
+            "source_id": ob.source_id,
+            "source_title": ob.source_title,
+            "authority": ob.authority,
+            "article": ob.article,
+            "description": ob.description,
+            "severity": ob.severity,
+            "applies_to": ob.applies_to,
+            "date_added": ob.date_added,
+            "date_effective": ob.date_effective,
+            "date_expires": ob.date_expires,
+            "status_lifecycle": ob.status,
+            "source_document_path": ob.source_document_path,
+        }
+    except KnowledgeStoreUnavailableError as e:
+        logger.error("Obligations store unavailable: %s", e)
+        return {
+            "status": "error",
+            "obligation_id": clean_id,
+            "message": "Cơ sở dữ liệu L3 Obligations Registry tạm thời gián đoạn. Vui lòng thử lại sau.",
+        }
+    except Exception as e:
+        logger.error("Error during get_obligation: %s", e)
+        return {
+            "status": "error",
+            "obligation_id": clean_id,
+            "message": f"Lỗi tra cứu nghĩa vụ: {str(e)}",
+        }
+
+
+def list_contract_obligations(
+    source_id: Optional[str] = None,
+    applies_to: Optional[str] = None,
+    severity: Optional[str] = None,
+    status: str = "active",
+) -> dict:
+    """
+    Danh sách các nghĩa vụ hợp đồng/pháp lý (L3 Obligations Registry) theo bộ lọc.
+    - source_id: Mã hợp đồng/chính sách nguồn (ví dụ: 'CONTRACT-SAP-ENTERPRISE-2024').
+    - applies_to: 'vendor' | 'customer' | 'both'.
+    - severity: 'critical' | 'high' | 'medium' | 'low'.
+    - status: 'active' | 'superseded' | 'expired'.
+    Bảo vệ bởi RBAC: chỉ cho phép compliance_officer, it_admin, sys_admin, legal_counsel.
+    """
+    is_allowed, error_msg = require_role(["compliance_officer", "it_admin", "sys_admin", "legal_counsel"])
+    if not is_allowed:
+        return {
+            "status": "forbidden",
+            "error": "Access Denied",
+            "message": error_msg,
+        }
+
+    try:
+        store = get_obligations_store()
+        items = store.list_obligations(
+            source_id=source_id,
+            applies_to=applies_to,
+            severity=severity,
+            status=status,
+        )
+        return {
+            "status": "success",
+            "count": len(items),
+            "obligations": [ob.model_dump() for ob in items],
+        }
+    except KnowledgeStoreUnavailableError as e:
+        logger.error("Obligations store unavailable: %s", e)
+        return {
+            "status": "error",
+            "message": "Cơ sở dữ liệu L3 Obligations Registry tạm thời gián đoạn.",
+        }
+    except Exception as e:
+        logger.error("Error during list_contract_obligations: %s", e)
+        return {
+            "status": "error",
+            "message": f"Lỗi liệt kê nghĩa vụ: {str(e)}",
+        }
+
 
 def review_it_contract_sla(
     contract_ref: Optional[str] = None,
@@ -12,6 +130,7 @@ def review_it_contract_sla(
     """
     Scans IT contracts, Vendor Service Level Agreements (SLA), and Data Protection Addendums (DPA).
     Extracts uptime commitments, MTTR guarantees, penalty/credit thresholds, and data security obligations.
+    Cross-references registered baseline obligations from L3 Obligations Registry.
     Supports reference-based ingestion (contract_ref) for long contract documents.
     Protected by RBAC: requires compliance_officer, it_admin, sys_admin, or legal_counsel.
     """
@@ -62,7 +181,7 @@ def review_it_contract_sla(
 
     text_lower = content.lower()
 
-    # 2. Extract SLA Uptime targets (handles prefix 'uptime: 99.9%', suffix '99.9% uptime', and inline 'cam kết 99.95% uptime')
+    # 3. Extract SLA Uptime targets (handles prefix 'uptime: 99.9%', suffix '99.9% uptime', and inline 'cam kết 99.95% uptime')
     uptime_matches = re.findall(
         r'(?:(\d{2}(?:\.\d{1,4})?)\s*%\s*(?:uptime|availability|sẵn sàng)|(?:uptime|availability|mức độ sẵn sàng|tỉ lệ sẵn sàng)[^\n%]{0,40}?(\d{2}(?:\.\d{1,4})?)\s*%)',
         text_lower
@@ -74,10 +193,7 @@ def review_it_contract_sla(
             uptime_values.append(f"{val}% Uptime")
     uptime_commitments = uptime_values or ["Không tìm thấy điều khoản uptime cụ thể"]
 
-    # 3. Extract MTTR / Response / Resolution Time
-    # Supports:
-    # - Suffix: "30 phút phản hồi", "2 hours response", "4 giờ giải quyết"
-    # - Prefix / Inline: "Thời gian phản hồi sự cố khẩn cấp (P1) trong vòng 30 phút", "Response Time: 2 hours", "giải quyết trong vòng 4 giờ"
+    # 4. Extract MTTR / Response / Resolution Time
     mttr_patterns = [
         # Suffix: (\d+) (unit) (action)
         r'(\d+)\s*(giờ|hours?|phút|mins?|minutes?|ngày|days?)\s*(?:để|cho)?\s*(?:phản hồi|giải quyết|khắc phục|xử lý|response|resolve|resolution|mttr)',
@@ -96,7 +212,7 @@ def review_it_contract_sla(
     if not mttr_commitments:
         mttr_commitments = ["Chưa rõ cam kết thời gian phản hồi"]
 
-    # 4. Analyze Security & Privacy Terms
+    # 5. Analyze Security & Privacy Terms
     compliance_flags = {
         "NDA_CONFIDENTIALITY": bool(re.search(r'(bảo mật|confidentiality|non-disclosure|tiết lộ)', text_lower)),
         "DPA_DATA_PROTECTION": bool(re.search(r'(dpa|data protection|quyền riêng tư|gdpr|personal data|dữ liệu cá nhân)', text_lower)),
@@ -105,7 +221,22 @@ def review_it_contract_sla(
         "DATA_BREACH_NOTIFICATION": bool(re.search(r'(thông báo sự cố|breach notification|24h|48h|72h)', text_lower)),
     }
 
-    # 5. Identify Potential Risks
+    # 6. Cross-reference registered L3 Obligations from registry
+    registered_obligations = []
+    try:
+        store = get_obligations_store()
+        all_obs = store.list_obligations(status="active")
+        v_lower = (vendor_name or "").lower()
+        for ob in all_obs:
+            if (
+                (v_lower in ob.source_id.lower() or v_lower in ob.source_title.lower())
+                or (ob.source_id.lower() in text_lower)
+            ):
+                registered_obligations.append(ob.model_dump())
+    except Exception as e:
+        logger.warning("Could not cross-reference registered obligations: %s", e)
+
+    # 7. Identify Potential Risks
     risk_assessment = []
     if not compliance_flags["SERVICE_CREDITS_PENALTY"]:
         risk_assessment.append("RỦI RO CAO: Hợp đồng thiếu cơ chế Service Credits hoặc bồi thường tài chính khi nhà cung cấp vi phạm SLA.")
@@ -131,6 +262,7 @@ def review_it_contract_sla(
         "uptime_commitments": uptime_commitments,
         "mttr_commitments": mttr_commitments,
         "compliance_checklist": compliance_flags,
+        "registered_contract_obligations": registered_obligations,
         "identified_legal_risks": risk_assessment or ["Hợp đồng đáp ứng đầy đủ các tiêu chuẩn an toàn cơ bản."],
         # Mandatory P0 Output Guardrails
         "confidence_level": confidence_level,
@@ -141,3 +273,4 @@ def review_it_contract_sla(
             "hoặc đàm phán hợp đồng bắt buộc phải được Bộ phận Pháp chế (Legal/Compliance) xác minh và phê duyệt."
         ),
     }
+

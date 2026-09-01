@@ -22,7 +22,11 @@ from it_helpdesk_agent.tools.ticketing_tool import (
     list_user_tickets
 )
 from it_helpdesk_agent.tools.log_analyzer import analyze_system_logs_for_rca
-from it_helpdesk_agent.tools.compliance_tool import review_it_contract_sla
+from it_helpdesk_agent.tools.compliance_tool import (
+    review_it_contract_sla,
+    get_obligation,
+    list_contract_obligations,
+)
 
 PROJECT_ID, MODEL_LOC, SERVICE_LOC, SECRETS = init_environment()
 from it_helpdesk_agent.app_utils.env import is_production_mode, get_model_names_for_environment
@@ -458,12 +462,13 @@ l3_deep_diagnostics_agent = Agent(
          b. **Nguyên nhân gốc rễ (Root Cause)**: Chỉ ra chính xác module/dòng lệnh/cấu hình bị lỗi.
          c. **Giải pháp khắc phục tức thời (Immediate Workaround)**
          d. **Kế hoạch phòng ngừa dài hạn (Long-term Prevention Action)**
-    2. **Phân tích Pháp lý IT & Cam kết SLA Hợp đồng:**
+    2. **Phân tích Pháp lý IT & Cam kết SLA Hợp đồng (L3 Obligations Registry):**
+       - Sử dụng công cụ `get_obligation` và `list_contract_obligations` để tra cứu các cam kết SLA chuẩn mực, điều khoản bảo mật và chế tài phạt vi phạm từ L3 Obligations Registry.
        - Sử dụng công cụ `review_it_contract_sla` để rà soát các hợp đồng dịch vụ IT, điều khoản bảo mật (NDA/DPA), chỉ số Uptime, cam kết MTTR và chế tài phạt (Service Credits). Hỗ trợ truyền tham chiếu file hợp đồng qua `contract_ref`.
        - Chỉ ra các rủi ro pháp lý tiềm ẩn khi đối tác vi phạm cam kết hoặc thiếu điều khoản bồi thường.
     3. **Cập nhật Ticket Cấp cao:** Sử dụng `update_ticket_status` và `route_ticket_to_tier` để đồng bộ kết quả phân tích chuyên sâu vào hệ thống.
     4. **Bảo mật & Định danh (Zero-Trust Identity & RBAC):**
-       - Phân tích log chuyên sâu và rà soát hợp đồng yêu cầu quyền quản trị kỹ thuật hoặc pháp chế. Nếu thiếu quyền, thông báo rõ ràng lý do từ chối.
+       - Phân tích log chuyên sâu, tra cứu nghĩa vụ pháp lý và rà soát hợp đồng yêu cầu quyền quản trị kỹ thuật hoặc pháp chế (compliance_officer, legal_counsel, it_admin, sys_admin). Nếu thiếu quyền, thông báo rõ ràng lý do từ chối.
     5. **Nguyên Tắc Guardrails & Tuyên Bố Trách Nhiệm (Mandatory Disclaimers):**
        - Mọi kết luận RCA và đánh giá pháp lý/SLA là thông tin hỗ trợ chẩn đoán tự động của AI (`requires_human_review: true`).
        - Luôn đính kèm mức độ tự tin (`confidence_level`) và lời nhắc kỹ sư/chuyên viên pháp chế phê duyệt trước khi hành động chính thức.
@@ -472,6 +477,8 @@ l3_deep_diagnostics_agent = Agent(
     tools=[
         analyze_system_logs_for_rca,
         review_it_contract_sla,
+        get_obligation,
+        list_contract_obligations,
         update_ticket_status,
         route_ticket_to_tier,
         get_ticket_details,
