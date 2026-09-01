@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Callable, Any, Dict, List
 from dataclasses import dataclass, field
 
-logger = logging.getLogger("it_helpdesk_agent")
+logger = logging.getLogger("agent_core")
 
 
 def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:

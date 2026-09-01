@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import Optional, Any
 
-from it_helpdesk_agent.app_utils.system_config import get_document_processing_config
+from agent_core.app_utils.system_config import get_document_processing_config
 
 PARSER_VERSION = "1.0.0"
 

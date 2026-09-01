@@ -8,14 +8,14 @@ from google.adk.memory.vertex_ai_memory_bank_service import VertexAiMemoryBankSe
 from google.adk.sessions import InMemorySessionService
 from vertexai import agent_engines
 from google.genai import types
-from it_helpdesk_agent.agent import root_orchestrator
+from agent_core.agent import root_orchestrator
 
 load_dotenv()
 
 async def main():
     project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
     resource_location = os.getenv("GOOGLE_CLOUD_REGION", "us-central1")
-    agent_name = os.getenv("AGENT_ENGINE_MEMORY_BANK_NAME", "it_helpdesk_agent")
+    agent_name = os.getenv("AGENT_ENGINE_MEMORY_BANK_NAME", "agent_core")
     
     print(f"--- Initializing IT Helpdesk Agent Runner in {resource_location} ---")
     if project_id:

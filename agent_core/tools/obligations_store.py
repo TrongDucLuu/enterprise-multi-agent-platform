@@ -3,8 +3,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import Obligation
-from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStoreUnavailableError
+from agent_core.tools.enterprise_rag_mcp.rag_models import Obligation
+from agent_core.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStoreUnavailableError
 
 logger = logging.getLogger(__name__)
 

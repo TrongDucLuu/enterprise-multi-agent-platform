@@ -1,7 +1,7 @@
 import os
 import re
 from typing import Optional
-from it_helpdesk_agent.app_utils.sso_auth import require_role
+from agent_core.app_utils.sso_auth import require_role
 
 def analyze_system_logs_for_rca(
     log_ref: Optional[str] = None,

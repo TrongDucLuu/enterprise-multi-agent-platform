@@ -7,6 +7,89 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "agent-core"
+version = "2.0.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "fastapi" },
+    { name = "fastmcp" },
+    { name = "google-adk" },
+    { name = "google-auth" },
+    { name = "google-cloud-aiplatform" },
+    { name = "google-cloud-bigquery" },
+    { name = "google-cloud-discoveryengine" },
+    { name = "google-cloud-documentai" },
+    { name = "google-cloud-firestore" },
+    { name = "google-cloud-logging" },
+    { name = "google-cloud-secret-manager" },
+    { name = "google-cloud-storage" },
+    { name = "google-genai" },
+    { name = "mcp" },
+    { name = "pydantic" },
+    { name = "pypdf" },
+    { name = "python-docx" },
+    { name = "python-dotenv" },
+    { name = "pyyaml" },
+    { name = "redis" },
+    { name = "uvicorn" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "fakeredis" },
+    { name = "locust" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-mock" },
+]
+ingest = [
+    { name = "google-cloud-documentai" },
+    { name = "pypdf" },
+    { name = "python-docx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.124.1" },
+    { name = "fastmcp", specifier = ">=2.13.0" },
+    { name = "google-adk", specifier = ">=1.27.4,<2.0.0" },
+    { name = "google-auth", specifier = ">=2.0.0" },
+    { name = "google-cloud-aiplatform", specifier = ">=1.38.0" },
+    { name = "google-cloud-bigquery", specifier = ">=3.20.0" },
+    { name = "google-cloud-discoveryengine", specifier = ">=0.11.0" },
+    { name = "google-cloud-documentai", specifier = ">=2.20.0" },
+    { name = "google-cloud-firestore", specifier = ">=2.15.0" },
+    { name = "google-cloud-logging", specifier = ">=3.0.0" },
+    { name = "google-cloud-secret-manager", specifier = ">=2.26.0" },
+    { name = "google-cloud-storage", specifier = ">=3.6.0" },
+    { name = "google-genai", specifier = ">=1.0.0" },
+    { name = "mcp", specifier = ">=1.0.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pypdf", specifier = ">=4.0.0" },
+    { name = "python-docx", specifier = ">=1.2.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "pyyaml", specifier = ">=6.0.1" },
+    { name = "redis", specifier = ">=5.0.0" },
+    { name = "uvicorn", specifier = ">=0.29.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "fakeredis", specifier = ">=2.20.0" },
+    { name = "locust", specifier = ">=2.20.0" },
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23.0" },
+    { name = "pytest-cov", specifier = ">=5.0.0" },
+    { name = "pytest-mock", specifier = ">=3.12.0" },
+]
+ingest = [
+    { name = "google-cloud-documentai", specifier = ">=2.20.0" },
+    { name = "pypdf", specifier = ">=4.0.0" },
+    { name = "python-docx", specifier = ">=1.2.0" },
+]
+
+[[package]]
 name = "aiofile"
 version = "3.12.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1571,89 +1654,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/72/34/14ca021ce8e5dfedc35312d08ba8bf51fdd999c576889fc2c24cb97f4f10/iniconfig-2.3.0.tar.gz", hash = "sha256:c76315c77db068650d49c5b56314774a7804df16fee4402c1f19d6d15d8c4730", size = 20503, upload-time = "2025-10-18T21:55:43.219Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl", hash = "sha256:f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12", size = 7484, upload-time = "2025-10-18T21:55:41.639Z" },
-]
-
-[[package]]
-name = "it-helpdesk-agent"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "fastapi" },
-    { name = "fastmcp" },
-    { name = "google-adk" },
-    { name = "google-auth" },
-    { name = "google-cloud-aiplatform" },
-    { name = "google-cloud-bigquery" },
-    { name = "google-cloud-discoveryengine" },
-    { name = "google-cloud-documentai" },
-    { name = "google-cloud-firestore" },
-    { name = "google-cloud-logging" },
-    { name = "google-cloud-secret-manager" },
-    { name = "google-cloud-storage" },
-    { name = "google-genai" },
-    { name = "mcp" },
-    { name = "pydantic" },
-    { name = "pypdf" },
-    { name = "python-docx" },
-    { name = "python-dotenv" },
-    { name = "pyyaml" },
-    { name = "redis" },
-    { name = "uvicorn" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "fakeredis" },
-    { name = "locust" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-mock" },
-]
-ingest = [
-    { name = "google-cloud-documentai" },
-    { name = "pypdf" },
-    { name = "python-docx" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", specifier = ">=0.124.1" },
-    { name = "fastmcp", specifier = ">=2.13.0" },
-    { name = "google-adk", specifier = ">=1.27.4,<2.0.0" },
-    { name = "google-auth", specifier = ">=2.0.0" },
-    { name = "google-cloud-aiplatform", specifier = ">=1.38.0" },
-    { name = "google-cloud-bigquery", specifier = ">=3.20.0" },
-    { name = "google-cloud-discoveryengine", specifier = ">=0.11.0" },
-    { name = "google-cloud-documentai", specifier = ">=2.20.0" },
-    { name = "google-cloud-firestore", specifier = ">=2.15.0" },
-    { name = "google-cloud-logging", specifier = ">=3.0.0" },
-    { name = "google-cloud-secret-manager", specifier = ">=2.26.0" },
-    { name = "google-cloud-storage", specifier = ">=3.6.0" },
-    { name = "google-genai", specifier = ">=1.0.0" },
-    { name = "mcp", specifier = ">=1.0.0" },
-    { name = "pydantic", specifier = ">=2.0.0" },
-    { name = "pypdf", specifier = ">=4.0.0" },
-    { name = "python-docx", specifier = ">=1.2.0" },
-    { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "pyyaml", specifier = ">=6.0.1" },
-    { name = "redis", specifier = ">=5.0.0" },
-    { name = "uvicorn", specifier = ">=0.29.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "fakeredis", specifier = ">=2.20.0" },
-    { name = "locust", specifier = ">=2.20.0" },
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "pytest-asyncio", specifier = ">=0.23.0" },
-    { name = "pytest-cov", specifier = ">=5.0.0" },
-    { name = "pytest-mock", specifier = ">=3.12.0" },
-]
-ingest = [
-    { name = "google-cloud-documentai", specifier = ">=2.20.0" },
-    { name = "pypdf", specifier = ">=4.0.0" },
-    { name = "python-docx", specifier = ">=1.2.0" },
 ]
 
 [[package]]

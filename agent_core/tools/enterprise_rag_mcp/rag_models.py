@@ -2,7 +2,7 @@ from typing import Optional, Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 try:
-    from it_helpdesk_agent.app_utils.system_config import get_valid_system_filters
+    from agent_core.app_utils.system_config import get_valid_system_filters
 except ImportError:
     try:
         from app_utils.system_config import get_valid_system_filters

@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, Any
 
-from it_helpdesk_agent.app_utils.system_config import (
+from agent_core.app_utils.system_config import (
     get_configured_systems,
     get_valid_system_filters,
     get_chunking_config,

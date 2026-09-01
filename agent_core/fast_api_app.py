@@ -5,16 +5,16 @@ from fastapi import FastAPI, Depends, Query
 from google.adk.cli.fast_api import get_fast_api_app
 from google.cloud import logging as cloud_logging
 from vertexai import agent_engines
-from it_helpdesk_agent.app_utils.env import init_environment
-from it_helpdesk_agent.app_utils.sso_auth import (
+from agent_core.app_utils.env import init_environment
+from agent_core.app_utils.sso_auth import (
     SSOUser,
     get_current_user,
     create_dev_mock_token,
     SSOAuthenticationMiddleware,
     ALLOW_LOCAL_DEV_SSO,
 )
-from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
-from it_helpdesk_agent.app_utils.rate_limiter import RateLimitMiddleware
+from agent_core.app_utils.semantic_cache import get_semantic_cache
+from agent_core.app_utils.rate_limiter import RateLimitMiddleware
 
 PROJECT_ID, MODEL_LOC, SERVICE_LOC, SECRETS = init_environment()
 
@@ -42,7 +42,7 @@ def _get_memory_bank_uri() -> tuple[str | None, str | None]:
         return uri, uri
 
     # Priority 2: Lookup by display name or create lazily if permitted
-    name = os.environ.get("AGENT_ENGINE_MEMORY_BANK_NAME", "it_helpdesk_agent")
+    name = os.environ.get("AGENT_ENGINE_MEMORY_BANK_NAME", "agent_core")
     try:
         existing = list(agent_engines.list(filter=f"display_name={name}"))
         ae = existing[0] if existing else agent_engines.create(display_name=name)
@@ -147,7 +147,7 @@ async def query_semantic_cache(
 @app.get("/api/analytics/summary", tags=["Product Telemetry & Analytics"])
 async def get_analytics_summary(user: SSOUser = Depends(get_current_user)):
     """Returns aggregated product metrics: Cache Hit Rate, Tier Distribution, and Query Latency."""
-    from it_helpdesk_agent.app_utils.telemetry import ProductMetricsCollector
+    from agent_core.app_utils.telemetry import ProductMetricsCollector
     return ProductMetricsCollector.get_summary_stats()
 
 # 5. Development-Only Mock Token Minting Route (Omitted in Production)

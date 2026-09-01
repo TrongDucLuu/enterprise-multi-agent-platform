@@ -3,7 +3,7 @@ import tempfile
 import pytest
 import yaml
 
-from it_helpdesk_agent.app_utils.system_config import (
+from agent_core.app_utils.system_config import (
     load_system_config,
     reload_system_config,
     get_configured_systems,
@@ -172,7 +172,7 @@ def test_system_config_rejects_invalid_system_characters(monkeypatch):
 
 
 def test_chunking_and_document_processing_config():
-    from it_helpdesk_agent.app_utils.system_config import (
+    from agent_core.app_utils.system_config import (
         get_chunking_config,
         get_document_processing_config,
     )
@@ -198,7 +198,7 @@ def test_chunking_and_document_processing_config():
 
 
 def test_document_ai_missing_processor_id_fails_closed(monkeypatch):
-    from it_helpdesk_agent.app_utils.system_config import get_document_processing_config
+    from agent_core.app_utils.system_config import get_document_processing_config
     bad_yaml = {
         "shared_admin_roles": ["admin"],
         "systems": {

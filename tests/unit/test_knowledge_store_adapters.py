@@ -2,7 +2,7 @@ import os
 import logging
 from unittest.mock import MagicMock, patch
 import pytest
-from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import (
+from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
     BaseKnowledgeStore,
     InMemoryKnowledgeStore,
     BigQueryVectorKnowledgeStore,
@@ -199,7 +199,7 @@ def test_bigquery_hybrid_search_sql_generation_and_behavior(monkeypatch):
 
     # 1. Test with hybrid_search_enabled = True
     monkeypatch.setattr(
-        "it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store.get_retrieval_config",
+        "agent_core.tools.enterprise_rag_mcp.knowledge_store.get_retrieval_config",
         lambda: {"fraction_lists_to_search": 0.05, "hybrid_search_enabled": True}
     )
 
@@ -233,7 +233,7 @@ def test_bigquery_hybrid_search_sql_generation_and_behavior(monkeypatch):
     # 2. Test with hybrid_search_enabled = False (Pure Vector mode)
     mock_bq.reset_mock()
     monkeypatch.setattr(
-        "it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store.get_retrieval_config",
+        "agent_core.tools.enterprise_rag_mcp.knowledge_store.get_retrieval_config",
         lambda: {"fraction_lists_to_search": 0.05, "hybrid_search_enabled": False}
     )
 
@@ -429,7 +429,7 @@ def test_hybrid_search_enabled_unified_default_across_backends(monkeypatch):
     both InMemoryKnowledgeStore and BigQueryVectorKnowledgeStore resolve to True (Native HYBRID mode).
     """
     monkeypatch.setattr(
-        "it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store.get_retrieval_config",
+        "agent_core.tools.enterprise_rag_mcp.knowledge_store.get_retrieval_config",
         lambda: {"fraction_lists_to_search": 0.05}  # key hybrid_search_enabled missing
     )
 
@@ -723,7 +723,7 @@ def test_bigquery_telemetry_and_job_timeout_cancel(caplog):
         embedding_fn=lambda t: [0.1] * 64
     )
 
-    with caplog.at_level(logging.INFO, logger="it_helpdesk_agent"):
+    with caplog.at_level(logging.INFO, logger="agent_core"):
         store.search("Lỗi mạng LAN", system="ALL", limit=5)
 
     # 1. Verify job_timeout_ms passed in QueryJobConfig

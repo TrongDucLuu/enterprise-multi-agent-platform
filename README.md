@@ -299,7 +299,7 @@ it-helpdesk-agent/
 │   └── terraform/                   # Infrastructure-as-Code cho GCP
 │       ├── main.tf                  # Định nghĩa Cloud Run, BigQuery, IAM, Secrets & Check blocks
 │       └── variables.tf             # Biến cấu hình Terraform (GA default models & Cloud Armor)
-├── it_helpdesk_agent/
+├── agent_core/
 │   ├── agent.py                     # Cấu hình Multi-Agent 3 cấp bậc (L1, L2, L3) + Latency tracking
 │   ├── fast_api_app.py              # Ứng dụng FastAPI, Middleware và Cache endpoints (Tắt docs trên Prod)
 │   ├── app_utils/

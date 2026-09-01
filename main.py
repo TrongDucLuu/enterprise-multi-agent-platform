@@ -10,7 +10,7 @@ import sys
 def run_server(host: str = "0.0.0.0", port: int = 8080):
     """Launches the FastAPI application via Uvicorn."""
     import uvicorn
-    from it_helpdesk_agent.fast_api_app import app
+    from agent_core.fast_api_app import app
     print(f"🚀 Starting IT Helpdesk Web Server on http://{host}:{port}")
     uvicorn.run(app, host=host, port=port)
 

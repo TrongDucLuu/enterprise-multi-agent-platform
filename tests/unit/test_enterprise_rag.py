@@ -1,11 +1,11 @@
 import pytest
-from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStore
-from it_helpdesk_agent.tools.enterprise_rag_mcp.main import (
+from agent_core.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStore
+from agent_core.tools.enterprise_rag_mcp.main import (
     search_enterprise_knowledge,
     get_system_manual,
     draft_email_response
 )
-from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
+from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 
 
 @pytest.fixture(autouse=True)
@@ -47,7 +47,7 @@ def test_get_system_manual_success_and_not_found():
 
 
 def test_enterprise_rag_rbac_denied_for_unauthorized_role():
-    from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
+    from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
     
     # Regular employee without HR role
     employee = SSOUser(
@@ -71,7 +71,7 @@ def test_enterprise_rag_rbac_denied_for_unauthorized_role():
 
 
 def test_enterprise_rag_rbac_allowed_for_hr_role():
-    from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
+    from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
     
     # HR Specialist
     hr_user = SSOUser(
@@ -102,7 +102,7 @@ def test_search_is_truncated_flag():
     assert results[0].is_truncated is False
 
     # Insert a long article > 1200 chars to verify truncation flag
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle
+    from agent_core.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle
     long_article = KnowledgeArticle(
         id="ERP-KB-LONG",
         system="ERP",
@@ -146,9 +146,9 @@ def test_search_enterprise_knowledge_invalid_system_boundary_validation():
 
 def test_mcp_tool_handles_knowledge_store_unavailable(monkeypatch):
     """Verify that MCP tool catches KnowledgeStoreUnavailableError and returns friendly error."""
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStoreUnavailableError
+    from agent_core.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStoreUnavailableError
     from unittest.mock import MagicMock
-    import it_helpdesk_agent.tools.enterprise_rag_mcp.main as main_module
+    import agent_core.tools.enterprise_rag_mcp.main as main_module
 
     mock_store = MagicMock()
     mock_store.search.side_effect = KnowledgeStoreUnavailableError("BigQuery down")

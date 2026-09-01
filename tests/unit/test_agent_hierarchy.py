@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from it_helpdesk_agent.agent import (
+from agent_core.agent import (
     root_orchestrator,
     l1_selfservice_agent,
     l2_enterprise_rag_agent,

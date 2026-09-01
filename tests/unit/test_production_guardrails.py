@@ -16,20 +16,20 @@ from unittest.mock import MagicMock, patch
 
 from google.adk.models import LlmResponse
 
-from it_helpdesk_agent.app_utils.semantic_cache import (
+from agent_core.app_utils.semantic_cache import (
     InMemorySemanticCache,
     RedisSemanticCache,
     is_production_mode,
 )
-from it_helpdesk_agent.app_utils.rate_limiter import (
+from agent_core.app_utils.rate_limiter import (
     InMemoryRateLimiter,
     RedisRateLimiter,
     check_l3_rate_limit_with_warning,
     reset_rate_limiters,
 )
-from it_helpdesk_agent.tools.log_analyzer import analyze_system_logs_for_rca
-from it_helpdesk_agent.tools.compliance_tool import review_it_contract_sla
-from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
+from agent_core.tools.log_analyzer import analyze_system_logs_for_rca
+from agent_core.tools.compliance_tool import review_it_contract_sla
+from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 
 
 @pytest.fixture(autouse=True)
@@ -302,12 +302,12 @@ class TestL3RateLimitSoftWarning:
         """
         import asyncio
         from google.genai import types
-        from it_helpdesk_agent.agent import (
+        from agent_core.agent import (
             semantic_cache_before_model_callback,
             semantic_cache_after_model_callback,
             _current_l3_soft_warning
         )
-        from it_helpdesk_agent.app_utils.sso_auth import current_sso_user, SSOUser
+        from agent_core.app_utils.sso_auth import current_sso_user, SSOUser
 
         monkeypatch.setenv("L3_RATE_LIMIT_PER_MINUTE", "10")
         monkeypatch.setenv("RATE_LIMITER_BACKEND", "memory")
@@ -400,7 +400,7 @@ class TestProductionTerraformAndModelSLA:
 
     def test_agent_model_selection_switches_to_ga_in_production(self, monkeypatch):
         """Validates that agent automatically selects GA models in production environment."""
-        from it_helpdesk_agent.app_utils.env import get_model_names_for_environment
+        from agent_core.app_utils.env import get_model_names_for_environment
 
         monkeypatch.setenv("ENVIRONMENT", "production")
         monkeypatch.delenv("USE_GA_MODELS", raising=False)

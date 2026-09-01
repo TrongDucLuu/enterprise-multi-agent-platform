@@ -12,7 +12,7 @@ WORKDIR /code
 
 COPY ./pyproject.toml ./README.md ./uv.lock* ./
 COPY ./config ./config
-COPY ./it_helpdesk_agent ./it_helpdesk_agent
+COPY ./agent_core ./agent_core
 COPY ./data ./data
 COPY ./scripts ./scripts
 COPY ./main.py ./test_local.py ./
@@ -46,4 +46,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8080/healthz || exit 1
 
-CMD ["uvicorn", "it_helpdesk_agent.fast_api_app:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "agent_core.fast_api_app:app", "--host", "0.0.0.0", "--port", "8080"]

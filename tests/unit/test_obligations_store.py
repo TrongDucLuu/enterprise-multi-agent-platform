@@ -2,22 +2,22 @@ import pytest
 from unittest.mock import MagicMock, patch
 from pydantic import ValidationError
 
-from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import Obligation
-from it_helpdesk_agent.tools.obligations_store import (
+from agent_core.tools.enterprise_rag_mcp.rag_models import Obligation
+from agent_core.tools.obligations_store import (
     BaseObligationsStore,
     InMemoryObligationsStore,
     BigQueryObligationsStore,
     get_obligations_store,
     INITIAL_OBLIGATIONS,
 )
-from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStoreUnavailableError
-from it_helpdesk_agent.tools.compliance_tool import (
+from agent_core.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStoreUnavailableError
+from agent_core.tools.compliance_tool import (
     get_obligation,
     list_contract_obligations,
     review_it_contract_sla,
 )
-from it_helpdesk_agent.tools.enterprise_rag_mcp.main import get_obligation as mcp_get_obligation
-from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
+from agent_core.tools.enterprise_rag_mcp.main import get_obligation as mcp_get_obligation
+from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 
 
 class TestObligationModel:
@@ -143,7 +143,7 @@ class TestBigQueryObligationsStore:
 
 class TestObligationsRBACAndTools:
     def test_get_obligation_authorized_roles(self, monkeypatch):
-        monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
+        monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
         for role in ["compliance_officer", "legal_counsel", "it_admin", "sys_admin"]:
             user = SSOUser(user_id="auditor-1", email="auditor@enterprise.local", roles=[role])
             token = current_sso_user.set(user)
@@ -156,7 +156,7 @@ class TestObligationsRBACAndTools:
                 current_sso_user.reset(token)
 
     def test_get_obligation_unauthorized_role(self, monkeypatch):
-        monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
+        monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
         user = SSOUser(user_id="emp-1", email="user@enterprise.local", roles=["employee"])
         token = current_sso_user.set(user)
         try:
@@ -167,7 +167,7 @@ class TestObligationsRBACAndTools:
             current_sso_user.reset(token)
 
     def test_list_contract_obligations_authorized(self, monkeypatch):
-        monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
+        monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
         user = SSOUser(user_id="comp-1", email="compliance@enterprise.local", roles=["compliance_officer"])
         token = current_sso_user.set(user)
         try:
@@ -179,7 +179,7 @@ class TestObligationsRBACAndTools:
             current_sso_user.reset(token)
 
     def test_list_contract_obligations_unauthorized(self, monkeypatch):
-        monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
+        monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
         user = SSOUser(user_id="emp-1", email="user@enterprise.local", roles=["employee"])
         token = current_sso_user.set(user)
         try:
@@ -190,7 +190,7 @@ class TestObligationsRBACAndTools:
             current_sso_user.reset(token)
 
     def test_mcp_get_obligation_authorized_and_denied(self, monkeypatch):
-        monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
+        monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
         user_auth = SSOUser(user_id="comp-1", email="compliance@enterprise.local", roles=["compliance_officer"])
         token_auth = current_sso_user.set(user_auth)
         try:
@@ -209,7 +209,7 @@ class TestObligationsRBACAndTools:
             current_sso_user.reset(token_emp)
 
     def test_review_it_contract_sla_integrates_obligations(self, monkeypatch):
-        monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
+        monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
         user = SSOUser(user_id="legal-1", email="legal@enterprise.local", roles=["legal_counsel"])
         token = current_sso_user.set(user)
         try:

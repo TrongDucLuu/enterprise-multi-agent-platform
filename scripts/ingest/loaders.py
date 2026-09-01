@@ -499,7 +499,7 @@ def ingest_articles_to_bigquery(
 
         # Invalidate semantic cache for updated/inserted articles
         try:
-            from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
+            from agent_core.app_utils.semantic_cache import get_semantic_cache
             cache = get_semantic_cache()
             updated_doc_ids = set()
             for art in articles:
@@ -577,7 +577,7 @@ def reconcile_deleted_documents(
         if affected > 0:
             logger.warning("Tombstoned %d chunks corresponding to deleted source documents.", affected)
             try:
-                from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
+                from agent_core.app_utils.semantic_cache import get_semantic_cache
                 cache = get_semantic_cache()
                 find_tombstoned_sql = f"""
                 SELECT DISTINCT id, parent_doc_id, system
@@ -702,7 +702,7 @@ def run_test_query(
         return
 
     try:
-        from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import BigQueryVectorKnowledgeStore
+        from agent_core.tools.enterprise_rag_mcp.knowledge_store import BigQueryVectorKnowledgeStore
         store = BigQueryVectorKnowledgeStore(
             project_id=project_id,
             dataset_id=dataset_id,

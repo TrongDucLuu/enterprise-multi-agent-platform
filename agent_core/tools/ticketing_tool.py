@@ -146,7 +146,7 @@ def _check_ticket_access(ticket_user_id: str) -> tuple[bool, Optional[str]]:
     Returns (is_allowed, error_message).
     """
     try:
-        from it_helpdesk_agent.app_utils.sso_auth import get_current_sso_user, ALLOW_LOCAL_DEV_SSO
+        from agent_core.app_utils.sso_auth import get_current_sso_user, ALLOW_LOCAL_DEV_SSO
     except ImportError:
         try:
             from app_utils.sso_auth import get_current_sso_user, ALLOW_LOCAL_DEV_SSO
@@ -200,7 +200,7 @@ def create_helpdesk_ticket(
     """
     # Enforce current user ID if logged in as standard employee to prevent identity spoofing
     try:
-        from it_helpdesk_agent.app_utils.sso_auth import get_current_sso_user
+        from agent_core.app_utils.sso_auth import get_current_sso_user
         current_user = get_current_sso_user()
         if current_user and not _is_privileged_user(current_user):
             user_id = current_user.user_id
@@ -283,12 +283,12 @@ def route_ticket_to_tier(
 
     soft_warning_msg = None
     if target_tier in ["L3_Deep_Diagnostics", "L3"]:
-        from it_helpdesk_agent.app_utils.rate_limiter import check_l3_rate_limit_with_warning
+        from agent_core.app_utils.rate_limiter import check_l3_rate_limit_with_warning
         # Rate limit based on the caller (not the ticket owner) - consistent with
         # semantic_cache_before_model_callback in agent.py. If checked against ticket.user_id,
         # an admin escalating another employee's ticket would deplete that employee's L3 quota.
         try:
-            from it_helpdesk_agent.app_utils.sso_auth import get_current_sso_user
+            from agent_core.app_utils.sso_auth import get_current_sso_user
             caller = get_current_sso_user()
             caller_id = caller.user_id if caller else None
         except Exception:

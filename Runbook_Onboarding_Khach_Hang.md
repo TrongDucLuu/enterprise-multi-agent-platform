@@ -355,7 +355,7 @@ locust -f scripts/load_test/locustfile.py --host="https://helpdesk.customer.corp
      ```
    - Invalidate Semantic Cache tương ứng:
      ```python
-     from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
+     from agent_core.app_utils.semantic_cache import get_semantic_cache
      cache = get_semantic_cache()
      cache.invalidate(article_id="ERP-001")
      ```

@@ -1,6 +1,6 @@
 import pytest
-from it_helpdesk_agent.tools.log_analyzer import analyze_system_logs_for_rca
-from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
+from agent_core.tools.log_analyzer import analyze_system_logs_for_rca
+from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 
 
 @pytest.fixture(autouse=True)
@@ -57,7 +57,7 @@ def test_analyze_logs_detects_disk_and_null_errors():
 
 
 def test_analyze_logs_rbac_denied(monkeypatch):
-    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
+    monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
 
     # Override context with unauthorized employee role only
     user = SSOUser(

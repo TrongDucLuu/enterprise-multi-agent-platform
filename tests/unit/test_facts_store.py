@@ -2,15 +2,15 @@ import pytest
 from unittest.mock import MagicMock, patch
 from pydantic import ValidationError
 
-from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import Fact
-from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import (
+from agent_core.tools.enterprise_rag_mcp.rag_models import Fact
+from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
     BaseFactsStore,
     InMemoryFactsStore,
     BigQueryFactsStore,
     KnowledgeStoreUnavailableError,
     get_facts_store,
 )
-from it_helpdesk_agent.tools.enterprise_rag_mcp.main import lookup_fact
+from agent_core.tools.enterprise_rag_mcp.main import lookup_fact
 
 
 def test_fact_pydantic_model_types():

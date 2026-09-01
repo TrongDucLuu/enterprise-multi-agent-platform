@@ -8,7 +8,7 @@ from google.adk.tools.mcp_tool import StreamableHTTPConnectionParams, StdioConne
 def get_auth_headers(readonly_context=None) -> dict[str, str]:
     """Dynamically resolves Authorization Bearer header for current SSO user context."""
     try:
-        from it_helpdesk_agent.app_utils.sso_auth import get_current_sso_token
+        from agent_core.app_utils.sso_auth import get_current_sso_token
         token = get_current_sso_token()
         if token:
             return {"Authorization": f"Bearer {token}"}

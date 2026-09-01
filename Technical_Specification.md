@@ -153,7 +153,7 @@ graph TD
 ```
 
 ### 4.1. Xác thực SSO OIDC, Phân Quyền Thực Tế & Chống Lỗi Môi trường
-- **Module:** `it_helpdesk_agent.app_utils.sso_auth` & `it_helpdesk_agent.app_utils.system_config`
+- **Module:** `agent_core.app_utils.sso_auth` & `agent_core.app_utils.system_config`
 - **Xác thực Token:** Kiểm tra chữ ký mật mã Google OIDC (`https://accounts.google.com`) qua JWKS công khai.
 - **Cơ chế Phân giải Quyền Thực tế (Real SSO Role Resolution):** Do Google ID Token mặc định không chứa claim `roles`, hệ thống áp dụng cơ chế 4 tầng phân giải quyền thực tế qua `resolve_user_roles(email, token_roles)`:
   1. *Tầng 1 (Config Mapping):* Ánh xạ email nhân sự/quản trị viên trực tiếp từ `user_role_mappings` trong `config/systems.yaml`.
@@ -164,7 +164,7 @@ graph TD
 - **Giới hạn Miền Doanh nghiệp (Domain Restriction):** Token phải có email thuộc danh sách miền được phép (`ALLOWED_SSO_DOMAINS`). Nếu biến môi trường này rỗng trên môi trường production, hệ thống lập tức **Fail-Closed** và từ chối 100% yêu cầu.
 
 ### 4.2. Định Danh Khách Hàng Xác Định & Chống Tràn Bộ Nhớ Trong Rate Limiting
-- **Module:** `it_helpdesk_agent.app_utils.rate_limiter`
+- **Module:** `agent_core.app_utils.rate_limiter`
 - **Key Derivation:** Định danh người dùng thông qua SHA-256 băm định danh token: `user:{sha256(user_id)}`. Với request chưa xác thực, tự động fallback sang địa chỉ IP `ip:{client_ip}` đọc từ `X-Forwarded-For` sau Cloud Armor / HTTPS Load Balancer.
 - **Deterministic Hashing:** Toàn bộ hashing trong hệ thống sử dụng `hashlib.sha256()` thay thế hoàn toàn hàm `hash()` tích hợp sẵn của Python, đảm bảo tính nhất quán tuyệt đối giữa các tiến trình multi-worker (Uvicorn workers) và multi-instance.
 
@@ -254,7 +254,7 @@ Nhằm đáp ứng các tiêu chuẩn khắt khe của khối Ngân hàng, Tài 
 ## 5. CƠ CHẾ TĂNG TỐC VÀ TỐI ƯU HÓA CHI PHÍ (SEMANTIC CACHE & RATE LIMITING)
 
 ### 5.1. Cơ chế Redis Vector Semantic Cache, Cosine Similarity & Circuit Breaker
-- **Module:** `it_helpdesk_agent.app_utils.semantic_cache`
+- **Module:** `agent_core.app_utils.semantic_cache`
 - **Nguyên lý Multi-Tenant Candidate-Set Vector Scan:** 
   - Lưu trữ embedding vector và phản hồi tương ứng theo cấu trúc Multi-Tenant Sets (`sem_cache:keys:public` và `sem_cache:keys:user:{uid}`).
   - Khi có truy vấn đến, trích xuất danh sách candidate key ids liên quan (public + user-specific), thực hiện batch read `mget` và tính cosine similarity tốc độ cao.
@@ -268,7 +268,7 @@ Nhằm đáp ứng các tiêu chuẩn khắt khe của khối Ngân hàng, Tài 
 - **Circuit Breaker Bảo Vệ Redis:** Tích hợp `RedisCircuitBreaker` (ngưỡng 10 lỗi liên tiếp, thời gian mở mạch 30s) tự động cô lập Redis khi gặp sự cố mạng, bảo vệ 100% thời gian phản hồi của API và phát cảnh báo khẩn `REDIS_CIRCUIT_BREAKER_ALERT`.
 
 ### 5.2. Hệ thống Giới hạn Tốc độ (Authenticated Rate Limiting & JWT Memoization)
-- **Module:** `it_helpdesk_agent.app_utils.rate_limiter` & `it_helpdesk_agent.app_utils.sso_auth`
+- **Module:** `agent_core.app_utils.rate_limiter` & `agent_core.app_utils.sso_auth`
 - **Keying Theo Danh Tính Đã Xác Thực (Deterministic Token Hash):**
   - Khi request có Bearer Token, rate limiter sử dụng `hashlib.sha256(token).hexdigest()` làm bucket key độc lập cho từng user.
   - Ngăn chặn triệt để tấn công xoay token (Token Rotation Attack) nhằm vượt giới hạn theo IP.
@@ -479,7 +479,7 @@ flowchart TD
 ## 7. HỆ THỐNG ĐO LƯỜNG VÀ BẢO VỆ QUYỀN RIÊNG TƯ (TELEMETRY & PRIVACY)
 
 ### 7.1. Kiến trúc Telemetry Đa Tầng
-- **Module:** `it_helpdesk_agent.app_utils.telemetry`
+- **Module:** `agent_core.app_utils.telemetry`
 - **Kết nối Luồng Thực tế:** Tự động ghi nhận thông số qua `semantic_cache_before_model_callback` (khi Cache Hit) và `semantic_cache_after_model_callback` (khi Model phản hồi).
 - **Source of Truth:** Ghi structured JSON log trực tiếp lên **Google Cloud Logging**. Cho phép xây dựng dashboard theo thời gian thực trên BigQuery Log Sink hoặc Looker Studio.
 - **In-Memory Rolling Buffer:** Lưu trữ 1,000 sự kiện gần nhất phục vụ endpoint API `/api/analytics/summary` cho việc giám sát tức thời.
@@ -507,7 +507,7 @@ Hệ thống thiết lập mặc định các biến môi trường theo chuẩn
 | `TELEMETRY_ANONYMIZE_USERS` | `bool` | `true` | Tự động băm mã nhân viên bằng thuật toán SHA-256 (`anon_7a8f9c...`) trước khi ghi log. Ngăn ngừa lộ lọt danh tính nhân sự. |
 | `TELEMETRY_INCLUDE_QUERY` | `bool` | `false` | Mặc định ẩn toàn bộ nội dung câu hỏi nghiệp vụ và thay bằng `[REDACTED_PRIVACY]`. Bảo vệ tuyệt đối thông tin tài chính/bệnh án nhạy cảm. |
 
-- **Đo lường Độ trễ Thực tế (Real Turn Latency):** Thời gian xử lý từng lượt `latency_ms` được đo lường chính xác bằng `time.perf_counter()` thông qua biến ngữ cảnh `_turn_start_time: ContextVar[Optional[float]]` trong `it_helpdesk_agent.agent`, ghi nhận đúng thời gian thực thi của cả lượt xử lý thay vì chỉ thời gian gọi callback.
+- **Đo lường Độ trễ Thực tế (Real Turn Latency):** Thời gian xử lý từng lượt `latency_ms` được đo lường chính xác bằng `time.perf_counter()` thông qua biến ngữ cảnh `_turn_start_time: ContextVar[Optional[float]]` trong `agent_core.agent`, ghi nhận đúng thời gian thực thi của cả lượt xử lý thay vì chỉ thời gian gọi callback.
 - **Nhận diện Hệ thống Chuẩn xác (Zero Collision Domain Keywords):** Tích hợp danh mục `domain_keywords` từ `config/systems.yaml` với biểu thức chính quy phân tách từ ngữ `\b` (Word Boundary), triệt tiêu hoàn toàn rủi ro nhận diện sai các từ viết tắt như `PO`, `HR`, `SAP`.
 
 ---
@@ -564,7 +564,7 @@ graph TB
 ## 9. DANH MỤC API VÀ HỢP ĐỒNG DỮ LIỆU (API REFERENCE & DATA CONTRACTS)
 
 ### 9.1. Tự Động Tắt API Documentation trên Môi Trường Production
-Nhằm ngăn ngừa rò rỉ bề mặt tấn công (Attack Surface Reduction), FastAPI app (`it_helpdesk_agent/fast_api_app.py`) **tự động vô hiệu hóa** các endpoint `/docs`, `/redoc`, và `/openapi.json` khi chạy trên môi trường production (`ENVIRONMENT=production` hoặc biến `K_SERVICE` trên Cloud Run).
+Nhằm ngăn ngừa rò rỉ bề mặt tấn công (Attack Surface Reduction), FastAPI app (`agent_core/fast_api_app.py`) **tự động vô hiệu hóa** các endpoint `/docs`, `/redoc`, và `/openapi.json` khi chạy trên môi trường production (`ENVIRONMENT=production` hoặc biến `K_SERVICE` trên Cloud Run).
 
 ### 9.2. Các Endpoint Cốt lõi của Ứng dụng
 
@@ -615,7 +615,7 @@ Nhằm ngăn ngừa rò rỉ bề mặt tấn công (Attack Surface Reduction), 
 - **Payload:**
   ```json
   {
-    "app_name": "it_helpdesk_agent",
+    "app_name": "agent_core",
     "user_id": "emp-001@company.com",
     "session_id": "sess-49b81f30",
     "message": "Làm sao để tạo Purchase Order SAP ME21N khi bị lỗi thiếu ngân sách?"

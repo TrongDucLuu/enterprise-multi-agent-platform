@@ -1,13 +1,13 @@
 import time
 import pytest
 import fakeredis
-from it_helpdesk_agent.app_utils.rate_limiter import (
+from agent_core.app_utils.rate_limiter import (
     RedisRateLimiter,
     InMemoryRateLimiter,
     get_global_rate_limiter,
     reset_rate_limiters,
 )
-from it_helpdesk_agent.app_utils.semantic_cache import (
+from agent_core.app_utils.semantic_cache import (
     RedisSemanticCache,
     InMemorySemanticCache,
     SemanticCacheEntry,

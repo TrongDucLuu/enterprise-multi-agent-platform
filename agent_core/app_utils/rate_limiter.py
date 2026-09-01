@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-logger = logging.getLogger("it_helpdesk_agent")
+logger = logging.getLogger("agent_core")
 
 
 class BaseRateLimiter(ABC):
@@ -305,7 +305,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # 2. Unauthenticated / Invalid Token: f"ip:{client_ip}"
         user_id = None
         try:
-            from it_helpdesk_agent.app_utils.sso_auth import current_sso_user
+            from agent_core.app_utils.sso_auth import current_sso_user
             current_user = current_sso_user.get()
             if current_user and getattr(current_user, "is_authenticated", False):
                 user_id = getattr(current_user, "user_id", None)
@@ -316,7 +316,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not user_id and auth_header.startswith("Bearer "):
             token = auth_header[7:].strip()
             try:
-                from it_helpdesk_agent.app_utils.sso_auth import verify_sso_token
+                from agent_core.app_utils.sso_auth import verify_sso_token
                 user = verify_sso_token(token)
                 if user and getattr(user, "is_authenticated", False):
                     user_id = user.user_id

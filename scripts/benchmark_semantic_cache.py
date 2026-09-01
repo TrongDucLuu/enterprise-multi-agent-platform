@@ -5,7 +5,7 @@ Acceptance verification for Backlog Round 3 (P2.5).
 import time
 import statistics
 import fakeredis
-from it_helpdesk_agent.app_utils.semantic_cache import (
+from agent_core.app_utils.semantic_cache import (
     InMemorySemanticCache,
     RedisSemanticCache,
 )

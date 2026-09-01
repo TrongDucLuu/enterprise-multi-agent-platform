@@ -1,7 +1,7 @@
 import os
 import pytest
 from unittest.mock import patch, MagicMock
-from it_helpdesk_agent.app_utils.env import _fetch_secrets, init_environment
+from agent_core.app_utils.env import _fetch_secrets, init_environment
 
 def test_fetch_secrets_from_local_environment(monkeypatch):
     monkeypatch.setenv("HELPDESK_ADMIN_API_KEY", "test_admin_key")
@@ -37,7 +37,7 @@ def test_fetch_secrets_from_secret_manager_fallback(mock_sm_client_cls, monkeypa
     assert secrets["SSO_JWT_SECRET"] == "secret_from_sm"
 
 @patch("vertexai.init")
-@patch("it_helpdesk_agent.app_utils.env._fetch_secrets")
+@patch("agent_core.app_utils.env._fetch_secrets")
 @patch("google.auth.default")
 def test_init_environment(mock_google_auth, mock_fetch, mock_vertexai_init, monkeypatch):
     mock_google_auth.return_value = (None, "mock-helpdesk-project")

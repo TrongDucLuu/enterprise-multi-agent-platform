@@ -359,7 +359,7 @@ def build_runbook_docx(output_path):
     add_body_paragraph(
         doc,
         "Endpoint `/healthz` hoạt động công khai không cần auth, phục vụ kiểm tra sức khỏe của Cloud Run Load Balancer:\n"
-        "• Trả về `{\"status\": \"ok\", \"service\": \"it_helpdesk_agent\"}` với mã HTTP 200 OK."
+        "• Trả về `{\"status\": \"ok\", \"service\": \"agent_core\"}` với mã HTTP 200 OK."
     )
 
     add_styled_heading(doc, "6.2. Ma trận Cảnh báo Vận hành (Alerting Policy Matrix)", 2)

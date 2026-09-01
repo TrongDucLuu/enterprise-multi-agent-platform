@@ -78,12 +78,12 @@ def wrap_retrieved_document(content: str, doc_id: str, system: str, title: str) 
 try:
     from rag_models import KnowledgeArticle, SearchResult, DocumentSummary, SectionHierarchy, Fact
 except ImportError:
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle, SearchResult, DocumentSummary, SectionHierarchy, Fact
+    from agent_core.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle, SearchResult, DocumentSummary, SectionHierarchy, Fact
 
 try:
-    from it_helpdesk_agent.app_utils.system_config import get_valid_system_filters, get_retrieval_config
-    from it_helpdesk_agent.app_utils.embedding_utils import DEFAULT_EMBEDDING_MODEL, generate_text_embedding
-    from it_helpdesk_agent.app_utils.reranker import rerank_search_results
+    from agent_core.app_utils.system_config import get_valid_system_filters, get_retrieval_config
+    from agent_core.app_utils.embedding_utils import DEFAULT_EMBEDDING_MODEL, generate_text_embedding
+    from agent_core.app_utils.reranker import rerank_search_results
 except ImportError:
     try:
         from app_utils.system_config import get_valid_system_filters, get_retrieval_config
@@ -697,7 +697,7 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         effective_roles = user_roles
         if effective_roles is None:
             try:
-                from it_helpdesk_agent.app_utils.sso_auth import get_current_sso_user
+                from agent_core.app_utils.sso_auth import get_current_sso_user
                 user = get_current_sso_user()
                 if user:
                     effective_roles = user.roles
@@ -1015,7 +1015,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             effective_roles = user_roles
             if effective_roles is None:
                 try:
-                    from it_helpdesk_agent.app_utils.sso_auth import get_current_sso_user
+                    from agent_core.app_utils.sso_auth import get_current_sso_user
                     user = get_current_sso_user()
                     if user:
                         effective_roles = user.roles

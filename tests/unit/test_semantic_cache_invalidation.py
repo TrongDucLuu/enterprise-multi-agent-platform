@@ -1,5 +1,5 @@
 import pytest
-from it_helpdesk_agent.app_utils.semantic_cache import InMemorySemanticCache
+from agent_core.app_utils.semantic_cache import InMemorySemanticCache
 
 
 def test_inmemory_semantic_cache_invalidation():
@@ -41,7 +41,7 @@ def test_reconcile_deleted_documents_triggers_cache_invalidation_mutation(monkey
     """
     from unittest.mock import MagicMock
     from scripts.ingest.loaders import reconcile_deleted_documents
-    import it_helpdesk_agent.app_utils.semantic_cache as sem_cache_mod
+    import agent_core.app_utils.semantic_cache as sem_cache_mod
 
     # Setup real in-memory semantic cache instance with orthogonal embeddings for different domains
     def domain_embedding_fn(q: str) -> list[float]:
@@ -111,7 +111,7 @@ def test_ingest_articles_triggers_cache_invalidation_on_update_mutation(monkeypa
     """
     from unittest.mock import MagicMock
     from scripts.ingest.loaders import ingest_articles_to_bigquery
-    import it_helpdesk_agent.app_utils.semantic_cache as sem_cache_mod
+    import agent_core.app_utils.semantic_cache as sem_cache_mod
 
     real_cache = InMemorySemanticCache(embedding_fn=lambda q: [1.0, 0.0, 0.0] * 42 + [0.0] * 2)
     real_cache.set(

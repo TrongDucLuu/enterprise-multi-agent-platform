@@ -1,6 +1,6 @@
 import time
 import pytest
-from it_helpdesk_agent.app_utils.semantic_cache import (
+from agent_core.app_utils.semantic_cache import (
     SemanticCache,
     cosine_similarity,
     get_semantic_cache,
@@ -109,8 +109,8 @@ async def test_semantic_cache_callbacks_roundtrip_authenticated_isolation():
     from unittest.mock import MagicMock
     from google.genai import types
     from google.adk.models import LlmRequest, LlmResponse
-    from it_helpdesk_agent.app_utils.sso_auth import current_sso_user, SSOUser
-    from it_helpdesk_agent.agent import (
+    from agent_core.app_utils.sso_auth import current_sso_user, SSOUser
+    from agent_core.agent import (
         semantic_cache_before_model_callback,
         semantic_cache_after_model_callback
     )
@@ -207,7 +207,7 @@ async def test_semantic_cache_after_callback_fails_closed_when_unauthenticated()
     from unittest.mock import MagicMock
     from google.genai import types
     from google.adk.models import LlmResponse
-    from it_helpdesk_agent.agent import semantic_cache_after_model_callback
+    from agent_core.agent import semantic_cache_after_model_callback
 
     cache = get_semantic_cache()
     cache.clear()
@@ -240,7 +240,7 @@ async def test_contextvar_propagation_across_threadpool():
     """
     import asyncio
     import concurrent.futures
-    from it_helpdesk_agent.app_utils.sso_auth import current_sso_user, SSOUser
+    from agent_core.app_utils.sso_auth import current_sso_user, SSOUser
 
     user = SSOUser(user_id="engineer_007", email="dev@corp.com", full_name="Dev User", roles=["sys_admin"])
     token = current_sso_user.set(user)
@@ -274,7 +274,7 @@ def test_is_safe_public_faq_word_boundary_matching():
     like 'wifi support' or 'quy định it về powerpoint', while actual sensitive
     terms like 'purchase order của tôi' and 'kiểm tra PO 123' remain private.
     """
-    from it_helpdesk_agent.agent import _is_safe_public_faq
+    from agent_core.agent import _is_safe_public_faq
 
     # 1. Safe queries that contain 'po' as substring inside words like 'support', 'powerpoint', 'portal', 'policy'
     assert _is_safe_public_faq("wifi support", "l1_selfservice_agent", []) is True
@@ -298,7 +298,7 @@ def test_redis_semantic_cache_deserialization_and_errors_log_warning(caplog):
     """
     import logging
     import fakeredis
-    from it_helpdesk_agent.app_utils.semantic_cache import RedisSemanticCache
+    from agent_core.app_utils.semantic_cache import RedisSemanticCache
 
     caplog.set_level(logging.WARNING)
 
@@ -340,7 +340,7 @@ def test_semantic_cache_tier_aware_thresholds():
     - L2: 0.92 (Medium risk)
     - L3: 0.98 (High risk - near exact match required)
     """
-    from it_helpdesk_agent.app_utils.semantic_cache import InMemorySemanticCache, DEFAULT_TIER_THRESHOLDS
+    from agent_core.app_utils.semantic_cache import InMemorySemanticCache, DEFAULT_TIER_THRESHOLDS
 
     cache = InMemorySemanticCache(similarity_threshold=0.92)
     assert cache.get_tier_threshold("L1") == 0.90
@@ -356,7 +356,7 @@ def test_l3_queries_false_hit_protection_mutation():
     P1.2 (Mutation): Test 2 L3 queries with similar incident symptoms but distinct contexts/causes.
     Verifies that L3 threshold (0.98) prevents false cache hits on distinct incidents.
     """
-    from it_helpdesk_agent.app_utils.semantic_cache import InMemorySemanticCache
+    from agent_core.app_utils.semantic_cache import InMemorySemanticCache
 
     cache = InMemorySemanticCache(similarity_threshold=0.92)
     cache.clear()
@@ -382,15 +382,15 @@ async def test_l3_agent_cache_bypass_in_callbacks():
     2. semantic_cache_after_model_callback never persists L3 outputs to cache.
     """
     from unittest.mock import MagicMock
-    from it_helpdesk_agent.agent import (
+    from agent_core.agent import (
         semantic_cache_before_model_callback,
         semantic_cache_after_model_callback,
         current_sso_user,
     )
-    from it_helpdesk_agent.app_utils.sso_auth import SSOUser
+    from agent_core.app_utils.sso_auth import SSOUser
     from google.genai import types
     from google.adk.models import LlmRequest, LlmResponse
-    from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
+    from agent_core.app_utils.semantic_cache import get_semantic_cache
 
     cache = get_semantic_cache()
     cache.clear()
@@ -447,7 +447,7 @@ def test_semantic_cache_public_ttl_default_4h():
     while private entries default to 86400s (24h) TTL.
     """
     import time
-    from it_helpdesk_agent.app_utils.semantic_cache import InMemorySemanticCache
+    from agent_core.app_utils.semantic_cache import InMemorySemanticCache
 
     cache = InMemorySemanticCache()
     cache.clear()
@@ -479,7 +479,7 @@ def test_is_safe_public_faq_first_turn_only():
     """
     0.8: Verifies that _is_safe_public_faq returns False when is_first_turn is False.
     """
-    from it_helpdesk_agent.agent import _is_safe_public_faq
+    from agent_core.agent import _is_safe_public_faq
 
     # Turn 1 -> Allowed
     assert _is_safe_public_faq("wifi support", "l1_selfservice_agent", [], is_first_turn=True) is True
@@ -494,14 +494,14 @@ async def test_semantic_cache_multiturn_public_caching_restricted_to_turn_1():
     Turn 2+ queries are cached with user isolation (is_public=False) even if matching FAQ keywords.
     """
     from unittest.mock import MagicMock
-    from it_helpdesk_agent.agent import (
+    from agent_core.agent import (
         semantic_cache_after_model_callback,
         current_sso_user,
     )
-    from it_helpdesk_agent.app_utils.sso_auth import SSOUser
+    from agent_core.app_utils.sso_auth import SSOUser
     from google.genai import types
     from google.adk.models import LlmResponse
-    from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
+    from agent_core.app_utils.semantic_cache import get_semantic_cache
 
     cache = get_semantic_cache()
     cache.clear()
@@ -566,7 +566,7 @@ def test_redis_semantic_cache_kb_version_namespace():
     0.8: Verifies that RedisSemanticCache constructs namespace keys incorporating KB_VERSION.
     """
     import fakeredis
-    from it_helpdesk_agent.app_utils.semantic_cache import RedisSemanticCache
+    from agent_core.app_utils.semantic_cache import RedisSemanticCache
 
     fake_server = fakeredis.FakeServer()
     r = fakeredis.FakeStrictRedis(server=fake_server, decode_responses=True)

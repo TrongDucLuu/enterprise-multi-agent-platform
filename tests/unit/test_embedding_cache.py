@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from it_helpdesk_agent.app_utils.embedding_utils import (
+from agent_core.app_utils.embedding_utils import (
     generate_text_embedding,
     clear_embedding_cache,
     _EMBEDDING_CACHE,

@@ -10,7 +10,7 @@ import os
 import re
 import logging
 from typing import Optional, Any
-from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult
+from agent_core.tools.enterprise_rag_mcp.rag_models import SearchResult
 
 logger = logging.getLogger(__name__)
 

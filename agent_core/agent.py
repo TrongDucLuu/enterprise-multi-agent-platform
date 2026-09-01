@@ -8,28 +8,28 @@ from google.adk.models import Gemini, LlmRequest, LlmResponse
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.tools import preload_memory_tool
 from google.genai import types
-from it_helpdesk_agent.app_utils.env import init_environment
-from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
-from it_helpdesk_agent.app_utils.rate_limiter import check_l3_rate_limit
-from it_helpdesk_agent.app_utils.sso_auth import current_sso_user
-from it_helpdesk_agent.app_utils.telemetry import ProductMetricsCollector
-from it_helpdesk_agent.tools.mcp_config import get_enterprise_rag_mcp_toolset
-from it_helpdesk_agent.tools.ticketing_tool import (
+from agent_core.app_utils.env import init_environment
+from agent_core.app_utils.semantic_cache import get_semantic_cache
+from agent_core.app_utils.rate_limiter import check_l3_rate_limit
+from agent_core.app_utils.sso_auth import current_sso_user
+from agent_core.app_utils.telemetry import ProductMetricsCollector
+from agent_core.tools.mcp_config import get_enterprise_rag_mcp_toolset
+from agent_core.tools.ticketing_tool import (
     create_helpdesk_ticket,
     get_ticket_details,
     update_ticket_status,
     route_ticket_to_tier,
     list_user_tickets
 )
-from it_helpdesk_agent.tools.log_analyzer import analyze_system_logs_for_rca
-from it_helpdesk_agent.tools.compliance_tool import (
+from agent_core.tools.log_analyzer import analyze_system_logs_for_rca
+from agent_core.tools.compliance_tool import (
     review_it_contract_sla,
     get_obligation,
     list_contract_obligations,
 )
 
 PROJECT_ID, MODEL_LOC, SERVICE_LOC, SECRETS = init_environment()
-from it_helpdesk_agent.app_utils.env import is_production_mode, get_model_names_for_environment
+from agent_core.app_utils.env import is_production_mode, get_model_names_for_environment
 
 FAST_MODEL_NAME, REASONING_MODEL_NAME = get_model_names_for_environment()
 
@@ -89,7 +89,7 @@ async def semantic_cache_before_model_callback(
 
     # 1. Protect expensive L3 Pro model with per-user rate limiting (L3_RATE_LIMIT_PER_MINUTE)
     if agent_name == "l3_deep_diagnostics_agent":
-        from it_helpdesk_agent.app_utils.rate_limiter import check_l3_rate_limit_with_warning
+        from agent_core.app_utils.rate_limiter import check_l3_rate_limit_with_warning
         allowed, rem, retry_after, is_soft_warning, warn_msg = check_l3_rate_limit_with_warning(user_id)
         if not allowed:
             l3_limit = os.getenv("L3_RATE_LIMIT_PER_MINUTE", "10")
@@ -104,7 +104,7 @@ async def semantic_cache_before_model_callback(
             )
         if is_soft_warning and warn_msg:
             _current_l3_soft_warning.set(warn_msg)
-            logging.getLogger("it_helpdesk_agent").info("User %s soft quota reached: %s", user_id, warn_msg)
+            logging.getLogger("agent_core").info("User %s soft quota reached: %s", user_id, warn_msg)
         else:
             _current_l3_soft_warning.set(None)
 
@@ -149,7 +149,7 @@ async def semantic_cache_before_model_callback(
                 resolution_status="RESOLVED_CACHE"
             )
         except Exception as e:
-            logging.getLogger("it_helpdesk_agent").debug("Failed to record cache hit telemetry: %s", e)
+            logging.getLogger("agent_core").debug("Failed to record cache hit telemetry: %s", e)
 
         return LlmResponse(
             content=types.Content(
@@ -280,7 +280,7 @@ async def semantic_cache_after_model_callback(
                 tools_called=tools_called,
             )
         except Exception as e:
-            logging.getLogger("it_helpdesk_agent").debug("Failed to record model interaction telemetry: %s", e)
+            logging.getLogger("agent_core").debug("Failed to record model interaction telemetry: %s", e)
 
     # 2. Check if there is an active L3 soft warning to deliver to the user
     soft_warn = _current_l3_soft_warning.get()
@@ -401,7 +401,7 @@ l1_selfservice_agent = Agent(
 
 # --- Dynamic System Instruction from Configuration ---
 try:
-    from it_helpdesk_agent.app_utils.system_config import get_system_instructions_prompt, get_configured_systems
+    from agent_core.app_utils.system_config import get_system_instructions_prompt, get_configured_systems
     _systems_prompt = get_system_instructions_prompt()
     _systems_list_str = "/".join(get_configured_systems())
 except Exception:
@@ -523,4 +523,4 @@ root_orchestrator = Agent(
     sub_agents=[l1_selfservice_agent, l2_enterprise_rag_agent, l3_deep_diagnostics_agent]
 )
 
-app = App(root_agent=root_orchestrator, name="it_helpdesk_agent")
+app = App(root_agent=root_orchestrator, name="agent_core")

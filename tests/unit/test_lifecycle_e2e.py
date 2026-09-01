@@ -3,11 +3,11 @@ import time
 from unittest.mock import MagicMock
 import pytest
 
-from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import (
+from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
     InMemoryKnowledgeStore,
     BigQueryVectorKnowledgeStore,
 )
-from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle
+from agent_core.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle
 from scripts.ingest.loaders import reconcile_deleted_documents, purge_tombstoned_chunks
 
 

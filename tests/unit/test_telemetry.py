@@ -3,9 +3,9 @@ Unit tests for Product Analytics & Conversation Telemetry.
 """
 
 import pytest
-from it_helpdesk_agent.app_utils.telemetry import ProductMetricsCollector
-from it_helpdesk_agent.app_utils.sso_auth import SSOUser, create_dev_mock_token
-from it_helpdesk_agent.fast_api_app import app
+from agent_core.app_utils.telemetry import ProductMetricsCollector
+from agent_core.app_utils.sso_auth import SSOUser, create_dev_mock_token
+from agent_core.fast_api_app import app
 from fastapi.testclient import TestClient
 
 
@@ -59,7 +59,7 @@ def test_record_interaction_and_summary_stats():
 
 
 def test_analytics_summary_endpoint(monkeypatch):
-    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
+    monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
 
     ProductMetricsCollector.record_interaction(
         session_id="sess-100",
@@ -99,12 +99,12 @@ async def test_telemetry_live_wiring_in_agent_callbacks():
     from google.adk.models import LlmRequest, LlmResponse
     from google.genai import types
     from unittest.mock import MagicMock
-    from it_helpdesk_agent.agent import (
+    from agent_core.agent import (
         semantic_cache_before_model_callback,
         semantic_cache_after_model_callback,
     )
-    from it_helpdesk_agent.app_utils.sso_auth import current_sso_user
-    from it_helpdesk_agent.app_utils.semantic_cache import get_semantic_cache
+    from agent_core.app_utils.sso_auth import current_sso_user
+    from agent_core.app_utils.semantic_cache import get_semantic_cache
 
     user = SSOUser(
         user_id="user-auto-01",
@@ -165,8 +165,8 @@ async def test_telemetry_live_wiring_in_agent_callbacks():
 
 def test_telemetry_privacy_anonymization_and_redaction(monkeypatch):
     """Verify that regulated environments (Banking/Pharma) can anonymize user IDs and redact query snippets."""
-    monkeypatch.setattr("it_helpdesk_agent.app_utils.telemetry.TELEMETRY_ANONYMIZE_USERS", True)
-    monkeypatch.setattr("it_helpdesk_agent.app_utils.telemetry.TELEMETRY_INCLUDE_QUERY", False)
+    monkeypatch.setattr("agent_core.app_utils.telemetry.TELEMETRY_ANONYMIZE_USERS", True)
+    monkeypatch.setattr("agent_core.app_utils.telemetry.TELEMETRY_INCLUDE_QUERY", False)
 
     event = ProductMetricsCollector.record_interaction(
         session_id="sess-priv-1",

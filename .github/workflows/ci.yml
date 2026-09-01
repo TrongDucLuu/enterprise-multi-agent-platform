@@ -37,7 +37,7 @@ jobs:
           SEMANTIC_CACHE_ENABLED: "true"
           RATE_LIMIT_ENABLED: "true"
         run: |
-          uv run pytest tests/ -v --cov=it_helpdesk_agent --cov-report=term-missing
+          uv run pytest tests/ -v --cov=agent_core --cov-report=term-missing
 
       - name: Verify Enterprise Document Compilers
         run: |

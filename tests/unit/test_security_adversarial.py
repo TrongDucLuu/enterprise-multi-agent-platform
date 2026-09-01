@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from it_helpdesk_agent.tools.ticketing_tool import (
+from agent_core.tools.ticketing_tool import (
     create_helpdesk_ticket,
     get_ticket_details,
     update_ticket_status,
@@ -9,17 +9,17 @@ from it_helpdesk_agent.tools.ticketing_tool import (
     _check_ticket_access,
     _TICKETS_DB,
 )
-from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import (
+from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
     InMemoryKnowledgeStore,
     BigQueryVectorKnowledgeStore,
     KnowledgeStoreUnavailableError,
 )
-from it_helpdesk_agent.tools.enterprise_rag_mcp.main import (
+from agent_core.tools.enterprise_rag_mcp.main import (
     search_enterprise_knowledge,
     get_system_manual,
 )
-from it_helpdesk_agent.app_utils.semantic_cache import SemanticCache
-from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
+from agent_core.app_utils.semantic_cache import SemanticCache
+from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 
 
 def setup_function():
@@ -379,8 +379,8 @@ def test_semantic_cache_unsafe_default_prevention():
 
 def test_check_ticket_access_fail_closed_unauthenticated():
     """Verify that _check_ticket_access fails closed when user context is None and dev SSO is off."""
-    with patch("it_helpdesk_agent.app_utils.sso_auth.get_current_sso_user", return_value=None):
-        with patch("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False):
+    with patch("agent_core.app_utils.sso_auth.get_current_sso_user", return_value=None):
+        with patch("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False):
             allowed, err = _check_ticket_access("any-user-id")
             assert allowed is False
             assert "xác thực" in err.lower() or "từ chối" in err.lower()
@@ -504,8 +504,8 @@ def test_indirect_prompt_injection_poisoned_document_isolated_as_passive_data():
     (e.g., 'SYSTEM OVERRIDE: Ignore all previous instructions...') is safely enclosed
     and marked as passive untrusted data without leaking command execution boundaries.
     """
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import KnowledgeArticle
-    from it_helpdesk_agent.agent import l2_enterprise_rag_agent, l1_selfservice_agent, l3_deep_diagnostics_agent, root_orchestrator
+    from agent_core.tools.enterprise_rag_mcp.knowledge_store import KnowledgeArticle
+    from agent_core.agent import l2_enterprise_rag_agent, l1_selfservice_agent, l3_deep_diagnostics_agent, root_orchestrator
 
     poisoned_article = KnowledgeArticle(
         id="ERP-KB-POISONED",
@@ -543,7 +543,7 @@ def test_indirect_prompt_injection_delimiter_escaping_and_tag_count():
     cannot break out of the XML wrapper (delimiter injection).
     The inner tags must be escaped to &lt;...&gt; and the snippet must have exactly 1 opening and 1 closing tag.
     """
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import KnowledgeArticle, InMemoryKnowledgeStore
+    from agent_core.tools.enterprise_rag_mcp.knowledge_store import KnowledgeArticle, InMemoryKnowledgeStore
 
     delimiter_injection_article = KnowledgeArticle(
         id="ERP-DELIM-001",
@@ -581,7 +581,7 @@ def test_indirect_prompt_injection_xml_attribute_escaping():
     Verify that special XML characters in metadata attributes (id, system, title)
     like quotes, brackets, and ampersands are escaped properly and cannot break the XML structure.
     """
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import (
+    from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
         KnowledgeArticle,
         InMemoryKnowledgeStore,
         wrap_retrieved_document,
@@ -620,10 +620,10 @@ def test_indirect_prompt_injection_xml_attribute_escaping():
 
 def test_fastmcp_get_system_manual_delimiter_escaping():
     """Verify that FastMCP get_system_manual also escapes delimiter tags and XML attributes."""
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.main import get_system_manual
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import KnowledgeArticle
-    from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
-    import it_helpdesk_agent.tools.enterprise_rag_mcp.main as mcp_main
+    from agent_core.tools.enterprise_rag_mcp.main import get_system_manual
+    from agent_core.tools.enterprise_rag_mcp.knowledge_store import KnowledgeArticle
+    from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
+    import agent_core.tools.enterprise_rag_mcp.main as mcp_main
 
     admin_user = SSOUser(
         user_id="admin-01",
@@ -673,7 +673,7 @@ def test_confidential_document_not_returned_to_employee():
     Verify that articles with sensitivity='CONFIDENTIAL' or restricted allowed_roles
     are never returned to standard employees during search or get_system_manual.
     """
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import KnowledgeArticle
+    from agent_core.tools.enterprise_rag_mcp.knowledge_store import KnowledgeArticle
 
     pub_doc = KnowledgeArticle(
         id="HRM-PUB-001",
@@ -749,16 +749,16 @@ def test_confidential_document_not_returned_to_employee_role(monkeypatch):
     Verify that an authenticated employee (role='hr_specialist', clearance=1) cannot retrieve
     CONFIDENTIAL documents (clearance=2, allowed_roles=['hr_admin', 'c_level']) via search_enterprise_knowledge.
     """
-    from it_helpdesk_agent.tools.enterprise_rag_mcp import main as mcp_main
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import (
+    from agent_core.tools.enterprise_rag_mcp import main as mcp_main
+    from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
         InMemoryKnowledgeStore,
         KnowledgeArticle,
     )
-    from it_helpdesk_agent.app_utils.sso_auth import SSOUser
+    from agent_core.app_utils.sso_auth import SSOUser
 
     # Mock SSO user as HR specialist (authorized for HRM domain, but not confidential C-Level docs)
     monkeypatch.setattr(
-        "it_helpdesk_agent.app_utils.sso_auth.get_current_sso_user",
+        "agent_core.app_utils.sso_auth.get_current_sso_user",
         lambda: SSOUser(
             user_id="emp-hr-001",
             email="hr.emp@company.com",
@@ -807,7 +807,7 @@ def test_public_faq_returned_regardless_of_clearance():
     Verify that an anonymous or low-clearance user (clearance=0, no roles) can retrieve
     PUBLIC FAQ articles (clearance=0, sensitivity='PUBLIC', allowed_roles=[]) via KnowledgeStore search.
     """
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import (
+    from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
         InMemoryKnowledgeStore,
         KnowledgeArticle,
     )

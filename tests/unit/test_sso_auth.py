@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from it_helpdesk_agent.app_utils.sso_auth import (
+from agent_core.app_utils.sso_auth import (
     SSOUser,
     create_dev_mock_token,
     verify_google_oidc_token,
@@ -54,8 +54,8 @@ def test_verify_google_oidc_token_valid():
 
 
 def test_verify_google_oidc_token_prod_fails_closed_if_no_domains(monkeypatch):
-    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.IS_PRODUCTION", True)
-    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOWED_DOMAINS", [])
+    monkeypatch.setattr("agent_core.app_utils.sso_auth.IS_PRODUCTION", True)
+    monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOWED_DOMAINS", [])
 
     with pytest.raises(HTTPException) as exc_info:
         verify_google_oidc_token(token="dummy.token", allowed_domains=[])
@@ -116,7 +116,7 @@ def test_verify_google_oidc_token_domain_restriction():
 
 
 def test_algorithm_confusion_prevention_hs256_in_prod(monkeypatch):
-    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
+    monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
 
     # Attacker attempts to sign with raw HS256 algorithm
     raw_forged_token = pyjwt.encode(
@@ -132,7 +132,7 @@ def test_algorithm_confusion_prevention_hs256_in_prod(monkeypatch):
 
 
 def test_create_and_verify_dev_mock_token(monkeypatch):
-    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
+    monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
 
     user = SSOUser(
         user_id="emp-1234",
@@ -154,7 +154,7 @@ def test_create_and_verify_dev_mock_token(monkeypatch):
 
 
 def test_verify_expired_dev_mock_token(monkeypatch):
-    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
+    monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
 
     user = SSOUser(
         user_id="emp-5678",
@@ -171,7 +171,7 @@ def test_verify_expired_dev_mock_token(monkeypatch):
 
 
 def test_verify_invalid_signature_dev_mock_token(monkeypatch):
-    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
+    monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
 
     user = SSOUser(
         user_id="emp-9999",
@@ -207,7 +207,7 @@ def test_require_role_rbac():
 
 
 def test_sso_authentication_middleware_protects_agent_endpoints(monkeypatch):
-    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
+    monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
 
     test_app = FastAPI()
     test_app.add_middleware(SSOAuthenticationMiddleware)
@@ -251,7 +251,7 @@ def test_sso_authentication_middleware_protects_agent_endpoints(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_current_user_local_dev_bypass(monkeypatch):
-    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
+    monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
     user = await get_current_user(credentials=None)
     assert user.is_authenticated is True
     assert user.user_id == "dev-user-001"
@@ -260,7 +260,7 @@ async def test_get_current_user_local_dev_bypass(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_current_user_rejects_missing_credentials_in_prod(monkeypatch):
-    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
+    monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
     with pytest.raises(HTTPException) as exc_info:
         await get_current_user(credentials=None)
     assert exc_info.value.status_code == 401
@@ -275,7 +275,7 @@ def test_swagger_openapi_disabled_in_production(monkeypatch):
     3. OpenAPI paths are not whitelisted in SSO middleware.
     """
     monkeypatch.setenv("ENVIRONMENT", "production")
-    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
+    monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
 
     test_app = FastAPI(docs_url="/docs", redoc_url="/redoc", openapi_url="/openapi.json")
 

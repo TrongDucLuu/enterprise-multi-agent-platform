@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from it_helpdesk_agent.app_utils.reranker import rerank_search_results, DEFAULT_RANKER_MODEL
-from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult
+from agent_core.app_utils.reranker import rerank_search_results, DEFAULT_RANKER_MODEL
+from agent_core.tools.enterprise_rag_mcp.rag_models import SearchResult
 
 
 @pytest.fixture

@@ -6,8 +6,8 @@ from scripts.eval_harness import (
     run_eval_suite,
     EVAL_DATASET,
 )
-from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import InMemoryKnowledgeStore
-from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult
+from agent_core.tools.enterprise_rag_mcp.knowledge_store import InMemoryKnowledgeStore
+from agent_core.tools.enterprise_rag_mcp.rag_models import SearchResult
 
 
 def test_eval_retrieval_precision_at_k_normal_flow():

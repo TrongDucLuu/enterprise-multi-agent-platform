@@ -52,7 +52,7 @@ class ProductMetricsCollector:
 
         if query:
             try:
-                from it_helpdesk_agent.app_utils.system_config import get_domain_keyword_patterns
+                from agent_core.app_utils.system_config import get_domain_keyword_patterns
                 patterns = get_domain_keyword_patterns()
                 for domain in ("ERP", "HRM", "CRM"):
                     if domain in patterns and patterns[domain].search(query):

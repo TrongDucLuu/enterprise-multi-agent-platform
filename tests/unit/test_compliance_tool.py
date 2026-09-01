@@ -1,6 +1,6 @@
 import pytest
-from it_helpdesk_agent.tools.compliance_tool import review_it_contract_sla
-from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
+from agent_core.tools.compliance_tool import review_it_contract_sla
+from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 
 
 @pytest.fixture(autouse=True)
@@ -65,7 +65,7 @@ def test_review_contract_with_missing_penalties():
 
 
 def test_review_contract_rbac_denied(monkeypatch):
-    monkeypatch.setattr("it_helpdesk_agent.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
+    monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
     
     # Override context with unauthorized employee role only
     user = SSOUser(

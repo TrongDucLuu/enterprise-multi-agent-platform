@@ -1,5 +1,5 @@
 import pytest
-from it_helpdesk_agent.tools.ticketing_tool import (
+from agent_core.tools.ticketing_tool import (
     create_helpdesk_ticket,
     get_ticket_details,
     update_ticket_status,
@@ -7,7 +7,7 @@ from it_helpdesk_agent.tools.ticketing_tool import (
     list_user_tickets,
     _TICKETS_DB,
 )
-from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
+from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 
 
 @pytest.fixture(autouse=True)
@@ -96,7 +96,7 @@ def test_ticket_cache_ttl_and_fallback():
     """Verify ticket cache expires after TTL and falls back to cached version if Firestore fails."""
     import time
     from unittest.mock import MagicMock, patch
-    from it_helpdesk_agent.tools import ticketing_tool
+    from agent_core.tools import ticketing_tool
 
     # Create ticket
     res = create_helpdesk_ticket(user_id="emp-ttl", title="TTL Test", description="Testing TTL")
@@ -120,7 +120,7 @@ def test_ticket_cache_ttl_and_fallback():
     }
     mock_fs.collection.return_value.document.return_value.get.return_value = mock_doc
 
-    with patch("it_helpdesk_agent.tools.ticketing_tool._get_firestore", return_value=mock_fs):
+    with patch("agent_core.tools.ticketing_tool._get_firestore", return_value=mock_fs):
         # 1. Immediate read within TTL should hit cache (title="TTL Test")
         details = get_ticket_details(ticket_id)
         assert details["ticket"]["title"] == "TTL Test"

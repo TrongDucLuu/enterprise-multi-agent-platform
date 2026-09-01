@@ -2,7 +2,7 @@ import time
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from it_helpdesk_agent.app_utils.rate_limiter import InMemoryRateLimiter, RateLimitMiddleware
+from agent_core.app_utils.rate_limiter import InMemoryRateLimiter, RateLimitMiddleware
 
 
 def test_in_memory_rate_limiter_sliding_window():
@@ -106,7 +106,7 @@ def test_middleware_execution_order_rate_limit_before_auth():
 
 
 def test_l3_rate_limiter_quota_enforcement():
-    from it_helpdesk_agent.app_utils.rate_limiter import get_l3_rate_limiter, check_l3_rate_limit
+    from agent_core.app_utils.rate_limiter import get_l3_rate_limiter, check_l3_rate_limit
 
     l3_limiter = get_l3_rate_limiter()
     test_user_id = "test-l3-engineer"
@@ -147,9 +147,9 @@ def test_route_ticket_to_tier_rate_limits_by_caller_not_owner():
     the L3 rate limit quota is charged to Alice (the caller), NOT Bob (the ticket owner).
     """
     import contextvars
-    from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
-    from it_helpdesk_agent.app_utils.rate_limiter import get_l3_rate_limiter, check_l3_rate_limit
-    from it_helpdesk_agent.tools.ticketing_tool import create_helpdesk_ticket, route_ticket_to_tier
+    from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
+    from agent_core.app_utils.rate_limiter import get_l3_rate_limiter, check_l3_rate_limit
+    from agent_core.tools.ticketing_tool import create_helpdesk_ticket, route_ticket_to_tier
 
     l3_limiter = get_l3_rate_limiter()
     l3_limiter._history["l3_user:alice-admin"] = []
@@ -284,8 +284,8 @@ def test_rate_limiter_user_token_rotation_defense(monkeypatch):
     does NOT bypass the rate limit threshold (key is derived from user_id, not raw token).
     """
     from unittest.mock import patch
-    from it_helpdesk_agent.app_utils.sso_auth import SSOUser, SSOAuthenticationMiddleware
-    import it_helpdesk_agent.app_utils.sso_auth as sso_mod
+    from agent_core.app_utils.sso_auth import SSOUser, SSOAuthenticationMiddleware
+    import agent_core.app_utils.sso_auth as sso_mod
 
     app = FastAPI()
     limiter = InMemoryRateLimiter(requests_per_minute=3)
@@ -329,8 +329,8 @@ def test_rate_limiter_multi_user_isolation(monkeypatch):
     P0.2: Validates that two distinct authenticated users have completely independent buckets.
     User A exhausting their quota has zero impact on User B.
     """
-    from it_helpdesk_agent.app_utils.sso_auth import SSOUser, SSOAuthenticationMiddleware
-    import it_helpdesk_agent.app_utils.sso_auth as sso_mod
+    from agent_core.app_utils.sso_auth import SSOUser, SSOAuthenticationMiddleware
+    import agent_core.app_utils.sso_auth as sso_mod
 
     app = FastAPI()
     limiter = InMemoryRateLimiter(requests_per_minute=2)
@@ -401,8 +401,8 @@ def test_single_jwt_verification_across_middlewares(monkeypatch):
     for a request passing through both RateLimitMiddleware and SSOAuthenticationMiddleware.
     """
     from unittest.mock import MagicMock
-    from it_helpdesk_agent.app_utils.sso_auth import SSOUser, SSOAuthenticationMiddleware
-    import it_helpdesk_agent.app_utils.sso_auth as sso_mod
+    from agent_core.app_utils.sso_auth import SSOUser, SSOAuthenticationMiddleware
+    import agent_core.app_utils.sso_auth as sso_mod
 
     app = FastAPI()
     limiter = InMemoryRateLimiter(requests_per_minute=10)
@@ -438,7 +438,7 @@ def test_healthz_and_readyz_endpoints():
     Validates that /healthz and /readyz endpoints return HTTP 200 without authentication
     and do not leak internal system cache details.
     """
-    from it_helpdesk_agent.fast_api_app import app
+    from agent_core.fast_api_app import app
     client = TestClient(app)
 
     r_healthz = client.get("/healthz")

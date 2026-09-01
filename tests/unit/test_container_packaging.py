@@ -7,11 +7,11 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from it_helpdesk_agent.app_utils.system_config import (
+from agent_core.app_utils.system_config import (
     load_system_config,
     SystemConfigurationError,
 )
-from it_helpdesk_agent.app_utils.embedding_utils import (
+from agent_core.app_utils.embedding_utils import (
     generate_text_embedding,
     generate_batch_embeddings,
     EmbeddingGenerationError,
@@ -26,7 +26,7 @@ def test_dockerfile_copies_config_and_code():
 
     dockerfile_content = dockerfile_path.read_text(encoding="utf-8")
     assert "COPY ./config ./config" in dockerfile_content, "Dockerfile must copy ./config directory to prevent container startup crash"
-    assert "COPY ./it_helpdesk_agent ./it_helpdesk_agent" in dockerfile_content
+    assert "COPY ./agent_core ./agent_core" in dockerfile_content
 
 
 def test_missing_config_fails_closed_in_simulated_container(tmp_path, monkeypatch):

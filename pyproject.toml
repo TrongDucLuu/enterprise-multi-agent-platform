@@ -1,6 +1,6 @@
 [project]
-name = "it-helpdesk-agent"
-version = "0.1.0"
+name = "agent-core"
+version = "2.0.0"
 description = "Production-ready 3-Tier IT Helpdesk Multi-Agent AI System powered by Google ADK and Gemini."
 readme = "README.md"
 requires-python = ">=3.12, <3.14"

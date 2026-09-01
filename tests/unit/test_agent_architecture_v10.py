@@ -1,17 +1,17 @@
 import os
 import tempfile
 import pytest
-from it_helpdesk_agent.agent import (
+from agent_core.agent import (
     root_orchestrator,
     l1_selfservice_agent,
     l2_enterprise_rag_agent,
     l3_deep_diagnostics_agent,
 )
-from it_helpdesk_agent.tools.log_analyzer import analyze_system_logs_for_rca
-from it_helpdesk_agent.tools.compliance_tool import review_it_contract_sla
-from it_helpdesk_agent.app_utils.sso_auth import SSOUser, current_sso_user
+from agent_core.tools.log_analyzer import analyze_system_logs_for_rca
+from agent_core.tools.compliance_tool import review_it_contract_sla
+from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 from google.adk.tools import preload_memory_tool, load_memory_tool
-from it_helpdesk_agent.tools.ticketing_tool import list_user_tickets, get_ticket_details, create_helpdesk_ticket
+from agent_core.tools.ticketing_tool import list_user_tickets, get_ticket_details, create_helpdesk_ticket
 
 
 def test_agent_descriptions_populated():

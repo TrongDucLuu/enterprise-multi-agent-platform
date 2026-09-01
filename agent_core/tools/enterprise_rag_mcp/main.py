@@ -13,12 +13,12 @@ try:
     from rag_models import SearchResult, Fact, Obligation
     from obligations_store import get_obligations_store
 except ImportError:
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import get_knowledge_store, get_facts_store, KnowledgeStoreUnavailableError, wrap_retrieved_document
-    from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult, Fact, Obligation
-    from it_helpdesk_agent.tools.obligations_store import get_obligations_store
+    from agent_core.tools.enterprise_rag_mcp.knowledge_store import get_knowledge_store, get_facts_store, KnowledgeStoreUnavailableError, wrap_retrieved_document
+    from agent_core.tools.enterprise_rag_mcp.rag_models import SearchResult, Fact, Obligation
+    from agent_core.tools.obligations_store import get_obligations_store
 
 try:
-    from it_helpdesk_agent.app_utils.system_config import (
+    from agent_core.app_utils.system_config import (
         get_configured_systems,
         get_valid_system_filters,
         get_system_required_roles,
@@ -60,7 +60,7 @@ def _check_system_access(system: str) -> tuple[bool, Optional[str]]:
         return True, None
 
     try:
-        from it_helpdesk_agent.app_utils.sso_auth import require_role
+        from agent_core.app_utils.sso_auth import require_role
     except ImportError:
         try:
             from app_utils.sso_auth import require_role
@@ -102,7 +102,7 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
         auth_header = request.headers.get("Authorization")
         if not auth_header or not auth_header.startswith("Bearer "):
             try:
-                from it_helpdesk_agent.app_utils.sso_auth import ALLOW_LOCAL_DEV_SSO, SSOUser, current_sso_user
+                from agent_core.app_utils.sso_auth import ALLOW_LOCAL_DEV_SSO, SSOUser, current_sso_user
                 if ALLOW_LOCAL_DEV_SSO:
                     dev_user = SSOUser(
                         user_id="dev-user-001",
@@ -129,7 +129,7 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
 
         token = auth_header[7:].strip()
         try:
-            from it_helpdesk_agent.app_utils.sso_auth import verify_sso_token, current_sso_user, current_sso_raw_token
+            from agent_core.app_utils.sso_auth import verify_sso_token, current_sso_user, current_sso_raw_token
             user = verify_sso_token(token)
             token_ctx = current_sso_user.set(user)
             raw_token_ctx = current_sso_raw_token.set(token)
@@ -215,7 +215,7 @@ def get_obligation(obligation_id: str) -> dict:
     Bảo vệ bởi RBAC: chỉ cho phép compliance_officer, it_admin, sys_admin, legal_counsel.
     """
     try:
-        from it_helpdesk_agent.app_utils.sso_auth import require_role
+        from agent_core.app_utils.sso_auth import require_role
     except ImportError:
         try:
             from app_utils.sso_auth import require_role
@@ -333,7 +333,7 @@ def search_enterprise_knowledge(
         }]
 
     try:
-        from it_helpdesk_agent.app_utils.sso_auth import get_current_sso_user
+        from agent_core.app_utils.sso_auth import get_current_sso_user
     except ImportError:
         try:
             from app_utils.sso_auth import get_current_sso_user
@@ -442,7 +442,7 @@ def get_system_manual(article_id: str) -> dict:
 
     # Document-level RBAC & Sensitivity trimming
     try:
-        from it_helpdesk_agent.app_utils.sso_auth import get_current_sso_user
+        from agent_core.app_utils.sso_auth import get_current_sso_user
     except ImportError:
         try:
             from app_utils.sso_auth import get_current_sso_user

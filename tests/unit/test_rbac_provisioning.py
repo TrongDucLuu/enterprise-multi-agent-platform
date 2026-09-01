@@ -5,12 +5,12 @@ import sys
 import hashlib
 import pytest
 from unittest.mock import patch, MagicMock
-from it_helpdesk_agent.app_utils.system_config import (
+from agent_core.app_utils.system_config import (
     resolve_user_roles,
     get_user_role_mappings,
     reload_system_config,
 )
-from it_helpdesk_agent.app_utils.sso_auth import verify_google_oidc_token, SSOUser
+from agent_core.app_utils.sso_auth import verify_google_oidc_token, SSOUser
 
 
 class TestRBACProvisioning:

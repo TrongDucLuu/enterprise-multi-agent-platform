@@ -1,5 +1,5 @@
 import pytest
-from it_helpdesk_agent.app_utils.triage_rules import classify_intent_fast_path
+from agent_core.app_utils.triage_rules import classify_intent_fast_path
 
 
 def test_triage_fast_path_l3():

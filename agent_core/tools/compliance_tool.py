@@ -2,9 +2,9 @@ import os
 import re
 import logging
 from typing import Optional
-from it_helpdesk_agent.app_utils.sso_auth import require_role
-from it_helpdesk_agent.tools.obligations_store import get_obligations_store
-from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStoreUnavailableError
+from agent_core.app_utils.sso_auth import require_role
+from agent_core.tools.obligations_store import get_obligations_store
+from agent_core.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStoreUnavailableError
 
 logger = logging.getLogger(__name__)
 
