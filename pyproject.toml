@@ -1,7 +1,7 @@
 [project]
 name = "agent-core"
 version = "2.0.0"
-description = "Production-ready 3-Tier IT Helpdesk Multi-Agent AI System powered by Google ADK and Gemini."
+description = "Production-ready Enterprise Multi-Agent AI Platform with Domain Packs, BigQuery Vector RAG, and Google ADK."
 readme = "README.md"
 requires-python = ">=3.12, <3.14"
 dependencies = [

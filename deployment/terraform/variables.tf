@@ -12,7 +12,7 @@ variable "region" {
 variable "service_name" {
   description = "The name of the Cloud Run service"
   type        = string
-  default     = "it-helpdesk-agent"
+  default     = "enterprise-multi-agent-platform"
 }
 
 variable "environment" {
