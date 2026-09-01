@@ -64,9 +64,9 @@ def test_reranker_success_reorders_and_normalizes(sample_candidates, monkeypatch
 
     assert len(results) == 2
     assert results[0].article_id == "HRM-001"
-    assert results[0].score == 0.96
+    assert results[0].relevance_score == 0.96
     assert results[1].article_id == "ERP-001"
-    assert results[1].score == 0.88
+    assert results[1].relevance_score == 0.88
     mock_client.rank.assert_called_once()
 
 
@@ -88,3 +88,19 @@ def test_reranker_graceful_fallback_on_api_error(sample_candidates, monkeypatch)
     assert results[0].article_id == "ERP-001"
     assert results[1].article_id == "HRM-001"
     assert results[2].article_id == "CRM-001"
+
+
+def test_search_result_extra_forbid_prevents_phantom_fields():
+    """Verify that SearchResult forbids extra/phantom fields during instantiation."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        SearchResult(
+            article_id="TEST-001",
+            system="ERP",
+            title="Test",
+            snippet="Test snippet",
+            relevance_score=0.9,
+            score=0.95,  # Invalid extra field
+        )
+

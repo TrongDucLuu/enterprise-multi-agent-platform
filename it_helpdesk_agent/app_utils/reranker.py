@@ -7,6 +7,7 @@ with fail-safe fallback to candidate order if the ranking service is disabled or
 """
 
 import os
+import re
 import logging
 from typing import Optional, Any
 from it_helpdesk_agent.tools.enterprise_rag_mcp.rag_models import SearchResult
@@ -58,11 +59,12 @@ def rerank_search_results(
         client = discoveryengine.RankServiceClient()
         ranking_config = f"projects/{proj}/locations/global/rankingConfigs/default_ranking_config"
 
+        # Pass clean text to cross-encoder (strip XML wrapping tags if present)
         records = [
             discoveryengine.RankingRecord(
                 id=c.article_id,
                 title=c.title,
-                content=c.snippet[:1000],  # Truncate content to token limit
+                content=re.sub(r"<[^>]+>", "", c.snippet).strip()[:1000],
             )
             for c in candidates
         ]
@@ -75,7 +77,7 @@ def rerank_search_results(
             top_n=target_top_n,
         )
 
-        response = client.rank(request=request)
+        response = client.rank(request=request, timeout=1.5)
 
         # Map reranked records back to SearchResult candidates
         id_to_candidate = {c.article_id: c for c in candidates}
@@ -85,10 +87,10 @@ def rerank_search_results(
             if record.id in id_to_candidate:
                 cand = id_to_candidate[record.id]
                 # Normalize ranking score to [0.0, 1.0] if provided
-                raw_score = float(record.score) if hasattr(record, "score") and record.score is not None else cand.score
+                raw_score = float(record.score) if hasattr(record, "score") and record.score is not None else cand.relevance_score
                 # Bound score to [0.0, 1.0]
                 norm_score = max(0.0, min(1.0, raw_score))
-                reranked_cand = cand.model_copy(update={"score": norm_score})
+                reranked_cand = cand.model_copy(update={"relevance_score": norm_score})
                 reranked_results.append(reranked_cand)
 
         # Append any missing candidates in original relative order up to target_top_n

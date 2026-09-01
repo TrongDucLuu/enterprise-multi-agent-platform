@@ -1,5 +1,5 @@
 from typing import Optional, Any
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 try:
     from it_helpdesk_agent.app_utils.system_config import get_valid_system_filters
@@ -70,6 +70,8 @@ class KnowledgeArticle(BaseModel):
 
 
 class SearchResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     article_id: str
     system: str
     title: str
