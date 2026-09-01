@@ -98,7 +98,7 @@ Hệ thống được thiết kế theo tiêu chuẩn an toàn thông tin cấp 
 | **Fail-Closed Domain Filtering** | Bắt buộc cấu hình `ALLOWED_DOMAINS` trên Production. Ngăn chặn triệt để tài khoản cá nhân `@gmail.com` truy cập hệ thống. | ✅ **Fail-Closed** |
 | **Cô Lập Thuật Toán (No Confusion)** | RS256 chỉ dành cho token Google OIDC; HS256 chỉ dùng cho Dev Mock Token. Tuyệt đối không cho phép dùng chung secret key. | ✅ **Algorithm Isolation** |
 | **Connection Pooling & Cache JWKS** | Singleton `Request` adapter kết hợp `requests.Session()` tái sử dụng connection pool HTTPS, giảm thiểu latency xác thực. | ✅ **High Performance** |
-| **Bảo Vệ Toàn Diện Middleware** | `SSOAuthenticationMiddleware` bảo vệ mọi endpoint (ADK agent, API, session) ngoại trừ các public endpoint (`/healthz`, `/docs`). | ✅ **Zero Trust Per-Route** |
+| **Bảo Vệ Toàn Diện Middleware** | `SSOAuthenticationMiddleware` bảo vệ mọi endpoint (ADK agent, API, session) ngoại trừ `/healthz`, `/health`, `/readyz` (trên Production `/docs` bị loại bỏ hoàn toàn). | ✅ **Zero Trust Per-Route** |
 | **Phân Quyền RBAC 4 Tầng Ưu Tiên** | Cơ chế `resolve_user_roles` phân cấp: YAML Mapping $\rightarrow$ Biến môi trường $\rightarrow$ Firestore $\rightarrow$ Fallback `employee`. Keying cache bảo vệ bằng SHA-256 xác định. | ✅ **Multi-Tier RBAC** |
 | **Terraform Edge Security & SLA Guard** | `check "production_edge_security"` chặn triển khai Cloud Run `allow_unauthenticated=true` trên Production nếu không có Cloud Armor WAF; `check "production_model_sla"` cảnh báo model preview trên Prod. | ✅ **IaC Enforcement** |
 
