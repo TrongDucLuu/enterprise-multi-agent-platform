@@ -1,4 +1,5 @@
 import os
+import logging
 from unittest.mock import MagicMock, patch
 import pytest
 from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import (
@@ -7,6 +8,7 @@ from it_helpdesk_agent.tools.enterprise_rag_mcp.knowledge_store import (
     BigQueryVectorKnowledgeStore,
     get_knowledge_store,
     KnowledgeArticle,
+    KnowledgeStoreUnavailableError,
 )
 
 
@@ -694,6 +696,58 @@ def test_bigquery_knowledge_store_missing_library_raises_importerror():
         with pytest.raises(ImportError) as exc_info:
             BigQueryVectorKnowledgeStore(project_id="test-proj")
         assert "google-cloud-bigquery" in str(exc_info.value)
+
+
+def test_bigquery_telemetry_and_job_timeout_cancel(caplog):
+    """
+    0.10: Verifies that BigQueryVectorKnowledgeStore:
+    1. Sets job_timeout_ms on QueryJobConfig matching timeout (e.g. 3000ms).
+    2. Logs telemetry metrics: bytes_billed, bytes_processed, cache_hit, slot_ms.
+    3. Calls query_job.cancel() when query_job.result() raises an exception or times out.
+    """
+    mock_bq = MagicMock()
+    mock_query_job = MagicMock()
+    mock_query_job.total_bytes_billed = 10485760
+    mock_query_job.total_bytes_processed = 5242880
+    mock_query_job.cache_hit = False
+    mock_query_job.slot_millis = 150
+    mock_query_job.job_id = "job_test_123"
+    mock_query_job.result.return_value = []
+    mock_bq.query.return_value = mock_query_job
+
+    store = BigQueryVectorKnowledgeStore(
+        project_id="test-project",
+        dataset_id="test_kb",
+        table_name="articles",
+        bq_client=mock_bq,
+        embedding_fn=lambda t: [0.1] * 64
+    )
+
+    with caplog.at_level(logging.INFO, logger="it_helpdesk_agent"):
+        store.search("Lỗi mạng LAN", system="ALL", limit=5)
+
+    # 1. Verify job_timeout_ms passed in QueryJobConfig
+    call_kwargs = mock_bq.query.call_args[1]
+    job_cfg = call_kwargs.get("job_config")
+    assert job_cfg is not None
+    assert int(job_cfg.job_timeout_ms) == 3000
+
+    # 2. Verify Telemetry logging
+    assert any(
+        "bytes_billed=10485760" in rec.message and "slot_ms=150" in rec.message
+        for rec in caplog.records
+    )
+
+    # 3. Verify query_job.cancel() on timeout / exception
+    mock_fail_job = MagicMock()
+    mock_fail_job.result.side_effect = TimeoutError("Query job execution exceeded 3.0s")
+    mock_bq.query.return_value = mock_fail_job
+
+    with pytest.raises(KnowledgeStoreUnavailableError):
+        store.search("Lỗi mạng LAN", system="ALL", limit=5)
+
+    mock_fail_job.cancel.assert_called_once()
+
 
 
 

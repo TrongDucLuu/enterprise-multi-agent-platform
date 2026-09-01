@@ -1140,9 +1140,33 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 """
 
             bq_timeout = float(os.getenv("BIGQUERY_QUERY_TIMEOUT_SECONDS", "3.0"))
-            job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+            job_timeout_ms = int(bq_timeout * 1000)
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=query_params,
+                job_timeout_ms=job_timeout_ms,
+            )
             query_job = self.bq_client.query(sql, job_config=job_config)
-            rows = query_job.result(timeout=bq_timeout)
+            try:
+                rows = query_job.result(timeout=bq_timeout)
+            except Exception as query_err:
+                try:
+                    query_job.cancel()
+                except Exception as cancel_err:
+                    logger.debug("Failed to cancel BigQuery query job: %s", cancel_err)
+                raise query_err
+
+            # Telemetry: Record and log BigQuery query resource consumption
+            try:
+                bytes_billed = getattr(query_job, "total_bytes_billed", None)
+                bytes_processed = getattr(query_job, "total_bytes_processed", None)
+                cache_hit = getattr(query_job, "cache_hit", None)
+                slot_ms = getattr(query_job, "slot_millis", None)
+                logger.info(
+                    "BigQuery Vector Search Telemetry: bytes_billed=%s, bytes_processed=%s, cache_hit=%s, slot_ms=%s, job_id=%s",
+                    bytes_billed, bytes_processed, cache_hit, slot_ms, getattr(query_job, "job_id", None)
+                )
+            except Exception as telem_err:
+                logger.debug("Error recording BigQuery telemetry: %s", telem_err)
 
             results = []
             for row in rows:
@@ -1250,9 +1274,18 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             job_config = bigquery.QueryJobConfig(
                 query_parameters=[
                     bigquery.ScalarQueryParameter("article_id", "STRING", clean_id)
-                ]
+                ],
+                job_timeout_ms=int(bq_timeout * 1000),
             )
-            rows = list(self.bq_client.query(sql, job_config=job_config).result(timeout=bq_timeout))
+            query_job = self.bq_client.query(sql, job_config=job_config)
+            try:
+                rows = list(query_job.result(timeout=bq_timeout))
+            except Exception as q_err:
+                try:
+                    query_job.cancel()
+                except Exception as c_err:
+                    logger.debug("Failed to cancel BigQuery get_article_by_id query job: %s", c_err)
+                raise q_err
             if not rows:
                 return None
 

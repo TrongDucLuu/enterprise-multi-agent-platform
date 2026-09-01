@@ -133,7 +133,7 @@ Khác với các PoC demo LLM thông thường, hệ thống này được xây 
 
 ### 3. Khả Năng Tự Phục Hồi & Giảm Tải Mềm (Graceful Degradation)
 - **Redis Circuit Breaker & Alerting:** Tự động giám sát lỗi Redis liên tiếp; khi vượt quá ngưỡng $10$ lỗi, Circuit Breaker kích hoạt và bắn cảnh báo khẩn cấp `REDIS_CIRCUIT_BREAKER_ALERT`, chuyển sang chế độ bypass an toàn mà không làm gián đoạn người dùng.
-- **BigQuery Timeouts & Guardrails:** Giới hạn thời gian truy vấn BigQuery Vector Search tối đa $15\text{s}$, tự động xử lý ngoại lệ và trả về phản hồi fallback thân thiện.
+- **BigQuery Timeouts & Guardrails:** Giới hạn thời gian truy vấn BigQuery Vector Search tối đa $3.0\text{s}$, tự động xử lý ngoại lệ và trả về phản hồi fallback thân thiện.
 - **Firestore Local Fallback:** Tự động chuyển đổi giữa Firestore cụm phân tán và bộ nhớ đệm cục bộ khi chạy offline/local testing.
 
 ### 4. Ma Trận Quy Mô Doanh Nghiệp & Năng Lực CCU (Enterprise Sizing Matrix)
@@ -182,7 +182,7 @@ cp .env.example .env
 | `USE_FIRESTORE_TICKETS`| Không | `false` | Bật Firestore backend cho ticket storage (tự động bật trên Cloud Run). |
 | `KNOWLEDGE_BACKEND` | Không | `in_memory` | Backend cho RAG (`in_memory` hoặc `bigquery`). |
 | `BIGQUERY_KB_DATASET` | Không | `it_helpdesk_kb`| Dataset BigQuery chứa tài liệu tri thức doanh nghiệp. |
-| `BIGQUERY_SEARCH_TIMEOUT_SECONDS` | Không | `15.0` | Timeout tối đa cho truy vấn BigQuery Vector Search (giây). |
+| `BIGQUERY_QUERY_TIMEOUT_SECONDS` | Không | `3.0` | Timeout tối đa cho truy vấn BigQuery Vector Search (giây). |
 | `SEMANTIC_CACHE_ENABLED`| Không| `true` | Bật lớp bộ đệm ngữ nghĩa cho câu hỏi lặp lại. |
 | `SEMANTIC_CACHE_THRESHOLD`| Không| `0.92` | Ngưỡng tương đồng cosine để coi là trùng khớp câu hỏi. |
 | `TICKET_CACHE_TTL_SECONDS` | Không | `30` | Thời gian sống (TTL) của bộ nhớ đệm ticket trước khi đồng bộ Firestore. |
