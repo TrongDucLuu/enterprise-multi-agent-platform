@@ -30,15 +30,30 @@ def list_registered_tools() -> list[str]:
     return sorted(list(TOOL_REGISTRY.keys()))
 
 
-def resolve_tools(names: list[str]) -> list[Callable]:
+def resolve_tools(names: list[str]) -> list[object]:
     """
-    Resolves a list of tool names to their registered callable functions.
+    Resolves a list of tool names to their registered callable functions or built-in tool instances.
     Raises ValueError if any tool is unknown (fail-closed).
     """
-    missing = [n for n in names if n not in TOOL_REGISTRY]
+    resolved = []
+    missing = []
+    for n in names:
+        if n in ("builtin:preload_memory", "preload_memory"):
+            try:
+                from google.adk.tools import preload_memory_tool
+                resolved.append(preload_memory_tool.PreloadMemoryTool())
+            except Exception as e:
+                logger.error("Failed to instantiate PreloadMemoryTool: %s", e)
+                raise
+        elif n in TOOL_REGISTRY:
+            resolved.append(TOOL_REGISTRY[n])
+        else:
+            missing.append(n)
+
     if missing:
-        raise ValueError(f"Domain pack references unknown tools: {missing}. Available tools: {list_registered_tools()}")
-    return [TOOL_REGISTRY[n] for n in names]
+        available = list_registered_tools() + ["builtin:preload_memory"]
+        raise ValueError(f"Domain pack references unknown tools: {missing}. Available tools: {available}")
+    return resolved
 
 
 def clear_registry_for_testing():

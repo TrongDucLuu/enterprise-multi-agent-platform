@@ -5,7 +5,8 @@ agents:
     model_type: "fast"
     instruction: |
       Bạn là Trưởng nhóm Điều phối chung. Tiếp nhận yêu cầu của người dùng, phân tích ý định và chuyển giao cho Sub-agent xử lý.
-    tools: []
+    tools:
+      - builtin:preload_memory
     sub_agents:
       - specialist_agent
 

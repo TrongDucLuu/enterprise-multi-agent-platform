@@ -3,20 +3,28 @@ Domain Pack Loader and Dynamic Agent Builder for agent_core.
 Reads domain pack declarations (pack.yaml, agents.yaml, case_schema.yaml, systems.yaml),
 validates schema and version compatibility, resolves tools from TOOL_REGISTRY,
 enforces security guardrails (Indirect Prompt Injection Defense),
+renders dynamic prompt templates, injects return-to-root routing rules (P1-05),
 and dynamically constructs Google GenAI ADK Agent hierarchies.
 """
 import os
 import re
 import logging
 from pathlib import Path
+from string import Template
 from typing import Optional, Dict, Any, Tuple
 import yaml
 from google.adk.agents import Agent
 
 from agent_core import CORE_VERSION
+from agent_core.runtime import (
+    fast_model as default_fast_model,
+    high_reasoning_model as default_reasoning_model,
+    semantic_cache_before_model_callback,
+    semantic_cache_after_model_callback,
+    save_session_to_memory_callback,
+)
 from agent_core.tools.registry import resolve_tools
 import agent_core.tools  # Ensure standard tools are registered
-import agent_core.plugins  # Ensure plugins are registered
 
 logger = logging.getLogger("agent_core.agent_builder")
 
@@ -123,16 +131,9 @@ def build_agent_system(
 ) -> Tuple[Agent, Dict[str, Agent]]:
     """
     Dynamically builds ADK Agent hierarchy from a Domain Pack.
-    Enforces Indirect Prompt Injection Defense across all agents.
+    Enforces Indirect Prompt Injection Defense, dynamic template interpolation,
+    and return-to-root rules across all agents.
     """
-    from agent_core.agent import (
-        fast_model as default_fast_model,
-        high_reasoning_model as default_reasoning_model,
-        semantic_cache_before_model_callback,
-        semantic_cache_after_model_callback,
-        save_session_to_memory_callback,
-    )
-
     f_model = fast_model or default_fast_model
     r_model = reasoning_model or default_reasoning_model
 
@@ -140,6 +141,24 @@ def build_agent_system(
     agents_spec = pack_info["agents_data"]
     pack_meta = pack_info["pack_meta"]
     entry_agent_name = pack_meta.get("entry_agent", "root_triage_orchestrator")
+
+    # Fetch dynamic systems configuration for safe template substitution
+    try:
+        from agent_core.app_utils.system_config import get_system_instructions_prompt, get_configured_systems
+        systems_prompt = get_system_instructions_prompt()
+        systems_list = "/".join(get_configured_systems())
+    except Exception as e:
+        logger.debug("System config fetch for template substitution: %s", e)
+        systems_prompt = ""
+        systems_list = "ERP/HRM/CRM"
+
+    template_context = {
+        "systems_list": systems_list,
+        "systems_prompt": systems_prompt,
+        "entry_agent": entry_agent_name,
+        "pack_name": pack_meta.get("name", entry_agent_name),
+        "pack_id": pack_meta.get("id", "it-helpdesk"),
+    }
 
     created_agents: Dict[str, Agent] = {}
 
@@ -149,11 +168,25 @@ def build_agent_system(
         description = spec.get("description", "")
         raw_instruction = spec.get("instruction", "").strip()
 
+        # Dynamic template substitution using safe_substitute ($var syntax)
+        # Keeps {source_uri} and {article_id} untouched
+        rendered_instruction = Template(raw_instruction).safe_substitute(template_context)
+
+        # P1-05: Return path to root rule for non-entry sub-agents
+        if name != entry_agent_name:
+            return_rule = (
+                f"\n\n    **Quy tắc Chuyển giao Ngược về Điều Phối ({entry_agent_name}):**\n"
+                f"    - Khi người dùng chuyển hướng sang chủ đề hoặc nghiệp vụ khác nằm ngoài phạm vi chuyên môn của bạn, "
+                f"hoặc hỏi lại câu hỏi tổng quan/FAQ mới, bạn BẮT BUỘC hướng dẫn hoặc thực hiện chuyển giao quyền xử lý về `{entry_agent_name}` để điều phối lại."
+            )
+            if entry_agent_name not in rendered_instruction and "Chuyển giao Ngược về" not in rendered_instruction:
+                rendered_instruction = f"{rendered_instruction}{return_rule}"
+
         # Enforce Prompt Injection Defense strictly across all agents
-        if INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION.strip() not in raw_instruction:
-            full_instruction = f"{raw_instruction}\n\n    6. {INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION.strip()}"
+        if INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION.strip() not in rendered_instruction:
+            full_instruction = f"{rendered_instruction}\n\n    {INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION.strip()}"
         else:
-            full_instruction = raw_instruction
+            full_instruction = rendered_instruction
 
         model_type = spec.get("model_type", "fast")
         selected_model = r_model if model_type == "reasoning" else f_model
