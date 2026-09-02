@@ -85,16 +85,17 @@ try:
 except ImportError:
     from knowledge.authorize import authorize_document, resolve_doc_clearance
 
-
 try:
     from agent_core.app_utils.system_config import get_valid_system_filters, get_retrieval_config
     from agent_core.app_utils.embedding_utils import DEFAULT_EMBEDDING_MODEL, generate_text_embedding
     from agent_core.app_utils.reranker import rerank_search_results
+    from agent_core.app_utils.env import is_production_mode
 except ImportError:
     try:
         from app_utils.system_config import get_valid_system_filters, get_retrieval_config
         from app_utils.embedding_utils import DEFAULT_EMBEDDING_MODEL, generate_text_embedding
         from app_utils.reranker import rerank_search_results
+        from app_utils.env import is_production_mode
     except ImportError:
         def get_valid_system_filters() -> set[str]:
             return {"ERP", "HRM", "CRM", "ALL"}
@@ -105,6 +106,8 @@ except ImportError:
             return [0.0] * 768
         def rerank_search_results(query: str, candidates: list[SearchResult], **kwargs) -> list[SearchResult]:
             return candidates
+        def is_production_mode() -> bool:
+            return os.getenv("ENVIRONMENT", "").lower() == "production" or bool(os.getenv("K_SERVICE"))
 
 
 class KnowledgeStoreUnavailableError(Exception):
@@ -686,8 +689,12 @@ class BaseKnowledgeStore(ABC):
         pass
 
     @abstractmethod
-    def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
-        """Retrieve the full content of an article by its unique ID."""
+    def get_article_by_id(
+        self,
+        article_id: str,
+        security_context: SecurityContext,
+    ) -> Optional[KnowledgeArticle]:
+        """Retrieve the full content of an article by its unique ID, strictly authorized by security_context."""
         pass
 
 
@@ -826,8 +833,14 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         return search_results
 
 
-    def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
-        """Retrieves an article by its unique ID, aggregating multi-chunk documents if present."""
+    def get_article_by_id(
+        self,
+        article_id: str,
+        security_context: SecurityContext,
+    ) -> Optional[KnowledgeArticle]:
+        """Retrieves an article by its unique ID, aggregating multi-chunk documents if present, strictly authorized by security_context."""
+        if not article_id:
+            return None
         clean_id = article_id.upper().strip()
         
         target_parent = None
@@ -849,33 +862,38 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
             return None
 
         if len(matching) == 1 and not matching[0].parent_doc_id:
-            return matching[0]
+            doc = matching[0]
+        else:
+            sorted_chunks = sorted(matching, key=lambda x: getattr(x, "chunk_index", 0) or 0)
+            base = sorted_chunks[0]
+            aggregated_content = "\n\n".join(c.content for c in sorted_chunks if c.content)
+            doc = KnowledgeArticle(
+                id=base.parent_doc_id or base.id,
+                parent_doc_id=base.parent_doc_id,
+                chunk_index=0,
+                system=base.system,
+                title=base.title.split(" (Phần ")[0] if " (Phần " in base.title else base.title,
+                category=base.category,
+                content=aggregated_content,
+                keywords=base.keywords,
+                section_h1=base.section_h1,
+                section_h2=base.section_h2,
+                section_h3=base.section_h3,
+                section_hierarchy=base.section_hierarchy,
+                allowed_roles=base.allowed_roles,
+                sensitivity=base.sensitivity,
+                clearance_level=base.clearance_level,
+                source_uri=base.source_uri,
+                owner=base.owner,
+                effective_date=base.effective_date,
+                expiry_date=base.expiry_date,
+                is_deleted=base.is_deleted,
+                deleted_at=base.deleted_at,
+            )
 
-        sorted_chunks = sorted(matching, key=lambda x: getattr(x, "chunk_index", 0) or 0)
-        base = sorted_chunks[0]
-        aggregated_content = "\n\n".join(c.content for c in sorted_chunks if c.content)
-        return KnowledgeArticle(
-            id=base.parent_doc_id or base.id,
-            parent_doc_id=base.parent_doc_id,
-            chunk_index=0,
-            system=base.system,
-            title=base.title.split(" (Phần ")[0] if " (Phần " in base.title else base.title,
-            category=base.category,
-            content=aggregated_content,
-            keywords=base.keywords,
-            section_h1=base.section_h1,
-            section_h2=base.section_h2,
-            section_h3=base.section_h3,
-            section_hierarchy=base.section_hierarchy,
-            allowed_roles=base.allowed_roles,
-            sensitivity=base.sensitivity,
-            source_uri=base.source_uri,
-            owner=base.owner,
-            effective_date=base.effective_date,
-            expiry_date=base.expiry_date,
-            is_deleted=base.is_deleted,
-            deleted_at=base.deleted_at,
-        )
+        if not authorize_document(doc, security_context):
+            return None
+        return doc
 
 
 class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
@@ -1200,12 +1218,18 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             logger.error("BigQuery vector search failed (%s). Raising KnowledgeStoreUnavailableError.", e)
             raise KnowledgeStoreUnavailableError(f"Truy vấn BigQuery Vector Search thất bại hoặc quá thời gian chờ: {e}") from e
 
-    def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
-        """Retrieves article by ID from BigQuery table, aggregating multi-chunk documents if present. Fails closed on failure."""
+    def get_article_by_id(
+        self,
+        article_id: str,
+        security_context: SecurityContext,
+    ) -> Optional[KnowledgeArticle]:
+        """Retrieves article by ID from BigQuery table, aggregating multi-chunk documents if present, strictly authorized by security_context."""
         if not self.bq_client:
             logger.error("BigQuery client is not initialized for get_article_by_id.")
             raise KnowledgeStoreUnavailableError("Dịch vụ BigQuery Knowledge Store chưa được khởi tạo.")
 
+        if not article_id:
+            return None
         clean_id = article_id.upper().strip()
         full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
         today_iso = datetime.date.today().isoformat()
@@ -1265,7 +1289,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             else:
                 combined_content = _extract_str(getattr(r, "content", "")) or ""
 
-            return KnowledgeArticle(
+            article = KnowledgeArticle(
                 id=_extract_str(getattr(r, "parent_doc_id", None)) or _extract_str(getattr(r, "id", "")) or "",
                 parent_doc_id=_extract_str(getattr(r, "parent_doc_id", None)),
                 chunk_index=0 if len(rows) > 1 else (getattr(r, "chunk_index", None) if isinstance(getattr(r, "chunk_index", None), int) else None),
@@ -1288,6 +1312,9 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 is_deleted=_extract_bool(getattr(r, "is_deleted", False)),
                 deleted_at=_extract_str(getattr(r, "deleted_at", None)),
             )
+            if not authorize_document(article, security_context):
+                return None
+            return article
         except Exception as e:
             logger.error("BigQuery get_article_by_id failed (%s). Raising KnowledgeStoreUnavailableError.", e)
             raise KnowledgeStoreUnavailableError(f"Truy xuất bài viết BigQuery thất bại: {e}") from e
@@ -1530,16 +1557,21 @@ class VertexAISearchKnowledgeStore(BaseKnowledgeStore):
 
         return search_results[:limit]
 
-    def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
+    def get_article_by_id(
+        self,
+        article_id: str,
+        security_context: SecurityContext,
+    ) -> Optional[KnowledgeArticle]:
+        """Retrieves article by ID from Vertex AI Search datastore, strictly authorized by security_context."""
         if not article_id:
             return None
         clean_id = article_id.strip()
 
         try:
-            results = self.search(query=clean_id, security_context=SecurityContext.admin(), limit=5)
+            results = self.search(query=clean_id, security_context=security_context, limit=5)
             for r in results:
                 if r.article_id.lower() == clean_id.lower():
-                    return KnowledgeArticle(
+                    article = KnowledgeArticle(
                         id=r.article_id,
                         system=r.system,
                         title=r.title,
@@ -1547,12 +1579,16 @@ class VertexAISearchKnowledgeStore(BaseKnowledgeStore):
                         content=r.snippet,
                         allowed_roles=r.allowed_roles,
                         sensitivity=r.sensitivity,
+                        clearance_level=r.clearance_level,
                         section_hierarchy=r.section_hierarchy,
                         owner=r.owner,
                         effective_date=r.effective_date,
                         expiry_date=r.expiry_date,
                         is_deleted=r.is_deleted,
                     )
+                    if not authorize_document(article, security_context):
+                        return None
+                    return article
             return None
         except KnowledgeStoreUnavailableError:
             raise
@@ -2190,7 +2226,7 @@ class BigQueryFactsStore(BaseFactsStore):
 
 
 def get_facts_store() -> BaseFactsStore:
-    is_prod = os.getenv("ENVIRONMENT", "").lower() == "production" or bool(os.getenv("K_SERVICE"))
+    is_prod = is_production_mode()
     default_backend = "bigquery" if is_prod else "in_memory"
     backend = (os.getenv("FACTS_BACKEND") or os.getenv("KNOWLEDGE_BACKEND") or default_backend).lower().strip()
     if backend == "bigquery":
@@ -2206,7 +2242,7 @@ def get_knowledge_store() -> BaseKnowledgeStore:
       - 'bigquery': BigQuery serverless vector search (default in production).
       - 'vertex_ai_search' / 'discoveryengine': Google Cloud Vertex AI Search Managed Enterprise Grounding.
     """
-    is_prod = os.getenv("ENVIRONMENT", "").lower() == "production" or bool(os.getenv("K_SERVICE"))
+    is_prod = is_production_mode()
     default_backend = "bigquery" if is_prod else "in_memory"
     backend = (os.getenv("KNOWLEDGE_BACKEND") or default_backend).lower().strip()
     if backend in ("vertex_ai_search", "vertex_search", "discoveryengine", "discovery_engine"):

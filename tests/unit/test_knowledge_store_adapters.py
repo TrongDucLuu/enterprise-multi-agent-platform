@@ -44,12 +44,12 @@ def test_in_memory_knowledge_store_search_and_get(test_sec_ctx):
     assert "ERP-KB-001" == results[0].article_id
 
     # Get by ID
-    article = store.get_article_by_id("ERP-KB-001")
+    article = store.get_article_by_id("ERP-KB-001", security_context=test_sec_ctx)
     assert article is not None
     assert "SAP/Oracle" in article.title
 
     # Not found
-    assert store.get_article_by_id("NON-EXISTENT") is None
+    assert store.get_article_by_id("NON-EXISTENT", security_context=test_sec_ctx) is None
 
 
 def test_bigquery_vector_store_with_mock_client(test_sec_ctx):
@@ -540,9 +540,10 @@ def test_in_memory_multi_chunk_aggregation():
         section_h1="Chương 2",
     )
     store = InMemoryKnowledgeStore(articles=[chunk1, chunk0])  # out of order
+    user_sec = SecurityContext.from_user(roles=["employee"], clearance_level=3)
 
     # Lookup by parent_doc_id
-    doc = store.get_article_by_id("ERP-GUIDE-001")
+    doc = store.get_article_by_id("ERP-GUIDE-001", security_context=user_sec)
     assert doc is not None
     assert doc.id == "ERP-GUIDE-001"
     assert "Nội dung phần 1" in doc.content
@@ -551,7 +552,7 @@ def test_in_memory_multi_chunk_aggregation():
     assert doc.content.index("Nội dung phần 1") < doc.content.index("Nội dung phần 2")
 
     # Lookup by chunk ID also stitches full doc
-    doc_by_chunk = store.get_article_by_id("ERP-GUIDE-001#chunk-0")
+    doc_by_chunk = store.get_article_by_id("ERP-GUIDE-001#chunk-0", security_context=user_sec)
     assert doc_by_chunk is not None
     assert "Nội dung phần 1" in doc_by_chunk.content
     assert "Nội dung phần 2" in doc_by_chunk.content
@@ -618,7 +619,7 @@ def test_bigquery_get_article_by_id_multi_chunk():
         bq_client=mock_bq,
     )
 
-    doc = store.get_article_by_id("DOC-100")
+    doc = store.get_article_by_id("DOC-100", security_context=SecurityContext.from_user(roles=["ALL_EMPLOYEES"], clearance_level=3))
     assert doc is not None
     assert doc.id == "DOC-100"
     assert "Phần 1: Số ngày phép tiêu chuẩn." in doc.content
@@ -903,19 +904,20 @@ def test_vertex_ai_search_store_get_article_by_id():
         data_store_id="test-store",
         search_client=mock_client,
     )
+    user_sec = SecurityContext.from_user(roles=["employee"], clearance_level=3)
 
-    article = store.get_article_by_id("HRM-KB-100")
+    article = store.get_article_by_id("HRM-KB-100", security_context=user_sec)
     assert article is not None
     assert article.id == "HRM-KB-100"
     assert article.title == "Quy trình nghỉ phép"
     assert article.system == "HRM"
 
     # Not found
-    not_found_article = store.get_article_by_id("NON_EXISTENT")
+    not_found_article = store.get_article_by_id("NON_EXISTENT", security_context=user_sec)
     assert not_found_article is None
 
     # Empty ID
-    assert store.get_article_by_id("") is None
+    assert store.get_article_by_id("", security_context=user_sec) is None
 
 
 def test_vertex_ai_search_store_fail_closed_on_error(test_sec_ctx):
@@ -953,6 +955,151 @@ def test_get_knowledge_store_factory_vertex_ai_search():
     with patch.dict(os.environ, {"KNOWLEDGE_BACKEND": "in_memory"}):
         store = get_knowledge_store()
         assert isinstance(store, InMemoryKnowledgeStore)
+
+
+def test_get_article_by_id_authorization_matrix_across_all_backends():
+    """
+    CRITICAL SECURITY TEST:
+    Verifies that get_article_by_id strictly enforces RBAC, clearance level, tombstone,
+    and expiration across all 3 backends (InMemory, BigQuery, and Vertex AI Search).
+    """
+    from types import SimpleNamespace
+
+    # 1. InMemoryKnowledgeStore Matrix
+    secret_article = KnowledgeArticle(
+        id="SEC-001",
+        system="ERP",
+        title="Bí mật thanh toán tài chính",
+        category="Finance",
+        content="Nội dung bảo mật cấp cao...",
+        allowed_roles=["finance_admin"],
+        sensitivity="RESTRICTED",
+        clearance_level=3,
+        effective_date="2025-01-01",
+        expiry_date="2099-01-01",
+        is_deleted=False,
+    )
+    tombstoned_article = KnowledgeArticle(
+        id="DEL-001",
+        system="HRM",
+        title="Quy chế cũ đã xóa",
+        category="Policy",
+        content="Quy chế cũ không còn hiệu lực...",
+        allowed_roles=[],
+        sensitivity="PUBLIC",
+        clearance_level=1,
+        is_deleted=True,
+    )
+    expired_article = KnowledgeArticle(
+        id="EXP-001",
+        system="HRM",
+        title="Quy chế đã hết hạn",
+        category="Policy",
+        content="Quy chế này đã hết hạn năm 2020...",
+        allowed_roles=[],
+        sensitivity="PUBLIC",
+        clearance_level=1,
+        expiry_date="2020-01-01",
+        is_deleted=False,
+    )
+    in_mem_store = InMemoryKnowledgeStore(articles=[secret_article, tombstoned_article, expired_article])
+
+    admin_sec = SecurityContext.from_user(user_id="fin-admin", roles=["finance_admin"], clearance_level=3)
+    employee_sec = SecurityContext.from_user(user_id="emp", roles=["employee"], clearance_level=1)
+    no_clearance_sec = SecurityContext.from_user(user_id="fin-no-clearance", roles=["finance_admin"], clearance_level=1)
+
+    # InMemory: Authorized user gets article
+    assert in_mem_store.get_article_by_id("SEC-001", security_context=admin_sec) is not None
+    # InMemory: Unauthorized role gets None
+    assert in_mem_store.get_article_by_id("SEC-001", security_context=employee_sec) is None
+    # InMemory: Insufficient clearance gets None
+    assert in_mem_store.get_article_by_id("SEC-001", security_context=no_clearance_sec) is None
+    # InMemory: Tombstoned article gets None
+    assert in_mem_store.get_article_by_id("DEL-001", security_context=admin_sec) is None
+    # InMemory: Expired article gets None
+    assert in_mem_store.get_article_by_id("EXP-001", security_context=admin_sec) is None
+
+    # 2. BigQueryVectorKnowledgeStore Matrix
+    mock_bq = MagicMock()
+    bq_row = SimpleNamespace(
+        id="SEC-BQ-001",
+        parent_doc_id=None,
+        chunk_index=None,
+        system="ERP",
+        title="Cấu hình bảo mật SAP BigQuery",
+        category="Security",
+        content="Nội dung nhạy cảm phân quyền...",
+        section_h1=None,
+        section_h2=None,
+        section_h3=None,
+        allowed_roles=["sec_admin"],
+        sensitivity="RESTRICTED",
+        clearance_level=3,
+        source_uri="docs/sec.md",
+        owner="sec@company.com",
+        effective_date="2025-01-01",
+        expiry_date="2099-01-01",
+        is_deleted=False,
+        deleted_at=None,
+        keywords=["security", "sap"],
+    )
+    mock_job = MagicMock()
+    mock_job.result.return_value = [bq_row]
+    mock_bq.query.return_value = mock_job
+
+    bq_store = BigQueryVectorKnowledgeStore(
+        project_id="test-proj",
+        dataset_id="test_ds",
+        table_name="articles",
+        bq_client=mock_bq,
+    )
+    sec_admin_ctx = SecurityContext.from_user(user_id="sec-admin", roles=["sec_admin"], clearance_level=3)
+    emp_ctx = SecurityContext.from_user(user_id="emp", roles=["employee"], clearance_level=1)
+
+    # BigQuery: Authorized user gets article
+    bq_art = bq_store.get_article_by_id("SEC-BQ-001", security_context=sec_admin_ctx)
+    assert bq_art is not None
+    assert bq_art.id == "SEC-BQ-001"
+    # BigQuery: Unauthorized user gets None (fail closed via post-query authorization)
+    assert bq_store.get_article_by_id("SEC-BQ-001", security_context=emp_ctx) is None
+
+    # 3. VertexAISearchKnowledgeStore Matrix
+    mock_search_client = MagicMock()
+    v_doc = SimpleNamespace(
+        id="SEC-VERTEX-001",
+        struct_data={
+            "id": "SEC-VERTEX-001",
+            "title": "Bảo mật cấp cao Vertex AI Search",
+            "system": "ERP",
+            "category": "Security",
+            "content": "Nội dung bảo mật Vertex...",
+            "allowed_roles": ["vertex_admin"],
+            "sensitivity": "RESTRICTED",
+            "clearance_level": 3,
+        },
+        derived_struct_data={},
+    )
+    v_item = SimpleNamespace(
+        document=v_doc,
+        model_scores={"relevance": 1.0},
+    )
+    v_resp = SimpleNamespace(results=[v_item])
+    mock_search_client.search.return_value = v_resp
+
+    vertex_store = VertexAISearchKnowledgeStore(
+        project_id="test-proj",
+        location="global",
+        data_store_id="test-store",
+        search_client=mock_search_client,
+    )
+    v_admin_ctx = SecurityContext.from_user(user_id="v-admin", roles=["vertex_admin"], clearance_level=3)
+
+    # Vertex: Authorized user gets article
+    v_art = vertex_store.get_article_by_id("SEC-VERTEX-001", security_context=v_admin_ctx)
+    assert v_art is not None
+    assert v_art.id == "SEC-VERTEX-001"
+    # Vertex: Unauthorized user gets None
+    assert vertex_store.get_article_by_id("SEC-VERTEX-001", security_context=emp_ctx) is None
 
 
 

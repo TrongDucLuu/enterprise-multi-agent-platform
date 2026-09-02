@@ -21,17 +21,17 @@ def default_rag_admin():
     current_sso_user.reset(token)
 
 
-def test_knowledge_store_search_erp():
+def test_knowledge_store_search_erp(admin_sec_ctx):
     store = KnowledgeStore()
-    results = store.search(query="purchase order sap", security_context=SecurityContext.admin(), system="ERP")
+    results = store.search(query="purchase order sap", security_context=admin_sec_ctx, system="ERP")
     assert len(results) > 0
     assert results[0].system == "ERP"
     assert "M_BEST_EKO" in results[0].snippet or "Purchase Order" in results[0].title
 
 
-def test_knowledge_store_search_hrm():
+def test_knowledge_store_search_hrm(admin_sec_ctx):
     store = KnowledgeStore()
-    results = store.search(query="chấm công vân tay", security_context=SecurityContext.admin(), system="HRM")
+    results = store.search(query="chấm công vân tay", security_context=admin_sec_ctx, system="HRM")
     assert len(results) > 0
     assert results[0].system == "HRM"
     assert "HRM-KB-101" in results[0].article_id
@@ -94,10 +94,10 @@ def test_enterprise_rag_rbac_allowed_for_hr_role():
         current_sso_user.reset(token)
 
 
-def test_search_is_truncated_flag():
+def test_search_is_truncated_flag(admin_sec_ctx):
     store = KnowledgeStore()
     # ERP-KB-001 has content ~450 chars (< 1200 chars) -> is_truncated must be False
-    results = store.search(query="purchase order sap", security_context=SecurityContext.admin(), system="ERP")
+    results = store.search(query="purchase order sap", security_context=admin_sec_ctx, system="ERP")
     assert len(results) > 0
     assert results[0].is_truncated is False
 
@@ -114,7 +114,7 @@ def test_search_is_truncated_flag():
         owner="erp@company.com",
     )
     store.articles.append(long_article)
-    long_results = store.search(query="long erp troubleshooting", security_context=SecurityContext.admin(), system="ERP")
+    long_results = store.search(query="long erp troubleshooting", security_context=admin_sec_ctx, system="ERP")
     assert any(r.article_id == "ERP-KB-LONG" and r.is_truncated is True for r in long_results)
 
     # Test via main search_enterprise_knowledge tool

@@ -459,7 +459,31 @@ def get_system_manual(article_id: str) -> dict:
     Enforces domain-level and document-level RBAC for sensitive enterprise system operational guides.
     """
     try:
-        article = store.get_article_by_id(article_id)
+        from agent_core.app_utils.sso_auth import get_current_sso_user
+    except ImportError:
+        try:
+            from app_utils.sso_auth import get_current_sso_user
+        except ImportError:
+            def get_current_sso_user():
+                return None
+
+    current_user = get_current_sso_user()
+    if not current_user:
+        return {
+            "status": "forbidden",
+            "error": "Access Denied",
+            "message": "Truy cập bị từ chối: Yêu cầu đăng nhập xác thực SSO để xem tài liệu hệ thống.",
+            "article_id": article_id,
+        }
+
+    sec_ctx = SecurityContext.from_user(
+        user_id=getattr(current_user, "email", getattr(current_user, "user_id", "anonymous")),
+        roles=getattr(current_user, "roles", []),
+        clearance_level=getattr(current_user, "clearance_level", None),
+    )
+
+    try:
+        article = store.get_article_by_id(article_id, security_context=sec_ctx)
     except KnowledgeStoreUnavailableError as e:
         logger.error("Knowledge store unavailable during get_system_manual: %s", e)
         return {
@@ -481,25 +505,6 @@ def get_system_manual(article_id: str) -> dict:
             "article_id": article_id,
             "system": article.system,
         }
-
-    try:
-        from agent_core.app_utils.sso_auth import get_current_sso_user
-    except ImportError:
-        try:
-            from app_utils.sso_auth import get_current_sso_user
-        except ImportError:
-            def get_current_sso_user():
-                return None
-
-    current_user = get_current_sso_user()
-    if current_user:
-        sec_ctx = SecurityContext.from_user(
-            user_id=getattr(current_user, "email", getattr(current_user, "user_id", "anonymous")),
-            roles=getattr(current_user, "roles", []),
-            clearance_level=getattr(current_user, "clearance_level", None),
-        )
-    else:
-        sec_ctx = SecurityContext.anonymous()
 
     if not authorize_document(article, sec_ctx, resource_type="KNOWLEDGE_DOCUMENT"):
         return {
