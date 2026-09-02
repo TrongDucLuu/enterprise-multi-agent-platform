@@ -29,7 +29,13 @@ variable "secrets" {
 }
 
 variable "ai_assets_bucket" {
-  description = "The GCS bucket for storing IT Helpdesk assets and artifacts"
+  description = "The GCS bucket for ADK session / artifact service uploads and storage (requires read/write permissions for ADK)"
+  type        = string
+  default     = ""
+}
+
+variable "allowed_artifact_bucket" {
+  description = "The GCS bucket containing enterprise contract/compliance/log artifacts for L3 inspection tools (strictly read-only objectViewer access)"
   type        = string
   default     = ""
 }

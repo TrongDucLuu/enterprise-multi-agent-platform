@@ -61,10 +61,19 @@ resource "google_project_iam_member" "log_writer" {
   member  = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-# Scope storage access strictly to objectViewer on the designated AI assets bucket (Least Privilege)
+# Storage IAM:
+# 1. ADK AI Assets / Artifact Service / Sessions (Requires read/write/delete permissions -> roles/storage.objectUser)
 resource "google_storage_bucket_iam_member" "ai_assets_storage_user" {
   count  = var.ai_assets_bucket != "" ? 1 : 0
   bucket = var.ai_assets_bucket
+  role   = "roles/storage.objectUser"
+  member = "serviceAccount:${google_service_account.agent_sa.email}"
+}
+
+# 2. Enterprise Allowed Artifacts (Contracts, compliance evidence, inspection logs -> strictly roles/storage.objectViewer)
+resource "google_storage_bucket_iam_member" "allowed_artifacts_viewer" {
+  count  = var.allowed_artifact_bucket != "" ? 1 : 0
+  bucket = var.allowed_artifact_bucket
   role   = "roles/storage.objectViewer"
   member = "serviceAccount:${google_service_account.agent_sa.email}"
 }
@@ -640,7 +649,7 @@ resource "google_cloud_run_v2_service" "default" {
       }
       env {
         name  = "ALLOWED_ARTIFACT_BUCKET"
-        value = var.ai_assets_bucket
+        value = var.allowed_artifact_bucket
       }
       env {
         name  = "SSO_CLIENT_ID"
