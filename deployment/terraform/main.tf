@@ -764,6 +764,14 @@ resource "google_cloud_run_v2_service" "default" {
         value = var.redis_enabled ? tostring(google_redis_instance.cache_redis[0].port) : "6379"
       }
       env {
+        name  = "REDIS_AUTH_STRING"
+        value = var.redis_enabled ? google_redis_instance.cache_redis[0].auth_string : ""
+      }
+      env {
+        name  = "REDIS_USE_TLS"
+        value = var.redis_enabled ? "true" : "false"
+      }
+      env {
         name  = "L3_RATE_LIMIT_PER_MINUTE"
         value = tostring(var.l3_rate_limit_per_minute)
       }
@@ -824,6 +832,14 @@ resource "google_cloud_run_v2_service" "default" {
     ignore_changes = [
       template[0].containers[0].image
     ]
+    precondition {
+      condition     = var.environment != "production" || (!var.allow_local_dev_sso && length(trimspace(var.allowed_domains)) > 0 && !can(regex("(^|[,\\s])\\*([,\\s]|$)", var.allowed_domains)))
+      error_message = "Production deployment requires explicit non-wildcard allowed_domains and allow_local_dev_sso=false."
+    }
+    precondition {
+      condition     = var.environment != "production" || (var.min_instance_count >= 1 && var.max_instance_count >= 2)
+      error_message = "Production deployment requires min_instance_count >= 1 and max_instance_count >= 2 for high availability."
+    }
   }
 
   depends_on = [

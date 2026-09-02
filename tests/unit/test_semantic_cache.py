@@ -580,5 +580,106 @@ def test_redis_semantic_cache_kb_version_namespace():
     assert r.sismember("sem_cache:v2:keys:public", cache_v2._get_entry_id("Q1", is_public=True))
 
 
+def test_semantic_cache_clearance_filtering_in_memory():
+    """Verifies that InMemorySemanticCache enforces document/entry clearance level against caller clearance."""
+    from agent_core.app_utils.semantic_cache import InMemorySemanticCache
+
+    cache = InMemorySemanticCache()
+    cache.clear()
+
+    # Store confidential executive policy (Clearance = 2)
+    cache.set(
+        query="Chính sách thưởng ban điều hành năm 2026",
+        response="Chi tiết thưởng ban điều hành: Confidential Level 2",
+        is_public=True,
+        clearance_level=2,
+    )
+
+    # 1. Anonymous user / clearance 0 -> Must miss
+    assert cache.get("Chính sách thưởng ban điều hành năm 2026", clearance_level=0) is None
+
+    # 2. Regular employee / clearance 1 -> Must miss
+    assert cache.get("Chính sách thưởng ban điều hành năm 2026", clearance_level=1) is None
+
+    # 3. HR / Executive with clearance 2 -> Must hit
+    hit_c2 = cache.get("Chính sách thưởng ban điều hành năm 2026", clearance_level=2)
+    assert hit_c2 is not None
+    assert hit_c2["clearance_level"] == 2
+    assert "Confidential Level 2" in hit_c2["response"]
+
+    # 4. Super Admin with clearance 3 -> Must hit
+    hit_c3 = cache.get("Chính sách thưởng ban điều hành năm 2026", clearance_level=3)
+    assert hit_c3 is not None
+
+
+def test_redis_semantic_cache_clearance_filtering_and_partitioning():
+    """Verifies that RedisSemanticCache partitions keys by clearance level and filters entries."""
+    import fakeredis
+    from agent_core.app_utils.semantic_cache import RedisSemanticCache
+
+    fake_server = fakeredis.FakeServer()
+    r = fakeredis.FakeStrictRedis(server=fake_server, decode_responses=True)
+    cache = RedisSemanticCache(redis_client=r)
+
+    q = "Kế hoạch M&A quý 4"
+    resp = "Kế hoạch sáp nhập đối thủ: Restricted Level 3"
+
+    entry = cache.set(
+        query=q,
+        response=resp,
+        is_public=True,
+        clearance_level=3,
+    )
+    assert entry is not None
+    assert entry.clearance_level == 3
+
+    # Check key deterministic partitioning contains clearance level
+    entry_id = cache._get_entry_id(q, is_public=True, clearance_level=3)
+    assert "_c3_" in entry_id
+
+    # Caller with clearance 1 -> Miss
+    assert cache.get(q, clearance_level=1) is None
+
+    # Caller with clearance 2 -> Miss
+    assert cache.get(q, clearance_level=2) is None
+
+    # Caller with clearance 3 -> Hit
+    hit = cache.get(q, clearance_level=3)
+    assert hit is not None
+    assert hit["clearance_level"] == 3
+    assert "Restricted Level 3" in hit["response"]
+
+
+def test_redis_semantic_cache_auth_and_tls_config():
+    """Verifies RedisSemanticCache reads and stores password and ssl options."""
+    from agent_core.app_utils.semantic_cache import RedisSemanticCache
+    import fakeredis
+
+    r = fakeredis.FakeStrictRedis(decode_responses=True)
+    cache = RedisSemanticCache(
+        redis_client=r,
+        password="test_secret_redis_pass",
+        ssl=True,
+    )
+    assert cache._password == "test_secret_redis_pass"
+    assert cache._ssl is True
+
+
+def test_redis_rate_limiter_auth_and_tls_config():
+    """Verifies RedisRateLimiter reads and stores password and ssl options."""
+    from agent_core.app_utils.rate_limiter import RedisRateLimiter
+    import fakeredis
+
+    r = fakeredis.FakeStrictRedis(decode_responses=True)
+    limiter = RedisRateLimiter(
+        redis_client=r,
+        password="test_secret_redis_pass",
+        ssl=True,
+    )
+    assert limiter._password == "test_secret_redis_pass"
+    assert limiter._ssl is True
+
+
+
 
 

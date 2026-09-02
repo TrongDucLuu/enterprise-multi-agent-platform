@@ -32,6 +32,7 @@ class SemanticCacheEntry:
     tier: str = "L1"
     user_id: Optional[str] = None
     is_public: bool = False
+    clearance_level: int = 0
     created_at: float = field(default_factory=time.time)
     expires_at: float = 0.0
     hit_count: int = 0
@@ -50,6 +51,7 @@ class SemanticCacheEntry:
             "tier": self.tier,
             "user_id": self.user_id,
             "is_public": self.is_public,
+            "clearance_level": self.clearance_level,
             "created_at": self.created_at,
             "expires_at": self.expires_at,
             "hit_count": self.hit_count,
@@ -65,11 +67,32 @@ class SemanticCacheEntry:
             tier=d.get("tier", "L1"),
             user_id=d.get("user_id"),
             is_public=bool(d.get("is_public", False)),
+            clearance_level=int(d.get("clearance_level", 0)),
             created_at=float(d.get("created_at", time.time())),
             expires_at=float(d.get("expires_at", 0.0)),
             hit_count=int(d.get("hit_count", 0)),
             metadata=d.get("metadata", {}),
         )
+
+
+def resolve_caller_clearance(user_id: Optional[str] = None, clearance_level: Optional[int] = None) -> int:
+    """
+    Resolves caller clearance level (0=Public, 1=Internal, 2=Confidential, 3=Restricted):
+    1. Explicit clearance_level takes precedence.
+    2. Context user (from SSO/SecurityContext) if available.
+    3. Defaults to 1 if user_id is provided, else 0 (public).
+    """
+    if clearance_level is not None:
+        return int(clearance_level)
+    try:
+        from agent_core.app_utils.sso_auth import get_current_sso_user
+        user = get_current_sso_user()
+        if user:
+            from agent_core.knowledge.base import SecurityContext
+            return SecurityContext.from_user(user_id=user.user_id, roles=getattr(user, "roles", [])).clearance_level
+    except Exception:
+        pass
+    return 1 if user_id else 0
 
 
 DEFAULT_TIER_THRESHOLDS = {
@@ -115,6 +138,7 @@ class BaseSemanticCache(ABC):
         user_id: Optional[str] = None,
         similarity_threshold: Optional[float] = None,
         tier: Optional[str] = None,
+        clearance_level: Optional[int] = None,
     ) -> Optional[dict]:
         pass
 
@@ -128,6 +152,7 @@ class BaseSemanticCache(ABC):
         ttl_seconds: Optional[int] = None,
         tier: str = "L1",
         metadata: Optional[dict] = None,
+        clearance_level: Optional[int] = None,
     ) -> Any:
         pass
 
@@ -232,6 +257,7 @@ class InMemorySemanticCache(BaseSemanticCache):
         user_id: Optional[str] = None,
         similarity_threshold: Optional[float] = None,
         tier: Optional[str] = None,
+        clearance_level: Optional[int] = None,
     ) -> Optional[dict]:
         if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
             return None
@@ -242,6 +268,7 @@ class InMemorySemanticCache(BaseSemanticCache):
 
         self._total_lookups += 1
         threshold = similarity_threshold or self.get_tier_threshold(tier)
+        caller_clearance = resolve_caller_clearance(user_id=user_id, clearance_level=clearance_level)
 
         self._entries = [e for e in self._entries if not e.is_expired()]
 
@@ -251,6 +278,9 @@ class InMemorySemanticCache(BaseSemanticCache):
         for entry in self._entries:
             can_access = entry.is_public or (user_id is not None and entry.user_id == user_id)
             if not can_access:
+                continue
+
+            if entry.clearance_level > caller_clearance:
                 continue
 
             sim = cosine_similarity(query_emb, entry.embedding)
@@ -267,6 +297,7 @@ class InMemorySemanticCache(BaseSemanticCache):
                 "response": best_match.response,
                 "similarity": round(highest_sim, 4),
                 "tier": best_match.tier,
+                "clearance_level": best_match.clearance_level,
                 "hits": best_match.hit_count,
                 "is_public": best_match.is_public,
                 "metadata": best_match.metadata,
@@ -283,11 +314,18 @@ class InMemorySemanticCache(BaseSemanticCache):
         ttl_seconds: Optional[int] = None,
         tier: str = "L1",
         metadata: Optional[dict] = None,
+        clearance_level: Optional[int] = None,
     ) -> Optional[SemanticCacheEntry]:
         query_emb = self._generate_embedding(query)
         if query_emb is None:
             logger.debug("Skipping semantic cache set: embedding is None (Fail-Closed mode).")
             return None
+
+        eff_clearance = (
+            int(clearance_level)
+            if clearance_level is not None
+            else (0 if is_public else resolve_caller_clearance(user_id=user_id))
+        )
 
         if ttl_seconds is not None:
             ttl = ttl_seconds
@@ -308,6 +346,7 @@ class InMemorySemanticCache(BaseSemanticCache):
             tier=tier,
             user_id=user_id,
             is_public=is_public,
+            clearance_level=eff_clearance,
             created_at=time.time(),
             expires_at=expires_at,
             hit_count=0,
@@ -384,6 +423,8 @@ class RedisSemanticCache(BaseSemanticCache):
         host: Optional[str] = None,
         port: Optional[int] = None,
         db: int = 0,
+        password: Optional[str] = None,
+        ssl: Optional[bool] = None,
         similarity_threshold: float = 0.92,
         default_ttl_seconds: int = 86400,
         default_public_ttl_seconds: int = 14400,
@@ -405,6 +446,11 @@ class RedisSemanticCache(BaseSemanticCache):
         self._host = host or os.getenv("REDIS_HOST", "localhost")
         self._port = int(port or os.getenv("REDIS_PORT", "6379"))
         self._db = int(os.getenv("REDIS_DB", str(db)))
+        self._password = password or os.getenv("REDIS_AUTH_STRING", os.getenv("REDIS_PASSWORD", None)) or None
+        if ssl is not None:
+            self._ssl = ssl
+        else:
+            self._ssl = os.getenv("REDIS_USE_TLS", os.getenv("REDIS_SSL", "false")).lower() in ("true", "1", "yes")
         self._socket_timeout = socket_timeout
 
         self._local_lookups = 0
@@ -483,21 +529,34 @@ class RedisSemanticCache(BaseSemanticCache):
         self._circuit_breaker_tripped = False
 
     def _init_redis(self) -> None:
-        """Initializes redis connection pool safely."""
+        """Initializes redis connection pool safely with authentication and TLS support."""
         if not self._allow_request():
             return
         try:
             import redis
-            self._redis = redis.Redis(
-                host=self._host,
-                port=self._port,
-                db=self._db,
-                socket_timeout=self._socket_timeout,
-                decode_responses=True,
-            )
+            redis_kwargs = {
+                "host": self._host,
+                "port": self._port,
+                "db": self._db,
+                "socket_timeout": self._socket_timeout,
+                "decode_responses": True,
+            }
+            if self._password:
+                redis_kwargs["password"] = self._password
+            if self._ssl:
+                redis_kwargs["ssl"] = True
+                redis_kwargs["ssl_cert_reqs"] = None
+            self._redis = redis.Redis(**redis_kwargs)
             self._redis.ping()
             self._record_redis_success()
-            logger.info("RedisSemanticCache connected to %s:%d/%d", self._host, self._port, self._db)
+            logger.info(
+                "RedisSemanticCache connected to %s:%d/%d (ssl=%s, auth=%s)",
+                self._host,
+                self._port,
+                self._db,
+                self._ssl,
+                bool(self._password),
+            )
         except Exception as e:
             self._record_redis_failure(e, "init")
             self._redis = None
@@ -543,12 +602,19 @@ class RedisSemanticCache(BaseSemanticCache):
         norm = math.sqrt(sum(x * x for x in vec)) or 1.0
         return [x / norm for x in vec]
 
-    def _get_entry_id(self, query: str, user_id: Optional[str] = None, is_public: bool = False) -> str:
-        """Deterministic ID for key lookup in Redis."""
+    def _get_entry_id(
+        self,
+        query: str,
+        user_id: Optional[str] = None,
+        is_public: bool = False,
+        clearance_level: int = 0,
+    ) -> str:
+        """Deterministic ID for key lookup in Redis partitioned by domain pack and clearance level."""
         scope = "public" if is_public else f"user_{user_id or 'anon'}"
         cleaned = re.sub(r"[^\w\s]", "", query.lower()).strip()
-        h = hashlib.sha256(f"{scope}:{cleaned}".encode("utf-8")).hexdigest()[:16]
-        return f"{scope}_{h}"
+        pack = os.getenv("DOMAIN_PACK", "default")
+        h = hashlib.sha256(f"{pack}:{scope}:{clearance_level}:{cleaned}".encode("utf-8")).hexdigest()[:16]
+        return f"{scope}_c{clearance_level}_{h}"
 
     def get(
         self,
@@ -556,6 +622,7 @@ class RedisSemanticCache(BaseSemanticCache):
         user_id: Optional[str] = None,
         similarity_threshold: Optional[float] = None,
         tier: Optional[str] = None,
+        clearance_level: Optional[int] = None,
     ) -> Optional[dict]:
         """
         Fetches best semantic match from Redis.
@@ -574,6 +641,7 @@ class RedisSemanticCache(BaseSemanticCache):
 
         self._local_lookups += 1
         threshold = similarity_threshold or self.get_tier_threshold(tier)
+        caller_clearance = resolve_caller_clearance(user_id=user_id, clearance_level=clearance_level)
 
         if self._redis is None:
             self._init_redis()
@@ -616,6 +684,9 @@ class RedisSemanticCache(BaseSemanticCache):
 
                     can_access = entry.is_public or (user_id is not None and entry.user_id == user_id)
                     if not can_access:
+                        continue
+
+                    if entry.clearance_level > caller_clearance:
                         continue
 
                     sim = cosine_similarity(query_emb, entry.embedding)
@@ -662,6 +733,7 @@ class RedisSemanticCache(BaseSemanticCache):
                     "response": best_match.response,
                     "similarity": round(highest_sim, 4),
                     "tier": best_match.tier,
+                    "clearance_level": best_match.clearance_level,
                     "hits": best_match.hit_count,
                     "is_public": best_match.is_public,
                     "metadata": best_match.metadata,
@@ -682,6 +754,7 @@ class RedisSemanticCache(BaseSemanticCache):
         ttl_seconds: Optional[int] = None,
         tier: str = "L1",
         metadata: Optional[dict] = None,
+        clearance_level: Optional[int] = None,
     ) -> Optional[SemanticCacheEntry]:
         """
         Persists query, embedding, and response into Redis with TTL.
@@ -701,6 +774,12 @@ class RedisSemanticCache(BaseSemanticCache):
             if self._redis is None:
                 return None
 
+        eff_clearance = (
+            int(clearance_level)
+            if clearance_level is not None
+            else (0 if is_public else resolve_caller_clearance(user_id=user_id))
+        )
+
         if ttl_seconds is not None:
             ttl = ttl_seconds
         elif is_public:
@@ -716,13 +795,14 @@ class RedisSemanticCache(BaseSemanticCache):
             tier=tier,
             user_id=user_id,
             is_public=is_public,
+            clearance_level=eff_clearance,
             created_at=time.time(),
             expires_at=expires_at,
             hit_count=0,
             metadata=metadata or {},
         )
 
-        entry_id = self._get_entry_id(query, user_id, is_public)
+        entry_id = self._get_entry_id(query, user_id=user_id, is_public=is_public, clearance_level=eff_clearance)
 
         try:
             pipe = self._redis.pipeline()

@@ -29,6 +29,10 @@ variable "domain_pack" {
   description = "Active domain pack name located in domain_packs/ directory (e.g., 'it-helpdesk', '_template')"
   type        = string
   default     = "it-helpdesk"
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9_-]+$", var.domain_pack)) && length(var.domain_pack) > 0
+    error_message = "domain_pack must be a non-empty alphanumeric string (hyphens and underscores allowed)."
+  }
 }
 
 variable "secrets" {
@@ -64,6 +68,10 @@ variable "sso_issuer" {
 variable "allowed_domains" {
   description = "Comma-separated list of enterprise domains permitted to access (e.g. 'company.com,subsidiary.com')"
   type        = string
+  validation {
+    condition     = length(trimspace(var.allowed_domains)) > 0 && !can(regex("(^|[,\\s])\\*([,\\s]|$)", var.allowed_domains))
+    error_message = "allowed_domains must be non-empty and cannot contain wildcard '*' domain."
+  }
 }
 
 variable "enable_cloud_identity_group_lookup" {

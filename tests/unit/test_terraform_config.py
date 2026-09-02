@@ -76,6 +76,26 @@ def test_terraform_check_blocks_and_validations():
     assert 'check "production_allowed_domains"' in content
     assert 'check "production_edge_security"' in content
     assert 'name  = "DOMAIN_PACK"' in content
+    assert 'precondition' in content
+    assert 'Production deployment requires explicit non-wildcard allowed_domains' in content
+    assert 'Production deployment requires min_instance_count >= 1' in content
+
+
+def test_terraform_redis_auth_and_tls():
+    """Asserts that Redis configuration enforces auth_enabled and in-transit TLS."""
+    tf_dir = _get_terraform_dir()
+    redis_file = tf_dir / "redis.tf"
+    assert redis_file.exists(), f"redis.tf not found at {redis_file}"
+    content = redis_file.read_text(encoding="utf-8")
+
+    assert "auth_enabled            = true" in content or "auth_enabled = true" in content
+    assert 'transit_encryption_mode = "SERVER_AUTHENTICATION"' in content
+
+    outputs_file = tf_dir / "outputs.tf"
+    assert outputs_file.exists(), f"outputs.tf not found at {outputs_file}"
+    out_content = outputs_file.read_text(encoding="utf-8")
+    assert 'output "redis_auth_string"' in out_content
+    assert "sensitive = true" in out_content or "sensitive   = true" in out_content
 
 
 def test_terraform_tfvars_example_exists_and_complete():

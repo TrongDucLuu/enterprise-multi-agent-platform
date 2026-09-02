@@ -98,6 +98,8 @@ class RedisRateLimiter(BaseRateLimiter):
         host: Optional[str] = None,
         port: Optional[int] = None,
         db: int = 0,
+        password: Optional[str] = None,
+        ssl: Optional[bool] = None,
         socket_timeout: float = 2.0,
     ):
         self.requests_per_minute = int(os.getenv("RATE_LIMIT_PER_MINUTE", requests_per_minute))
@@ -107,26 +109,37 @@ class RedisRateLimiter(BaseRateLimiter):
         self._host = host or os.getenv("REDIS_HOST", "localhost")
         self._port = int(port or os.getenv("REDIS_PORT", "6379"))
         self._db = int(os.getenv("REDIS_DB", str(db)))
+        self._password = password or os.getenv("REDIS_AUTH_STRING", os.getenv("REDIS_PASSWORD", None)) or None
+        if ssl is not None:
+            self._ssl = ssl
+        else:
+            self._ssl = os.getenv("REDIS_USE_TLS", os.getenv("REDIS_SSL", "false")).lower() in ("true", "1", "yes")
         self._socket_timeout = socket_timeout
 
         if self._redis is None:
             self._init_redis()
 
     def _init_redis(self) -> None:
-        """Lazily connects to Redis with strict socket timeouts."""
+        """Lazily connects to Redis with strict socket timeouts, auth, and TLS support."""
         try:
             import redis
-            self._redis = redis.Redis(
-                host=self._host,
-                port=self._port,
-                db=self._db,
-                socket_connect_timeout=self._socket_timeout,
-                socket_timeout=self._socket_timeout,
-                decode_responses=True,
-            )
+            redis_kwargs = {
+                "host": self._host,
+                "port": self._port,
+                "db": self._db,
+                "socket_connect_timeout": self._socket_timeout,
+                "socket_timeout": self._socket_timeout,
+                "decode_responses": True,
+            }
+            if self._password:
+                redis_kwargs["password"] = self._password
+            if self._ssl:
+                redis_kwargs["ssl"] = True
+                redis_kwargs["ssl_cert_reqs"] = None
+            self._redis = redis.Redis(**redis_kwargs)
             # Ping test
             self._redis.ping()
-            logger.info("Connected to Redis Rate Limiter at %s:%s (db=%d)", self._host, self._port, self._db)
+            logger.info("Connected to Redis Rate Limiter at %s:%s (db=%d, ssl=%s, auth=%s)", self._host, self._port, self._db, self._ssl, bool(self._password))
         except Exception as e:
             logger.error("Failed to connect to Redis Rate Limiter (%s:%s): %s. Operating in Fail-Open mode.", self._host, self._port, e)
             self._redis = None

@@ -37,3 +37,9 @@ output "redis_port" {
   description = "Port number of Memorystore for Redis instance"
   value       = var.redis_enabled ? google_redis_instance.cache_redis[0].port : null
 }
+
+output "redis_auth_string" {
+  description = "Auth string for Memorystore for Redis instance"
+  value       = var.redis_enabled ? google_redis_instance.cache_redis[0].auth_string : null
+  sensitive   = true
+}
