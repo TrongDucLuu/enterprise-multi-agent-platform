@@ -145,8 +145,10 @@ def build_agent_system(
     # Fetch dynamic systems configuration for safe template substitution
     try:
         from agent_core.app_utils.system_config import get_system_instructions_prompt, get_configured_systems
-        systems_prompt = get_system_instructions_prompt()
-        systems_list = "/".join(get_configured_systems())
+        pack_dir = pack_info["pack_dir"]
+        systems_path = str(pack_dir / "systems.yaml") if (pack_dir / "systems.yaml").is_file() else None
+        systems_prompt = get_system_instructions_prompt(config_path=systems_path)
+        systems_list = "/".join(get_configured_systems(config_path=systems_path))
     except Exception as e:
         logger.debug("System config fetch for template substitution: %s", e)
         systems_prompt = ""

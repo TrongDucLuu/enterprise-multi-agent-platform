@@ -9,20 +9,27 @@ from agent_core.agent import (
 )
 
 def test_multi_agent_structure_3_tiers():
-    assert root_orchestrator.name == "root_triage_orchestrator"
-    assert len(root_orchestrator.sub_agents) == 3
+    from agent_core.agent_builder import build_agent_system
+    root, _ = build_agent_system("it-helpdesk")
+
+    assert root.name == "root_triage_orchestrator"
+    assert len(root.sub_agents) == 3
     
-    sub_agent_names = [agent.name for agent in root_orchestrator.sub_agents]
+    sub_agent_names = [agent.name for agent in root.sub_agents]
     assert "l1_selfservice_agent" in sub_agent_names
     assert "l2_enterprise_rag_agent" in sub_agent_names
     assert "l3_deep_diagnostics_agent" in sub_agent_names
 
+
 def test_models_assigned_appropriately():
+    from agent_core.agent_builder import build_agent_system
     from agent_core.app_utils.env import get_model_names_for_environment
     fast_m, reasoning_m = get_model_names_for_environment()
-    l1_selfservice_agent = created_agents["l1_selfservice_agent"]
-    l2_enterprise_rag_agent = created_agents["l2_enterprise_rag_agent"]
-    l3_deep_diagnostics_agent = created_agents["l3_deep_diagnostics_agent"]
+    _, agents = build_agent_system("it-helpdesk")
+
+    l1_selfservice_agent = agents["l1_selfservice_agent"]
+    l2_enterprise_rag_agent = agents["l2_enterprise_rag_agent"]
+    l3_deep_diagnostics_agent = agents["l3_deep_diagnostics_agent"]
     # L1 and L2 use fast model
     assert l1_selfservice_agent.model.model == fast_m
     assert l2_enterprise_rag_agent.model.model == fast_m

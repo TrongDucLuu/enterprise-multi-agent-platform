@@ -9,6 +9,16 @@ from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 
 
 @pytest.fixture(autouse=True)
+def it_helpdesk_domain_pack(monkeypatch):
+    """Ensures IT Helpdesk domain pack is active for IT Helpdesk RAG tests."""
+    monkeypatch.setenv("DOMAIN_PACK", "it-helpdesk")
+    from agent_core.app_utils.system_config import reload_system_config
+    reload_system_config()
+    yield
+    reload_system_config()
+
+
+@pytest.fixture(autouse=True)
 def default_rag_admin():
     """Sets an authorized IT admin user in context for general RAG tool tests."""
     user = SSOUser(

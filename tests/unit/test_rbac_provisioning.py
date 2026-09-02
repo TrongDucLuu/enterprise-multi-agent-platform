@@ -97,11 +97,10 @@ class TestRBACProvisioning:
         mock_fs_client = MagicMock()
         mock_fs_client.collection.return_value = mock_collection
 
-        mock_firestore_module = MagicMock(Client=MagicMock(return_value=mock_fs_client))
+        mock_fs_mod = MagicMock()
+        mock_fs_mod.Client.return_value = mock_fs_client
 
-        with patch.dict("sys.modules", {
-            "google.cloud.firestore": mock_firestore_module,
-        }):
+        with patch.dict("sys.modules", {"google.cloud.firestore": mock_fs_mod}):
             roles = resolve_user_roles("sales.rep@partner.com")
             assert "crm_sales" in roles
             assert "cloud_admin" in roles

@@ -11,7 +11,7 @@ import time
 import uuid
 from collections import OrderedDict
 import threading
-from typing import Optional
+from typing import Optional, Callable, Any
 from pydantic import BaseModel, Field
 
 from agent_core.tools.registry import register_tool
@@ -21,26 +21,6 @@ logger = logging.getLogger(__name__)
 CASE_COLLECTION = os.getenv("CASE_COLLECTION", "cases")
 MAX_LOCAL_CASES_CACHE = int(os.getenv("MAX_LOCAL_CASES_CACHE", os.getenv("MAX_LOCAL_TICKETS_CACHE", "1000")))
 CASE_CACHE_TTL_SECONDS = int(os.getenv("CASE_CACHE_TTL_SECONDS", os.getenv("TICKET_CACHE_TTL_SECONDS", "30")))
-
-VALID_STATUS_TRANSITIONS: dict[str, list[str]] = {
-    "Open": ["In_Progress", "Cancelled"],
-    "In_Progress": ["Resolved", "Escalated", "Cancelled"],
-    "Escalated": ["In_Progress", "Resolved", "Cancelled"],
-    "Resolved": ["Closed", "In_Progress"],
-    "Closed": [],
-    "Cancelled": [],
-}
-
-TIER_REQUIRED_ROLES: dict[str, set[str]] = {
-    "L1_SelfService": {"employee", "support_agent", "it_admin", "sys_admin", "security_auditor", "admin", "lead"},
-    "L1": {"employee", "support_agent", "it_admin", "sys_admin", "security_auditor", "admin", "lead"},
-    "L2_Enterprise_RAG": {"support_agent", "it_admin", "sys_admin", "security_auditor", "admin", "lead"},
-    "L2": {"support_agent", "it_admin", "sys_admin", "security_auditor", "admin", "lead"},
-    "L3_Deep_Diagnostics": {"it_admin", "sys_admin", "security_auditor", "admin", "lead"},
-    "L3": {"it_admin", "sys_admin", "security_auditor", "admin", "lead"},
-    "Human_Ops": {"support_agent", "it_admin", "sys_admin", "security_auditor", "admin", "lead"},
-}
-
 
 def _is_prod() -> bool:
     try:
@@ -53,31 +33,51 @@ def _is_prod() -> bool:
 _CASE_SCHEMA_CACHE = None
 
 
+def clear_case_schema_cache() -> None:
+    """Clears cached case schema to force reloading from domain pack."""
+    global _CASE_SCHEMA_CACHE
+    _CASE_SCHEMA_CACHE = None
+
+
 def get_case_schema() -> dict:
     """Loads and caches case schema configuration from active domain pack."""
     global _CASE_SCHEMA_CACHE
     if _CASE_SCHEMA_CACHE is not None:
         return _CASE_SCHEMA_CACHE
 
+    schema = {}
     try:
         from agent_core.agent_builder import load_domain_pack
         pack = load_domain_pack()
         schema = pack.get("case_schema", {})
-        if schema:
-            _CASE_SCHEMA_CACHE = schema
-            return schema
     except Exception as e:
         logger.debug("Failed to load case schema from domain pack: %s", e)
 
-    _CASE_SCHEMA_CACHE = {
-        "categories": ["General", "Hardware", "Software", "Access_Permissions", "Network", "ERP", "HRM", "CRM", "Other"],
-        "priorities": ["Low", "Medium", "High", "Critical"],
-        "tiers": ["L1_SelfService", "L2_Enterprise_RAG", "L3_Deep_Diagnostics", "Human_Ops"],
-        "statuses": ["Open", "In_Progress", "Escalated", "Resolved", "Closed", "Cancelled"],
-        "initial_tier": "L1_SelfService",
-        "default_category": "General",
-        "default_priority": "Medium",
-    }
+    if not schema:
+        if _is_prod():
+            raise RuntimeError("Missing required case_schema.yaml configuration in domain pack in production mode.")
+        schema = {
+            "categories": ["General", "Hardware", "Software", "Access_Permissions", "Network", "ERP", "HRM", "CRM", "Other"],
+            "priorities": ["Low", "Medium", "High", "Critical"],
+            "tiers": ["L1_SelfService", "L2_Enterprise_RAG", "L3_Deep_Diagnostics", "Human_Ops"],
+            "statuses": ["Open", "In_Progress", "Escalated", "Resolved", "Closed"],
+            "initial_tier": "L1_SelfService",
+            "default_category": "General",
+            "default_priority": "Medium",
+            "status_transitions": {
+                "Open": {"owner": ["Closed"], "privileged": ["In_Progress", "Escalated", "Resolved", "Closed"]},
+                "In_Progress": {"owner": [], "privileged": ["Escalated", "Resolved", "Closed", "Open"]},
+                "Escalated": {"owner": [], "privileged": ["Resolved", "Closed", "In_Progress"]},
+                "Resolved": {"owner": [], "privileged": ["Closed", "Open"]},
+                "Closed": {"owner": [], "privileged": ["Open"]},
+            },
+            "tier_routing": {"requires_privileged": True},
+        }
+
+    if _is_prod() and "status_transitions" not in schema:
+        raise RuntimeError("Missing required 'status_transitions' configuration in case_schema.yaml in production mode.")
+
+    _CASE_SCHEMA_CACHE = schema
     return _CASE_SCHEMA_CACHE
 
 
@@ -142,23 +142,50 @@ def _cache_get_fallback(case_id: str) -> Optional[CaseRecord]:
         return _CASES_DB.get(norm_id)
 
 
-# Lazy Firestore Client Initialization
+# Lazy Firestore Client Initialization & Dependency Injection
 _firestore_client = None
 _firestore_initialized = False
+_FIRESTORE_FACTORY: Optional[Callable[[], Any]] = None
+
+
+def set_firestore_client(client: Any) -> None:
+    """Explicitly sets an injected Firestore client (e.g. mock/fake in unit tests)."""
+    global _firestore_client, _firestore_initialized
+    _firestore_client = client
+    _firestore_initialized = True
+
+
+def reset_firestore_client() -> None:
+    """Resets injected Firestore client to None, clearing initialization state."""
+    global _firestore_client, _firestore_initialized, _FIRESTORE_FACTORY
+    _firestore_client = None
+    _firestore_initialized = False
+    _FIRESTORE_FACTORY = None
+
+
+def set_firestore_factory(factory: Optional[Callable[[], Any]]) -> None:
+    """Registers a factory callable for lazy Firestore client instantiation."""
+    global _FIRESTORE_FACTORY
+    _FIRESTORE_FACTORY = factory
 
 
 def _get_firestore():
-    import sys
-    tt = sys.modules.get("agent_core.tools.ticketing_tool")
-    if tt and hasattr(tt, "_get_firestore") and tt._get_firestore is not _get_firestore:
-        try:
-            return tt._get_firestore()
-        except Exception:
-            pass
-
-    global _firestore_client, _firestore_initialized
+    global _firestore_client, _firestore_initialized, _FIRESTORE_FACTORY
     if _firestore_initialized:
         return _firestore_client
+
+    if _FIRESTORE_FACTORY is not None:
+        try:
+            _firestore_client = _FIRESTORE_FACTORY()
+            _firestore_initialized = True
+            return _firestore_client
+        except Exception as e:
+            if _is_prod():
+                raise RuntimeError(f"Firestore connection failed in production mode: {e}") from e
+            logger.warning(f"Firestore factory failed ({e}). Running in DEV mode with in-memory case store.")
+            _firestore_client = None
+            _firestore_initialized = True
+            return _firestore_client
 
     use_firestore = os.getenv("USE_FIRESTORE_TICKETS", os.getenv("USE_FIRESTORE_CASES", "false")).lower() in ("true", "1") or bool(os.getenv("K_SERVICE"))
     is_prod = _is_prod()
@@ -423,24 +450,11 @@ def update_case_status(
             "ticket_id": case.id,
         }
 
-    # Terminal state check
-    if case.status in ("Closed", "Cancelled"):
-        return {
-            "status": "error",
-            "message": f"Không thể cập nhật case đã ở trạng thái kết thúc '{case.status}'.",
-            "case_id": case.id,
-            "ticket_id": case.id,
-        }
-
-    # Whitelist transition check
-    allowed_transitions = VALID_STATUS_TRANSITIONS.get(case.status, [])
-    if status != case.status and status not in allowed_transitions:
-        return {
-            "status": "error",
-            "message": f"Chuyển trạng thái từ '{case.status}' sang '{status}' không hợp lệ. Các trạng thái được phép: {allowed_transitions}",
-            "case_id": case.id,
-            "ticket_id": case.id,
-        }
+    status_transitions = schema.get("status_transitions")
+    if status_transitions is None:
+        if _is_prod():
+            raise RuntimeError("Missing required 'status_transitions' configuration in case_schema.yaml in production mode.")
+        status_transitions = {}
 
     current_user = None
     try:
@@ -448,6 +462,65 @@ def update_case_status(
         current_user = get_current_sso_user()
     except Exception:
         pass
+
+    is_priv = _is_privileged_user(current_user)
+    is_owner = False
+    if current_user:
+        if current_user.user_id == case.user_id or current_user.email.lower() == str(case.user_id).lower():
+            is_owner = True
+    else:
+        if not _is_prod():
+            is_owner = True
+            is_priv = True
+
+    from_transitions = status_transitions.get(case.status, {})
+    if isinstance(from_transitions, dict):
+        owner_allowed = from_transitions.get("owner", [])
+        privileged_allowed = from_transitions.get("privileged", [])
+        all_possible = set(owner_allowed) | set(privileged_allowed)
+    elif isinstance(from_transitions, list):
+        owner_allowed = []
+        privileged_allowed = from_transitions
+        all_possible = set(from_transitions)
+    else:
+        owner_allowed = []
+        privileged_allowed = []
+        all_possible = set()
+
+    if status != case.status:
+        if status not in all_possible:
+            return {
+                "status": "error",
+                "message": f"Chuyển trạng thái từ '{case.status}' sang '{status}' không hợp lệ theo case schema.",
+                "case_id": case.id,
+                "ticket_id": case.id,
+            }
+
+        allowed = False
+        if is_priv and status in privileged_allowed:
+            allowed = True
+        elif is_owner and status in owner_allowed:
+            allowed = True
+
+        if not allowed:
+            try:
+                from agent_core.app_utils.audit_logger import emit_authorization_event
+                emit_authorization_event(
+                    actor=current_user.email if current_user else "anonymous",
+                    action="update_case_status",
+                    resource=case.id,
+                    granted=False,
+                    reason_code="TRANSITION_REQUIRES_PRIVILEGE",
+                )
+            except Exception:
+                pass
+            return {
+                "status": "forbidden",
+                "message": f"Chuyển trạng thái từ '{case.status}' sang '{status}' yêu cầu quyền đặc quyền (privileged role).",
+                "case_id": case.id,
+                "ticket_id": case.id,
+            }
+
     actor = current_user.email if current_user else case.user_id
 
     old_status = case.status
@@ -530,7 +603,12 @@ def route_case_to_tier(
             "case_id": case.id,
         }
 
-    # RBAC Tier Routing Check (C2)
+    # RBAC Tier Routing Check (Phần F)
+    schema = get_case_schema()
+    tier_routing = schema.get("tier_routing", {})
+    requires_privileged = tier_routing.get("requires_privileged", True)
+    tier_roles = tier_routing.get("tier_roles", {})
+
     current_user = None
     try:
         from agent_core.app_utils.sso_auth import get_current_sso_user
@@ -538,12 +616,49 @@ def route_case_to_tier(
     except Exception:
         pass
 
+    is_priv = _is_privileged_user(current_user)
     if current_user:
         user_roles = {r.lower() for r in getattr(current_user, "roles", [])}
-        required_roles = TIER_REQUIRED_ROLES.get(target_tier)
-        if required_roles is not None and not (user_roles & required_roles):
+    else:
+        user_roles = set()
+        if not _is_prod():
+            is_priv = True
+
+    if requires_privileged and not is_priv:
+        try:
+            from agent_core.app_utils.audit_logger import emit_authorization_event
+            emit_authorization_event(
+                actor=current_user.email if current_user else "anonymous",
+                action="route_case_to_tier",
+                resource=case.id,
+                granted=False,
+                reason_code="TIER_ROUTING_REQUIRES_PRIVILEGE",
+            )
+        except Exception:
+            pass
+        return {
+            "status": "forbidden",
+            "message": f"Chuyển tuyến case sang tier '{target_tier}' yêu cầu quyền đặc quyền (privileged role).",
+            "case_id": case.id,
+            "ticket_id": case.id,
+        }
+
+    if tier_roles and target_tier in tier_roles:
+        required_roles = {r.lower() for r in tier_roles[target_tier]}
+        if current_user and required_roles and not (user_roles & required_roles):
+            try:
+                from agent_core.app_utils.audit_logger import emit_authorization_event
+                emit_authorization_event(
+                    actor=current_user.email if current_user else "anonymous",
+                    action="route_case_to_tier",
+                    resource=case.id,
+                    granted=False,
+                    reason_code="TIER_ROUTING_REQUIRES_PRIVILEGE",
+                )
+            except Exception:
+                pass
             return {
-                "status": "error",
+                "status": "forbidden",
                 "message": f"Không đủ quyền để chuyển case đến tier '{target_tier}'.",
                 "case_id": case.id,
                 "ticket_id": case.id,
@@ -637,8 +752,7 @@ def list_user_cases(user_id: str, limit: int = 50) -> dict:
     fs = _get_firestore()
     if fs:
         try:
-            from google.cloud.firestore_v1.base_query import FieldFilter
-            query = fs.collection(CASE_COLLECTION).where(filter=FieldFilter("user_id", "==", user_id)).limit(bounded_limit)
+            query = fs.collection(CASE_COLLECTION).where("user_id", "==", user_id).limit(bounded_limit)
             docs = query.stream()
             results = []
             for doc in docs:

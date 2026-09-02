@@ -1,3 +1,4 @@
+import os
 import pytest
 from agent_core.tools.ticketing_tool import (
     create_helpdesk_ticket,
@@ -5,6 +6,8 @@ from agent_core.tools.ticketing_tool import (
     update_ticket_status,
     route_ticket_to_tier,
     list_user_tickets,
+    set_firestore_client,
+    reset_firestore_client,
     _TICKETS_DB,
 )
 from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
@@ -121,7 +124,8 @@ def test_ticket_cache_ttl_and_fallback():
     }
     mock_fs.collection.return_value.document.return_value.get.return_value = mock_doc
 
-    with patch("agent_core.tools.ticketing_tool._get_firestore", return_value=mock_fs):
+    try:
+        set_firestore_client(mock_fs)
         # 1. Immediate read within TTL should hit cache (title="TTL Test")
         details = get_ticket_details(ticket_id)
         assert details["ticket"]["title"] == "TTL Test"
@@ -136,10 +140,17 @@ def test_ticket_cache_ttl_and_fallback():
         assert details_updated["ticket"]["title"] == "TTL Test Updated in Firestore"
         assert mock_fs.collection.called
 
-        # 3. Simulate Firestore failure when cache expired -> should fallback to stale cached ticket
+        # 3. Simulate Firestore failure when cache expired
+        # In production mode, fails closed with RuntimeError; in dev mode, falls back to stale cache
         mock_fs.collection.side_effect = Exception("Firestore unavailable")
         ticketing_tool._TICKETS_CACHE_TIMES[norm_id] = time.time() - 100
-        fallback_details = get_ticket_details(ticket_id)
-        assert fallback_details["status"] == "success"
-        assert fallback_details["ticket"]["id"] == ticket_id
+        if os.getenv("ENVIRONMENT") == "production":
+            with pytest.raises(RuntimeError, match="Firestore read operation failed in production mode"):
+                get_ticket_details(ticket_id)
+        else:
+            fallback_details = get_ticket_details(ticket_id)
+            assert fallback_details["status"] == "success"
+            assert fallback_details["ticket"]["id"] == ticket_id
+    finally:
+        reset_firestore_client()
 

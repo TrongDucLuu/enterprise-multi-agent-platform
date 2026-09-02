@@ -567,9 +567,12 @@ def test_indirect_prompt_injection_poisoned_document_isolated_as_passive_data():
     assert snippet.startswith('<retrieved_document id="ERP-KB-POISONED" system="ERP"')
     assert snippet.endswith("</retrieved_document>")
 
-    l1_selfservice_agent = created_agents["l1_selfservice_agent"]
-    l2_enterprise_rag_agent = created_agents["l2_enterprise_rag_agent"]
-    l3_deep_diagnostics_agent = created_agents["l3_deep_diagnostics_agent"]
+    from agent_core.agent_builder import build_agent_system
+    root_agent_sys, agents_sys = build_agent_system("it-helpdesk")
+
+    l1_selfservice_agent = agents_sys["l1_selfservice_agent"]
+    l2_enterprise_rag_agent = agents_sys["l2_enterprise_rag_agent"]
+    l3_deep_diagnostics_agent = agents_sys["l3_deep_diagnostics_agent"]
 
     # Assert system prompt of all agents explicitly mandates passive data isolation
     assert "retrieved_document" in l2_enterprise_rag_agent.instruction
@@ -579,7 +582,7 @@ def test_indirect_prompt_injection_poisoned_document_isolated_as_passive_data():
     assert "retrieved_document" in l1_selfservice_agent.instruction
     assert "Indirect Prompt Injection Defense" in l3_deep_diagnostics_agent.instruction
     assert "untrusted reference data" in l3_deep_diagnostics_agent.instruction
-    assert "Indirect Prompt Injection Defense" in root_orchestrator.instruction
+    assert "Indirect Prompt Injection Defense" in root_agent_sys.instruction
 
 
 def test_indirect_prompt_injection_delimiter_escaping_and_tag_count():

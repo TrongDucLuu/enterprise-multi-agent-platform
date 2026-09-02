@@ -963,8 +963,6 @@ class VertexAISearchKnowledgeStore(BaseKnowledgeStore):
                 or doc_id
             )
             doc_sys = doc_data.get("system") or clean_sys
-            if doc_sys == "ALL":
-                doc_sys = "GENERAL"
 
             # Extract snippet / extractive answer / extractive segment
             snippet_text = ""

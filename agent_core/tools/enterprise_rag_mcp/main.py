@@ -1,7 +1,7 @@
 import os
 import logging
 import sys
-from typing import Optional
+from typing import Optional, Any
 from fastmcp import FastMCP
 from dotenv import load_dotenv
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -163,9 +163,72 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
             )
 
 
-store = get_knowledge_store()
-facts_store = get_facts_store()
-obligations_store = get_obligations_store()
+store: Optional[Any] = None
+facts_store: Optional[Any] = None
+obligations_store: Optional[Any] = None
+
+_knowledge_store_override: Optional[Any] = None
+_facts_store_override: Optional[Any] = None
+_obligations_store_override: Optional[Any] = None
+
+
+def set_knowledge_store(custom_store: Optional[Any]) -> None:
+    global _knowledge_store_override
+    _knowledge_store_override = custom_store
+
+
+def reset_knowledge_store() -> None:
+    global _knowledge_store_override, store
+    _knowledge_store_override = None
+    store = None
+
+
+def set_facts_store(custom_store: Optional[Any]) -> None:
+    global _facts_store_override
+    _facts_store_override = custom_store
+
+
+def reset_facts_store() -> None:
+    global _facts_store_override, facts_store
+    _facts_store_override = None
+    facts_store = None
+
+
+def set_obligations_store(custom_store: Optional[Any]) -> None:
+    global _obligations_store_override
+    _obligations_store_override = custom_store
+
+
+def reset_obligations_store() -> None:
+    global _obligations_store_override, obligations_store
+    _obligations_store_override = None
+    obligations_store = None
+
+
+def _get_active_knowledge_store() -> Any:
+    if store is not None:
+        return store
+    if _knowledge_store_override is not None:
+        return _knowledge_store_override
+    return get_knowledge_store()
+
+
+def _get_active_facts_store() -> Any:
+    if facts_store is not None:
+        return facts_store
+    if _facts_store_override is not None:
+        return _facts_store_override
+    return get_facts_store()
+
+
+def _get_active_obligations_store() -> Any:
+    if obligations_store is not None:
+        return obligations_store
+    if _obligations_store_override is not None:
+        return _obligations_store_override
+    return get_obligations_store()
+
+
 mcp = FastMCP(name="EnterpriseKnowledgeRAG")
 
 
@@ -204,7 +267,7 @@ def lookup_fact(key: str) -> dict:
         sec_ctx = SecurityContext.anonymous()
 
     try:
-        fact = facts_store.get_fact(clean_key)
+        fact = _get_active_facts_store().get_fact(clean_key)
         if not fact:
             return {
                 "status": "not_found",
@@ -286,7 +349,7 @@ def get_obligation(obligation_id: str) -> dict:
 
     clean_id = str(obligation_id).strip()
     try:
-        ob = obligations_store.get_obligation(clean_id)
+        ob = _get_active_obligations_store().get_obligation(clean_id)
         if not ob:
             return {
                 "status": "not_found",
@@ -407,7 +470,7 @@ def search_enterprise_knowledge(
                 "score": 0.0,
             }]
         try:
-            results = store.search(
+            results = _get_active_knowledge_store().search(
                 query=query,
                 system=clean_sys,
                 limit=RETRIEVE_K,
@@ -431,7 +494,7 @@ def search_enterprise_knowledge(
         return []
 
     try:
-        results = store.search(
+        results = _get_active_knowledge_store().search(
             query=query,
             system="ALL",
             limit=RETRIEVE_K,
@@ -483,7 +546,7 @@ def get_system_manual(article_id: str) -> dict:
     )
 
     try:
-        article = store.get_article_by_id(article_id, security_context=sec_ctx)
+        article = _get_active_knowledge_store().get_article_by_id(article_id, security_context=sec_ctx)
     except KnowledgeStoreUnavailableError as e:
         logger.error("Knowledge store unavailable during get_system_manual: %s", e)
         return {

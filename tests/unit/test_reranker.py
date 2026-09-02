@@ -9,21 +9,21 @@ def sample_candidates():
     return [
         SearchResult(
             article_id="ERP-001",
-            system="ERP",
+            system="ALL",
             title="SAP ME21N Guide",
             snippet="ME21N Purchase Order creation",
             relevance_score=0.85,
         ),
         SearchResult(
             article_id="HRM-001",
-            system="HRM",
+            system="ALL",
             title="BambooHR Timesheet",
             snippet="Timesheet submission and approval",
             relevance_score=0.75,
         ),
         SearchResult(
             article_id="CRM-001",
-            system="CRM",
+            system="ALL",
             title="Salesforce Territory",
             snippet="Territory assignment rules",
             relevance_score=0.65,
@@ -97,7 +97,7 @@ def test_search_result_extra_forbid_prevents_phantom_fields():
     with pytest.raises(ValidationError):
         SearchResult(
             article_id="TEST-001",
-            system="ERP",
+            system="ALL",
             title="Test",
             snippet="Test snippet",
             relevance_score=0.9,

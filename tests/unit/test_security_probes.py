@@ -236,99 +236,100 @@ def test_mcp_tools_fail_closed_for_anonymous():
 # PROBE 5: 3 Backends x 8 Scenarios Parity Matrix
 # =====================================================================
 
-FIXTURE_ARTICLES = [
-    KnowledgeArticle(
-        id="DOC-PUB-001",
-        system="ERP",
-        title="Public General Information",
-        category="General",
-        content="Public policy overview",
-        allowed_roles=[],
-        sensitivity="PUBLIC",
-        clearance_level=0,
-        keywords=["public", "general", "policy"],
-    ),
-    KnowledgeArticle(
-        id="DOC-INT-001",
-        system="ERP",
-        title="Internal Standard Procedure",
-        category="General",
-        content="Internal procedure details",
-        allowed_roles=[],
-        sensitivity="INTERNAL",
-        clearance_level=1,
-        keywords=["internal", "procedure", "policy"],
-    ),
-    KnowledgeArticle(
-        id="DOC-HR-001",
-        system="HRM",
-        title="HR General Compensation Guide",
-        category="HR",
-        content="HR compensation rules for specialists",
-        allowed_roles=["hr_specialist", "hr_admin", "it_admin"],
-        sensitivity="CONFIDENTIAL",
-        clearance_level=2,
-        keywords=["compensation", "hr", "policy"],
-    ),
-    KnowledgeArticle(
-        id="DOC-HR-EXEC",
-        system="HRM",
-        title="Executive Salary Bands & Multipliers",
-        category="HR",
-        content="Executive salary bands and bonus multipliers",
-        allowed_roles=["hr_admin", "it_admin"],
-        sensitivity="CONFIDENTIAL",
-        clearance_level=2,
-        keywords=["salary", "executive", "bonus"],
-    ),
-    KnowledgeArticle(
-        id="DOC-RESTRICTED",
-        system="ERP",
-        title="Domain Root Key Rotation",
-        category="Security",
-        content="Restricted domain root key rotation procedure",
-        allowed_roles=["it_admin"],
-        sensitivity="RESTRICTED",
-        clearance_level=3,
-        keywords=["security", "root", "key"],
-    ),
-    KnowledgeArticle(
-        id="DOC-TOMBSTONE",
-        system="ERP",
-        title="Deleted Procedure",
-        category="General",
-        content="This document has been deleted/tombstoned",
-        allowed_roles=[],
-        sensitivity="INTERNAL",
-        clearance_level=1,
-        is_deleted=True,
-        keywords=["deleted", "procedure"],
-    ),
-    KnowledgeArticle(
-        id="DOC-EXPIRED",
-        system="ERP",
-        title="Expired Legacy Policy",
-        category="General",
-        content="Expired legacy policy from 2020",
-        allowed_roles=[],
-        sensitivity="INTERNAL",
-        clearance_level=1,
-        expiry_date="2020-01-01",
-        keywords=["expired", "legacy"],
-    ),
-    KnowledgeArticle(
-        id="DOC-FUTURE",
-        system="ERP",
-        title="Future Policy Directive 2099",
-        category="General",
-        content="Future policy effective in 2099",
-        allowed_roles=[],
-        sensitivity="INTERNAL",
-        clearance_level=1,
-        effective_date="2099-01-01",
-        keywords=["future", "directive"],
-    ),
-]
+def _get_probe_fixture_articles() -> list[KnowledgeArticle]:
+    return [
+        KnowledgeArticle(
+            id="DOC-PUB-001",
+            system="ALL",
+            title="Public General Information",
+            category="General",
+            content="Public policy overview",
+            allowed_roles=[],
+            sensitivity="PUBLIC",
+            clearance_level=0,
+            keywords=["public", "general", "policy"],
+        ),
+        KnowledgeArticle(
+            id="DOC-INT-001",
+            system="ALL",
+            title="Internal Standard Procedure",
+            category="General",
+            content="Internal procedure details",
+            allowed_roles=[],
+            sensitivity="INTERNAL",
+            clearance_level=1,
+            keywords=["internal", "procedure", "policy"],
+        ),
+        KnowledgeArticle(
+            id="DOC-HR-001",
+            system="ALL",
+            title="HR General Compensation Guide",
+            category="HR",
+            content="HR compensation rules for specialists",
+            allowed_roles=["hr_specialist", "hr_admin", "it_admin"],
+            sensitivity="CONFIDENTIAL",
+            clearance_level=2,
+            keywords=["compensation", "hr", "policy"],
+        ),
+        KnowledgeArticle(
+            id="DOC-HR-EXEC",
+            system="ALL",
+            title="Executive Salary Bands & Multipliers",
+            category="HR",
+            content="Executive salary bands and bonus multipliers",
+            allowed_roles=["hr_admin", "it_admin"],
+            sensitivity="CONFIDENTIAL",
+            clearance_level=2,
+            keywords=["salary", "executive", "bonus"],
+        ),
+        KnowledgeArticle(
+            id="DOC-RESTRICTED",
+            system="ALL",
+            title="Domain Root Key Rotation",
+            category="Security",
+            content="Restricted domain root key rotation procedure",
+            allowed_roles=["it_admin"],
+            sensitivity="RESTRICTED",
+            clearance_level=3,
+            keywords=["security", "root", "key"],
+        ),
+        KnowledgeArticle(
+            id="DOC-TOMBSTONE",
+            system="ALL",
+            title="Deleted Procedure",
+            category="General",
+            content="This document has been deleted/tombstoned",
+            allowed_roles=[],
+            sensitivity="INTERNAL",
+            clearance_level=1,
+            is_deleted=True,
+            keywords=["deleted", "procedure"],
+        ),
+        KnowledgeArticle(
+            id="DOC-EXPIRED",
+            system="ALL",
+            title="Expired Legacy Policy",
+            category="General",
+            content="Expired legacy policy from 2020",
+            allowed_roles=[],
+            sensitivity="INTERNAL",
+            clearance_level=1,
+            expiry_date="2020-01-01",
+            keywords=["expired", "legacy"],
+        ),
+        KnowledgeArticle(
+            id="DOC-FUTURE",
+            system="ALL",
+            title="Future Policy Directive 2099",
+            category="General",
+            content="Future policy effective in 2099",
+            allowed_roles=[],
+            sensitivity="INTERNAL",
+            clearance_level=1,
+            effective_date="2099-01-01",
+            keywords=["future", "directive"],
+        ),
+    ]
 
 
 def _create_mock_bigquery_store(articles: list[KnowledgeArticle]) -> BigQueryVectorKnowledgeStore:
@@ -451,9 +452,10 @@ def test_authorization_matrix_parity_across_all_3_stores(roles, clearance, expec
     """
     sec_ctx = SecurityContext.from_user(user_id="test-user", roles=roles, clearance_level=clearance)
 
-    in_memory_store = InMemoryKnowledgeStore(articles=FIXTURE_ARTICLES)
-    bq_store = _create_mock_bigquery_store(FIXTURE_ARTICLES)
-    vertex_store = _create_mock_vertex_search_store(FIXTURE_ARTICLES)
+    fixture_articles = _get_probe_fixture_articles()
+    in_memory_store = InMemoryKnowledgeStore(articles=fixture_articles)
+    bq_store = _create_mock_bigquery_store(fixture_articles)
+    vertex_store = _create_mock_vertex_search_store(fixture_articles)
 
     stores = [
         ("InMemoryKnowledgeStore", in_memory_store),
@@ -535,9 +537,10 @@ def test_get_article_by_id_parity_matrix_across_all_3_stores(article_id, roles, 
     """
     sec_ctx = SecurityContext.from_user(user_id="test-user", roles=roles, clearance_level=clearance)
 
-    in_memory_store = InMemoryKnowledgeStore(articles=FIXTURE_ARTICLES)
-    bq_store = _create_mock_bigquery_store(FIXTURE_ARTICLES)
-    vertex_store = _create_mock_vertex_search_store(FIXTURE_ARTICLES)
+    fixture_articles = _get_probe_fixture_articles()
+    in_memory_store = InMemoryKnowledgeStore(articles=fixture_articles)
+    bq_store = _create_mock_bigquery_store(fixture_articles)
+    vertex_store = _create_mock_vertex_search_store(fixture_articles)
 
     stores = [
         ("InMemoryKnowledgeStore", in_memory_store),

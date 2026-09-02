@@ -29,6 +29,9 @@ from agent_core.tools.case_tool import (
     route_ticket_to_tier,
     list_user_cases,
     list_user_tickets,
+    set_firestore_client,
+    reset_firestore_client,
+    set_firestore_factory,
 )
 
 # Literal type aliases for backwards compatibility with tests

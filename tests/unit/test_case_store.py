@@ -8,22 +8,25 @@ from agent_core.tools.case_tool import (
     list_user_cases,
     _CASES_DB,
     _CASES_CACHE_TIMES,
-    VALID_STATUS_TRANSITIONS,
+    get_case_schema,
+    clear_case_schema_cache,
 )
 from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 
 
 @pytest.fixture(autouse=True)
-def clean_case_store():
+def clean_case_store(fake_firestore):
     _CASES_DB.clear()
     _CASES_CACHE_TIMES.clear()
+    clear_case_schema_cache()
     yield
     _CASES_DB.clear()
     _CASES_CACHE_TIMES.clear()
+    clear_case_schema_cache()
 
 
 # =========================================================================
-# C1: STATUS TRANSITION WHITELIST
+# C1: STATUS TRANSITION WHITELIST & ROLE DIMENSION (PHẦN F)
 # =========================================================================
 
 def test_valid_status_transitions():
@@ -53,45 +56,95 @@ def test_valid_status_transitions():
         current_sso_user.reset(token)
 
 
-def test_invalid_status_transition_jumping():
-    """Verify illegal jumping of states is rejected (e.g. Open -> Closed or Open -> Resolved directly)."""
-    user = SSOUser(user_id="agent-01", email="agent@company.com", roles=["support_agent"])
-    token = current_sso_user.set(user)
+def test_six_required_cases_for_status_transitions_and_role_routing():
+    """
+    Test the 6 specific cases required by PHẦN F Work Order:
+    1. owner đóng ticket của mình (theo schema) -> success
+    2. owner set Resolved -> forbidden
+    3. owner leo thang L3 -> forbidden
+    4. privileged Open -> Resolved -> success (chứng minh chiều vai trò hoạt động)
+    5. privileged leo thang L3 -> success
+    6. chuyển tiếp không có trong schema -> error
+    """
+    owner_user = SSOUser(user_id="emp-01", email="emp01@company.com", roles=["employee"])
+    priv_user = SSOUser(user_id="admin-01", email="admin01@company.com", roles=["it_admin"])
+
+    # Case 1: Owner closes their own ticket (Open -> Closed is allowed for owner in schema)
+    token = current_sso_user.set(owner_user)
     try:
-        res = create_case(user_id="emp-01", title="Test Illegal Jump", description="Testing illegal jumps")
-        case_id = res["case"]["id"]
+        res1 = create_case(user_id="emp-01", title="Case 1 Owner Close", description="Testing owner close")
+        c1_id = res1["case"]["id"]
+        r1 = update_case_status(case_id=c1_id, status="Closed")
+        assert r1["status"] == "success"
+        assert r1["case"]["status"] == "Closed"
+    finally:
+        current_sso_user.reset(token)
 
-        # Open -> Closed (Direct jump is forbidden)
-        r_fail = update_case_status(case_id=case_id, status="Closed")
-        assert r_fail["status"] == "error"
-        assert "không hợp lệ" in r_fail["message"]
+    # Case 2: Owner tries to set Resolved (forbidden for owner)
+    token = current_sso_user.set(owner_user)
+    try:
+        res2 = create_case(user_id="emp-01", title="Case 2 Owner Resolve", description="Testing owner resolve")
+        c2_id = res2["case"]["id"]
+        r2 = update_case_status(case_id=c2_id, status="Resolved")
+        assert r2["status"] == "forbidden"
+        assert "yêu cầu quyền đặc quyền" in r2["message"]
+    finally:
+        current_sso_user.reset(token)
 
-        # Open -> Resolved (Direct jump without In_Progress is forbidden)
-        r_fail2 = update_case_status(case_id=case_id, status="Resolved")
-        assert r_fail2["status"] == "error"
-        assert "không hợp lệ" in r_fail2["message"]
+    # Case 3: Owner tries to escalate L3 (forbidden for owner)
+    token = current_sso_user.set(owner_user)
+    try:
+        res3 = create_case(user_id="emp-01", title="Case 3 Owner L3", description="Testing owner L3 escalate")
+        c3_id = res3["case"]["id"]
+        r3 = route_case_to_tier(case_id=c3_id, target_tier="L3_Deep_Diagnostics", reason="Want L3 help")
+        assert r3["status"] == "forbidden"
+    finally:
+        current_sso_user.reset(token)
+
+    # Case 4: Privileged Open -> Resolved (success — proves role dimension works!)
+    token = current_sso_user.set(priv_user)
+    try:
+        res4 = create_case(user_id="emp-01", title="Case 4 Priv Resolve", description="Testing direct resolve by admin")
+        c4_id = res4["case"]["id"]
+        r4 = update_case_status(case_id=c4_id, status="Resolved", resolution_notes="Instant fix by admin")
+        assert r4["status"] == "success"
+        assert r4["case"]["status"] == "Resolved"
+    finally:
+        current_sso_user.reset(token)
+
+    # Case 5: Privileged escalates L3 (success)
+    token = current_sso_user.set(priv_user)
+    try:
+        res5 = create_case(user_id="emp-01", title="Case 5 Priv L3", description="Testing L3 routing by admin")
+        c5_id = res5["case"]["id"]
+        r5 = route_case_to_tier(case_id=c5_id, target_tier="L3_Deep_Diagnostics", reason="Deep diagnosis needed")
+        assert r5["status"] == "success"
+        assert r5["case"]["assigned_tier"] == "L3_Deep_Diagnostics"
+    finally:
+        current_sso_user.reset(token)
+
+    # Case 6: Transition not in schema -> error
+    token = current_sso_user.set(priv_user)
+    try:
+        res6 = create_case(user_id="emp-01", title="Case 6 Invalid Trans", description="Testing invalid transition")
+        c6_id = res6["case"]["id"]
+        # Closed -> In_Progress is not allowed in schema (Closed can only go to Open)
+        update_case_status(case_id=c6_id, status="Closed")
+        r6 = update_case_status(case_id=c6_id, status="In_Progress")
+        assert r6["status"] == "error"
+        assert "không hợp lệ theo case schema" in r6["message"]
     finally:
         current_sso_user.reset(token)
 
 
-def test_terminal_state_cannot_be_updated():
-    """Verify closed or cancelled cases cannot transition to any other status."""
-    user = SSOUser(user_id="agent-01", email="agent@company.com", roles=["support_agent"])
-    token = current_sso_user.set(user)
-    try:
-        res = create_case(user_id="emp-01", title="Test Closed", description="Testing closed case")
-        case_id = res["case"]["id"]
+def test_schema_missing_transitions_fail_closed_in_production(monkeypatch):
+    """Verify that in production mode, missing status_transitions in case_schema raises RuntimeError."""
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    clear_case_schema_cache()
 
-        update_case_status(case_id=case_id, status="In_Progress")
-        update_case_status(case_id=case_id, status="Resolved")
-        update_case_status(case_id=case_id, status="Closed")
-
-        # Attempt to update Closed case
-        r_closed = update_case_status(case_id=case_id, status="In_Progress")
-        assert r_closed["status"] == "error"
-        assert "trạng thái kết thúc" in r_closed["message"]
-    finally:
-        current_sso_user.reset(token)
+    with patch("agent_core.agent_builder.load_domain_pack", return_value={"case_schema": {"statuses": ["Open"]}}):
+        with pytest.raises(RuntimeError, match="Missing required 'status_transitions'"):
+            get_case_schema()
 
 
 # =========================================================================
@@ -106,15 +159,13 @@ def test_tier_routing_rbac_employee_denied():
         res = create_case(user_id="emp-01", title="Test RBAC", description="Need help")
         case_id = res["case"]["id"]
 
-        # Employee routing to L2 should be denied
+        # Employee routing to L2 should be denied with forbidden
         r_l2 = route_case_to_tier(case_id=case_id, target_tier="L2_Enterprise_RAG", reason="Need L2 help")
-        assert r_l2["status"] == "error"
-        assert "Không đủ quyền" in r_l2["message"]
+        assert r_l2["status"] == "forbidden"
 
-        # Employee routing to L3 should be denied
+        # Employee routing to L3 should be denied with forbidden
         r_l3 = route_case_to_tier(case_id=case_id, target_tier="L3_Deep_Diagnostics", reason="Need L3 help")
-        assert r_l3["status"] == "error"
-        assert "Không đủ quyền" in r_l3["message"]
+        assert r_l3["status"] == "forbidden"
     finally:
         current_sso_user.reset(token)
 
@@ -136,7 +187,7 @@ def test_tier_routing_rbac_support_agent_allowed_l2_denied_l3():
 
         # Support agent cannot route to L3
         r_l3 = route_case_to_tier(case_id=case_id, target_tier="L3_Deep_Diagnostics", reason="Root cause needed")
-        assert r_l3["status"] == "error"
+        assert r_l3["status"] == "forbidden"
         assert "Không đủ quyền" in r_l3["message"]
     finally:
         current_sso_user.reset(token)
@@ -261,3 +312,46 @@ def test_audit_trail_history():
         assert history[3]["version_after"] == 4
     finally:
         current_sso_user.reset(token)
+
+
+# =========================================================================
+# E: FIRESTORE DEPENDENCY INJECTION & FAIL-CLOSED TESTS
+# =========================================================================
+
+def test_firestore_fail_closed_in_production_when_missing_client(monkeypatch):
+    """
+    Verifies that in production mode, if no Firestore client is injected
+    and Google Cloud Firestore credentials are not available, _get_firestore() fails closed with RuntimeError.
+    """
+    from agent_core.tools.case_tool import (
+        reset_firestore_client,
+        _get_firestore,
+    )
+    reset_firestore_client()
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    mock_fs_mod = MagicMock()
+    mock_fs_mod.Client.side_effect = Exception("No GCP ADC credentials")
+    with patch.dict("sys.modules", {"google.cloud.firestore": mock_fs_mod}):
+        with pytest.raises(RuntimeError) as exc_info:
+            _get_firestore()
+        assert "Firestore connection failed in production mode" in str(exc_info.value)
+
+
+def test_firestore_dependency_injection_with_factory():
+    """
+    Verifies that set_firestore_factory allows custom lazy initialization.
+    """
+    from agent_core.tools.case_tool import (
+        set_firestore_factory,
+        reset_firestore_client,
+        _get_firestore,
+    )
+    reset_firestore_client()
+    mock_client = MagicMock()
+    set_firestore_factory(lambda: mock_client)
+    try:
+        client = _get_firestore()
+        assert client is mock_client
+    finally:
+        reset_firestore_client()
+

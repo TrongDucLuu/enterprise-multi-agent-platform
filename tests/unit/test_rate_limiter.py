@@ -2,7 +2,20 @@ import time
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from agent_core.app_utils.rate_limiter import InMemoryRateLimiter, RateLimitMiddleware
+from agent_core.app_utils.rate_limiter import InMemoryRateLimiter, RateLimitMiddleware, reset_rate_limiters
+from agent_core.app_utils.sso_auth import current_sso_user
+
+
+@pytest.fixture(autouse=True)
+def clean_rate_limiter_and_sso_context():
+    reset_rate_limiters()
+    token = current_sso_user.set(None)
+    yield
+    try:
+        current_sso_user.reset(token)
+    except Exception:
+        current_sso_user.set(None)
+    reset_rate_limiters()
 
 
 def test_in_memory_rate_limiter_sliding_window():
@@ -141,7 +154,7 @@ def test_in_memory_rate_limiter_auto_cleanup():
     assert "active_key" in limiter._history
 
 
-def test_route_ticket_to_tier_rate_limits_by_caller_not_owner():
+def test_route_ticket_to_tier_rate_limits_by_caller_not_owner(fake_firestore):
     """
     Validates that when Admin Alice escalates a ticket belonging to Employee Bob to L3,
     the L3 rate limit quota is charged to Alice (the caller), NOT Bob (the ticket owner).
@@ -433,11 +446,12 @@ def test_single_jwt_verification_across_middlewares(monkeypatch):
     assert verify_spy.call_count == 1, f"Expected verify_sso_token to be called 1 time, got {verify_spy.call_count}"
 
 
-def test_healthz_and_readyz_endpoints():
+def test_healthz_and_readyz_endpoints(monkeypatch):
     """
     Validates that /healthz and /readyz endpoints return HTTP 200 without authentication
     and do not leak internal system cache details.
     """
+    monkeypatch.setenv("ALLOWED_DOMAINS", "company.com")
     from agent_core.fast_api_app import app
     client = TestClient(app)
 
@@ -453,3 +467,87 @@ def test_healthz_and_readyz_endpoints():
     assert r_readyz.status_code == 200
     assert r_readyz.json()["status"] == "ready"
     assert "cache_entries" not in r_readyz.json()
+
+
+def test_redis_rate_limiter_production_missing_auth_raises(monkeypatch):
+    """
+    Tier R2 (Phần D3): Validates that in production mode, missing REDIS_AUTH_STRING
+    strictly raises a RuntimeError rather than connecting unauthenticated.
+    """
+    from agent_core.app_utils.rate_limiter import RedisRateLimiter
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("REDIS_AUTH_STRING", raising=False)
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+
+    with pytest.raises(RuntimeError, match="REDIS_AUTH_STRING is required in production mode"):
+        RedisRateLimiter(host="redis.internal", password=None)
+
+
+def test_redis_rate_limiter_production_tls_missing_ca_raises(monkeypatch):
+    """
+    Tier R2 (Phần D1): Validates that in production mode with TLS enabled,
+    missing CA certificate strictly raises a RuntimeError.
+    """
+    from agent_core.app_utils.rate_limiter import RedisRateLimiter
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("REDIS_CA_CERT", raising=False)
+    monkeypatch.delenv("REDIS_CA_CERT_PATH", raising=False)
+    monkeypatch.delenv("REDIS_TLS_CA_CERTS", raising=False)
+
+    with pytest.raises(RuntimeError, match="Redis TLS CA certificate verification is required in production mode"):
+        RedisRateLimiter(host="redis.internal", password="prod-password-123", ssl=True)
+
+
+def test_redis_rate_limiter_production_tls_with_ca_cert(monkeypatch):
+    """
+    Tier R2 (Phần D1): Validates that in production mode with REDIS_CA_CERT provided,
+    ssl_cert_reqs is set to 'required' and ssl_ca_certs points to the certificate file.
+    """
+    from unittest.mock import MagicMock, patch
+    from agent_core.app_utils.rate_limiter import RedisRateLimiter
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    sample_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIB...fake...ca...cert\n-----END CERTIFICATE-----"
+    monkeypatch.setenv("REDIS_CA_CERT", sample_ca_pem)
+
+    captured_kwargs = {}
+    mock_redis_instance = MagicMock()
+    mock_redis_instance.ping.return_value = True
+
+    def fake_redis_init(**kwargs):
+        captured_kwargs.update(kwargs)
+        return mock_redis_instance
+
+    with patch("redis.Redis", side_effect=fake_redis_init):
+        limiter = RedisRateLimiter(host="redis.internal", password="prod-password-123", ssl=True)
+
+    assert captured_kwargs.get("ssl") is True
+    assert captured_kwargs.get("ssl_cert_reqs") == "required"
+    assert captured_kwargs.get("ssl_ca_certs") is not None
+    assert captured_kwargs.get("password") == "prod-password-123"
+
+
+def test_redis_rate_limiter_dev_tls_allows_unverified(monkeypatch):
+    """
+    Tier R2 (Phần D1): Validates that in development mode, TLS allows ssl_cert_reqs=None for local testing.
+    """
+    from unittest.mock import MagicMock, patch
+    from agent_core.app_utils.rate_limiter import RedisRateLimiter
+
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    captured_kwargs = {}
+    mock_redis_instance = MagicMock()
+    mock_redis_instance.ping.return_value = True
+
+    def fake_redis_init(**kwargs):
+        captured_kwargs.update(kwargs)
+        return mock_redis_instance
+
+    with patch("redis.Redis", side_effect=fake_redis_init):
+        limiter = RedisRateLimiter(host="localhost", password=None, ssl=True)
+
+    assert captured_kwargs.get("ssl") is True
+    assert captured_kwargs.get("ssl_cert_reqs") is None
+
