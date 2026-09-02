@@ -52,6 +52,18 @@ variable "allowed_domains" {
   default     = ""
 }
 
+variable "enable_cloud_identity_group_lookup" {
+  description = "Enable Google Cloud Identity / Workspace group membership lookups for SSO RBAC"
+  type        = bool
+  default     = false
+}
+
+variable "sso_groups_claim" {
+  description = "JWT claim name for extracting enterprise security groups from SSO tokens"
+  type        = string
+  default     = "groups"
+}
+
 variable "knowledge_backend" {
   description = "Knowledge base backend ('in_memory', 'bigquery', 'vertex_ai_search')"
   type        = string

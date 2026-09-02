@@ -12,7 +12,8 @@ resource "google_project_service" "services" {
     "firestore.googleapis.com",
     "compute.googleapis.com",
     "redis.googleapis.com",
-    "servicenetworking.googleapis.com"
+    "servicenetworking.googleapis.com",
+    "cloudidentity.googleapis.com"
   ])
   service            = each.key
   disable_on_destroy = false
@@ -648,6 +649,14 @@ resource "google_cloud_run_v2_service" "default" {
       env {
         name  = "ALLOWED_DOMAINS"
         value = var.allowed_domains
+      }
+      env {
+        name  = "ENABLE_CLOUD_IDENTITY_GROUP_LOOKUP"
+        value = tostring(var.enable_cloud_identity_group_lookup)
+      }
+      env {
+        name  = "SSO_GROUPS_CLAIM"
+        value = var.sso_groups_claim
       }
       env {
         name  = "KNOWLEDGE_BACKEND"
