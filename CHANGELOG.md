@@ -11,10 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Lazy-loaded sample knowledge and obligations from active domain pack YAMLs (`knowledge.yaml`, `obligations.yaml`) avoiding memory-leak imports.
   - Fail-closed system configuration resolution (`SYSTEMS_CONFIG_PATH`) with strict validation.
   - Subprocess clean boot and AST zero-hardcode anti-regression test harness (`test_zero_hardcode_parity.py`).
-- **Infrastructure & Terraform Blocking Preconditions (Phần B)**:
+- **Infrastructure & Terraform Blocking Preconditions (Phần B & C)**:
   - Added strict variable validation regex for `domain_pack` and `allowed_domains`.
-  - Added Cloud Run `lifecycle { precondition }` blocks preventing insecure production deployments.
-  - Hardened Redis Memorystore with `auth_enabled = true`, in-transit TLS encryption, and secure container environment injection (`REDIS_AUTH_STRING`, `REDIS_USE_TLS`).
+  - Added Cloud Run `lifecycle { precondition }` blocks preventing insecure production deployments (`in_memory` knowledge backend, `allow_unauthenticated` without Cloud Armor, and missing `allowed_domains`).
+  - Added Terraform `required_version = ">= 1.9"` and documented advisory SLA warning check for preview models.
+  - Hardened Redis Memorystore with `auth_enabled = true`, in-transit TLS encryption, Secret Manager secret storage for auth string and CA certificate, and secure Cloud Run container injection via `value_source.secret_key_ref`.
+  - Enforced client-side TLS CA certificate verification (`ssl_cert_reqs="required"`) and fail-closed authentication in production mode.
 - **Case Lifecycle State Machine & RBAC (Phần C)**:
   - Enforced deterministic status transition whitelist (`Open -> In_Progress -> Resolved -> Closed`) and terminal state immutability.
   - Enforced Role-Based Access Control (RBAC) on `route_case_to_tier` (rejecting unprivileged escalation to L2/L3).
@@ -22,12 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Enforced fail-closed persistence in production mode (`RuntimeError` on connection loss, no silent in-memory fallback).
   - Optimistic Concurrency Control (OCC) with incremental version counters and 409 conflict detection.
   - Append-only audit trail (`history: list[dict]`) tracking actor, timestamp, action, and version.
-- **Cache Clearance Level Partitioning (Phần E)**:
+- **Cache Clearance Level Partitioning & Public Protection (Phần E)**:
   - Multi-tenant deterministic cache key partitioning with clearance level (`_c{clearance_level}_`).
   - Seamless caller clearance resolution from `SSOUser` and `SecurityContext` (Level 0: Public, Level 1: Internal, Level 2: Confidential, Level 3: Restricted).
-- **Dead Code Cleanup & Canonical Tools (Phần F)**:
+  - Enforced strict protection blocking `is_public=True` when `clearance_level > 0`, preventing sensitive or confidential items from being stored as public FAQ cache.
+- **Dead Code Cleanup, Tool Canonicalization & MCP Deprecation (Phần F & G)**:
   - Removed legacy `agent_core/plugins/` directory and standalone `triage_rules.py`.
-  - Standardized canonical tool registry and schema naming.
+  - Standardized canonical tool registry and schema naming in `agent_core.tools.registry`.
+  - Marked `agent_core.tools.mcp_config` as deprecated in favor of declarative domain pack tool resolution.
 
 ## [2.0.0] - 2026-09-01
 

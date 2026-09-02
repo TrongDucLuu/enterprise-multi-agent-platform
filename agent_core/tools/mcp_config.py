@@ -1,3 +1,9 @@
+"""
+DEPRECATED: MCP configuration module.
+Maintained for backwards compatibility with legacy external MCP tool integrations.
+Canonical tools and knowledge retrieval functions are dynamically registered in
+`agent_core.tools.registry` and resolved via Domain Packs (`agents.yaml` / `pack.yaml`).
+"""
 import os
 from typing import Optional
 from mcp import StdioServerParameters

@@ -16,7 +16,7 @@ from agent_core.app_utils.env import (
     init_environment,
     get_model_names_for_environment,
 )
-from agent_core.app_utils.semantic_cache import get_semantic_cache
+from agent_core.app_utils.semantic_cache import get_semantic_cache, resolve_caller_clearance
 from agent_core.app_utils.sso_auth import current_sso_user
 from agent_core.app_utils.telemetry import ProductMetricsCollector
 
@@ -330,13 +330,16 @@ async def semantic_cache_after_model_callback(
 
         # Classify if public FAQ or user-specific private query (only turn 1 can be public)
         is_safe_public = _is_safe_public_faq(user_query, agent_name, tools_called, is_first_turn=is_first_turn)
+        eff_clearance = 0 if is_safe_public else resolve_caller_clearance(user_id=user.user_id if user else None)
+
         cache = get_semantic_cache()
         cache.set(
             query=user_query,
             response=response_text,
             user_id=None if is_safe_public else user.user_id,
             is_public=is_safe_public,
-            tier=agent_name
+            tier=agent_name,
+            clearance_level=eff_clearance,
         )
 
     return modified_response

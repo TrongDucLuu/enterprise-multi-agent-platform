@@ -680,6 +680,142 @@ def test_redis_rate_limiter_auth_and_tls_config():
     assert limiter._ssl is True
 
 
+def test_redis_semantic_cache_production_missing_auth_raises(monkeypatch):
+    """
+    Tier R2 (Phần D3): Validates that in production mode, missing REDIS_AUTH_STRING
+    strictly raises a RuntimeError rather than connecting unauthenticated.
+    """
+    from agent_core.app_utils.semantic_cache import RedisSemanticCache
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("REDIS_AUTH_STRING", raising=False)
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+
+    with pytest.raises(RuntimeError, match="REDIS_AUTH_STRING is required in production mode"):
+        RedisSemanticCache(host="redis.internal", password=None)
+
+
+def test_redis_semantic_cache_production_tls_missing_ca_raises(monkeypatch):
+    """
+    Tier R2 (Phần D1): Validates that in production mode with TLS enabled,
+    missing CA certificate strictly raises a RuntimeError.
+    """
+    from agent_core.app_utils.semantic_cache import RedisSemanticCache
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("REDIS_CA_CERT", raising=False)
+    monkeypatch.delenv("REDIS_CA_CERT_PATH", raising=False)
+    monkeypatch.delenv("REDIS_TLS_CA_CERTS", raising=False)
+
+    with pytest.raises(RuntimeError, match="Redis TLS CA certificate verification is required in production mode"):
+        RedisSemanticCache(host="redis.internal", password="prod-password-123", ssl=True)
+
+
+def test_redis_semantic_cache_production_tls_with_ca_cert(monkeypatch):
+    """
+    Tier R2 (Phần D1): Validates that in production mode with REDIS_CA_CERT provided,
+    ssl_cert_reqs is set to 'required' and ssl_ca_certs points to the certificate file.
+    """
+    from unittest.mock import MagicMock, patch
+    from agent_core.app_utils.semantic_cache import RedisSemanticCache
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    sample_ca_pem = "-----BEGIN CERTIFICATE-----\nMIIB...fake...ca...cert\n-----END CERTIFICATE-----"
+    monkeypatch.setenv("REDIS_CA_CERT", sample_ca_pem)
+
+    captured_kwargs = {}
+    mock_redis_instance = MagicMock()
+    mock_redis_instance.ping.return_value = True
+
+    def fake_redis_init(**kwargs):
+        captured_kwargs.update(kwargs)
+        return mock_redis_instance
+
+    with patch("redis.Redis", side_effect=fake_redis_init):
+        cache = RedisSemanticCache(host="redis.internal", password="prod-password-123", ssl=True)
+
+    assert captured_kwargs.get("ssl") is True
+    assert captured_kwargs.get("ssl_cert_reqs") == "required"
+    assert captured_kwargs.get("ssl_ca_certs") is not None
+    assert captured_kwargs.get("password") == "prod-password-123"
+
+
+def test_redis_semantic_cache_dev_tls_allows_unverified(monkeypatch):
+    """
+    Tier R2 (Phần D1): Validates that in development mode, TLS allows ssl_cert_reqs=None for local testing.
+    """
+    from unittest.mock import MagicMock, patch
+    from agent_core.app_utils.semantic_cache import RedisSemanticCache
+
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    captured_kwargs = {}
+    mock_redis_instance = MagicMock()
+    mock_redis_instance.ping.return_value = True
+
+    def fake_redis_init(**kwargs):
+        captured_kwargs.update(kwargs)
+        return mock_redis_instance
+
+    with patch("redis.Redis", side_effect=fake_redis_init):
+        cache = RedisSemanticCache(host="localhost", password=None, ssl=True)
+
+    assert captured_kwargs.get("ssl") is True
+    assert captured_kwargs.get("ssl_cert_reqs") is None
+
+
+def test_runtime_semantic_cache_callback_propagates_clearance_and_blocks_public(monkeypatch):
+    """
+    Tier R2 (Phần E): Ensures that semantic_cache_after_model_callback determines the caller's
+    clearance level, sets is_public=False for user-specific queries, and passes clearance_level to cache.set.
+    """
+    import pytest
+    from unittest.mock import MagicMock, patch
+    from google.adk.models import LlmResponse
+    from google.genai import types
+    from agent_core.runtime import semantic_cache_after_model_callback
+    from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
+
+    exec_user = SSOUser(
+        user_id="compliance_vp",
+        email="compliance@company.com",
+        display_name="Compliance Officer",
+        roles=["compliance_officer"],
+    )
+    current_sso_user.set(exec_user)
+
+    mock_cache = MagicMock()
+    with patch("agent_core.runtime.get_semantic_cache", return_value=mock_cache):
+        llm_resp = LlmResponse(
+            content=types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Đây là kế hoạch kiểm toán bảo mật cấp 2.")]
+            )
+        )
+
+        mock_inv_ctx = MagicMock()
+        mock_inv_ctx.agent.name = "l1_selfservice_agent"
+        mock_event = MagicMock()
+        mock_event.author = "user"
+        mock_event.content.parts = [types.Part.from_text(text="Kiểm tra logs audit của tài khoản tôi")]
+        mock_inv_ctx._get_events.return_value = [mock_event]
+        mock_inv_ctx.session.events = [mock_event]
+
+        mock_cb_ctx = MagicMock()
+        mock_cb_ctx._invocation_context = mock_inv_ctx
+
+        import asyncio
+        asyncio.run(semantic_cache_after_model_callback(mock_cb_ctx, llm_resp))
+
+    assert mock_cache.set.called
+    kwargs = mock_cache.set.call_args.kwargs
+    assert kwargs.get("clearance_level") == 2
+    assert kwargs.get("is_public") is False
+    assert kwargs.get("user_id") == "compliance_vp"
+
+
+
+
+
 
 
 

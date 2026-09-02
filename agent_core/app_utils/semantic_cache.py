@@ -532,6 +532,11 @@ class RedisSemanticCache(BaseSemanticCache):
         """Initializes redis connection pool safely with authentication and TLS support."""
         if not self._allow_request():
             return
+        is_prod = os.getenv("ENVIRONMENT", "development").lower() == "production"
+
+        if is_prod and not self._password:
+            raise RuntimeError("REDIS_AUTH_STRING is required in production mode when Redis backend is enabled.")
+
         try:
             import redis
             redis_kwargs = {
@@ -545,7 +550,23 @@ class RedisSemanticCache(BaseSemanticCache):
                 redis_kwargs["password"] = self._password
             if self._ssl:
                 redis_kwargs["ssl"] = True
-                redis_kwargs["ssl_cert_reqs"] = None
+                if is_prod:
+                    redis_kwargs["ssl_cert_reqs"] = "required"
+                    ca_cert_pem = os.getenv("REDIS_CA_CERT")
+                    ca_cert_path = os.getenv("REDIS_CA_CERT_PATH") or os.getenv("REDIS_TLS_CA_CERTS")
+                    if ca_cert_path and os.path.exists(ca_cert_path):
+                        redis_kwargs["ssl_ca_certs"] = ca_cert_path
+                    elif ca_cert_pem and ca_cert_pem.strip():
+                        import tempfile
+                        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".crt", delete=False)
+                        tmp.write(ca_cert_pem)
+                        tmp.flush()
+                        tmp.close()
+                        redis_kwargs["ssl_ca_certs"] = tmp.name
+                    else:
+                        raise RuntimeError("Redis TLS CA certificate verification is required in production mode (REDIS_CA_CERT or REDIS_CA_CERT_PATH missing).")
+                else:
+                    redis_kwargs["ssl_cert_reqs"] = None
             self._redis = redis.Redis(**redis_kwargs)
             self._redis.ping()
             self._record_redis_success()
@@ -558,6 +579,8 @@ class RedisSemanticCache(BaseSemanticCache):
                 bool(self._password),
             )
         except Exception as e:
+            if is_prod and isinstance(e, RuntimeError):
+                raise
             self._record_redis_failure(e, "init")
             self._redis = None
 
