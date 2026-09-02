@@ -52,6 +52,9 @@ def test_update_ticket_status():
     )
     ticket_id = res["ticket"]["id"]
 
+    step1 = update_ticket_status(ticket_id=ticket_id, status="In_Progress")
+    assert step1["status"] == "success"
+
     update_res = update_ticket_status(
         ticket_id=ticket_id,
         status="Resolved",
