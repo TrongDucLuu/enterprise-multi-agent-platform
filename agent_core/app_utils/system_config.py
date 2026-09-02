@@ -267,6 +267,10 @@ def load_system_config(config_path: Optional[str] = None, force_reload: bool = F
     if not isinstance(user_role_mappings, dict):
         user_role_mappings = {}
 
+    group_role_mappings = data.get("group_role_mappings", {})
+    if not isinstance(group_role_mappings, dict):
+        group_role_mappings = {}
+
     domain_keywords = data.get("domain_keywords", {})
     if not isinstance(domain_keywords, dict):
         domain_keywords = {}
@@ -278,6 +282,7 @@ def load_system_config(config_path: Optional[str] = None, force_reload: bool = F
         "document_processing": validated_doc_proc,
         "retrieval": validated_retrieval,
         "user_role_mappings": user_role_mappings,
+        "group_role_mappings": group_role_mappings,
         "domain_keywords": domain_keywords,
     }
 
@@ -437,6 +442,43 @@ def get_user_role_mappings() -> dict[str, list[str]]:
     return mappings
 
 
+def get_group_role_mappings() -> dict[str, list[str]]:
+    """
+    Returns mapping from enterprise group email / name (lowercase) to list of assigned roles.
+    Combines config/systems.yaml group_role_mappings with optional GROUP_ROLE_MAPPINGS env var.
+    """
+    cfg = load_system_config()
+    mappings: dict[str, list[str]] = {}
+
+    # 1. From YAML
+    raw_mappings = cfg.get("group_role_mappings", {})
+    if isinstance(raw_mappings, dict):
+        for group, roles in raw_mappings.items():
+            if isinstance(group, str) and isinstance(roles, list):
+                mappings[group.strip().lower()] = [str(r).strip() for r in roles if str(r).strip()]
+
+    # 2. From Environment Variable (Format: group1:r1,r2;group2:r3 or JSON)
+    env_mappings_raw = os.getenv("GROUP_ROLE_MAPPINGS", "").strip()
+    if env_mappings_raw:
+        try:
+            if env_mappings_raw.startswith("{"):
+                import json
+                env_dict = json.loads(env_mappings_raw)
+                for group, roles in env_dict.items():
+                    if isinstance(roles, list):
+                        mappings[group.strip().lower()] = [str(r).strip() for r in roles if str(r).strip()]
+            else:
+                for entry in env_mappings_raw.split(";"):
+                    if ":" in entry:
+                        group, roles_str = entry.split(":", 1)
+                        roles_list = [r.strip() for r in roles_str.split(",") if r.strip()]
+                        mappings[group.strip().lower()] = roles_list
+        except Exception as e:
+            logger.warning(f"Failed to parse GROUP_ROLE_MAPPINGS environment variable: {e}")
+
+    return mappings
+
+
 def get_domain_keywords() -> dict[str, list[str]]:
     """Returns centralized domain keywords mapping for regex classification."""
     cfg = load_system_config()
@@ -475,25 +517,35 @@ def get_domain_keyword_patterns() -> dict[str, re.Pattern]:
 
 def resolve_user_roles(
     email: str,
-    payload_roles: Optional[list[str]] = None
+    payload_roles: Optional[list[str]] = None,
+    groups: Optional[list[str]] = None,
 ) -> list[str]:
     """
     Resolves enterprise roles for a verified SSO user.
     Priority:
-    1. Static mappings from config/systems.yaml and USER_ROLE_MAPPINGS env.
-    2. Firestore collection 'user_roles' lookup (if Firestore is active).
-    3. Payload roles provided in JWT/OIDC.
-    4. Base fallback: ['employee'].
+    1. Group mappings from config/systems.yaml and GROUP_ROLE_MAPPINGS env (Google Workspace/Okta groups).
+    2. Static email mappings from config/systems.yaml and USER_ROLE_MAPPINGS env.
+    3. Firestore collection 'user_roles' lookup (if Firestore is active).
+    4. Payload roles provided in JWT/OIDC.
+    5. Base fallback: ['employee'].
     """
     email_norm = email.strip().lower() if email else ""
     resolved_roles: list[str] = []
 
-    # 1. Config & Env Mapping
-    mapping = get_user_role_mappings()
-    if email_norm in mapping:
-        resolved_roles.extend(mapping[email_norm])
+    # 1. Group Role Mappings (Highest Priority for Enterprise IAM)
+    if groups:
+        group_mapping = get_group_role_mappings()
+        for g in groups:
+            g_norm = str(g).strip().lower()
+            if g_norm in group_mapping:
+                resolved_roles.extend(group_mapping[g_norm])
 
-    # 2. Firestore Lookup if enabled
+    # 2. Config & Env User Email Mapping
+    user_mapping = get_user_role_mappings()
+    if email_norm in user_mapping:
+        resolved_roles.extend(user_mapping[email_norm])
+
+    # 3. Firestore Lookup if enabled
     if not resolved_roles and (os.getenv("USE_FIRESTORE_ROLES", "false").lower() in ("true", "1") or bool(os.getenv("K_SERVICE"))):
         try:
             from google.cloud import firestore
@@ -506,13 +558,13 @@ def resolve_user_roles(
         except Exception as e:
             logger.debug(f"Firestore role lookup skipped/failed for {email_norm}: {e}")
 
-    # 3. Payload roles from token
+    # 4. Payload roles from token
     if payload_roles:
         for r in payload_roles:
             if r and r not in resolved_roles:
                 resolved_roles.append(r)
 
-    # 4. Ensure baseline 'employee' role is always present
+    # 5. Ensure baseline 'employee' role is always present
     if "employee" not in resolved_roles:
         resolved_roles.append("employee")
 

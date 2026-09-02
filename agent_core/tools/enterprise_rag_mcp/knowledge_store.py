@@ -660,25 +660,22 @@ def resolve_security_context(
     Resolves the effective SecurityContext in a strict, fail-closed manner.
     1. If explicit SecurityContext is passed, use it.
     2. If explicit roles/clearance are passed, construct from them.
-    3. If active authenticated SSO user exists in contextvar, construct from SSO user.
-    4. Otherwise, defaults strictly to SecurityContext.anonymous() (clearance 0, roles []).
+    3. If active authenticated SSO user exists in ContextVar, construct from SSO user.
+    4. Otherwise, strictly defaults to SecurityContext.anonymous() (clearance 0, roles []).
     """
     if security_context is not None:
         return security_context
     if user_roles is not None or user_clearance is not None:
         return SecurityContext.from_user(roles=user_roles, clearance_level=user_clearance)
     
-    try:
-        from agent_core.app_utils.sso_auth import get_current_sso_user
-        current_user = get_current_sso_user()
-        if current_user:
-            return SecurityContext.from_user(
-                user_id=getattr(current_user, "email", getattr(current_user, "user_id", "anonymous")),
-                roles=getattr(current_user, "roles", []),
-                clearance_level=getattr(current_user, "clearance_level", None),
-            )
-    except Exception:
-        pass
+    from agent_core.app_utils.sso_auth import get_current_sso_user
+    current_user = get_current_sso_user()
+    if current_user is not None:
+        return SecurityContext.from_user(
+            user_id=getattr(current_user, "email", getattr(current_user, "user_id", "anonymous")),
+            roles=getattr(current_user, "roles", []),
+            clearance_level=getattr(current_user, "clearance_level", None),
+        )
 
     return SecurityContext.anonymous()
 

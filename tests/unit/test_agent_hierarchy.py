@@ -20,12 +20,14 @@ def test_multi_agent_structure_3_tiers():
     assert "l3_deep_diagnostics_agent" in sub_agent_names
 
 def test_models_assigned_appropriately():
+    from agent_core.app_utils.env import get_model_names_for_environment
+    fast_m, reasoning_m = get_model_names_for_environment()
     # L1 and L2 use fast model
-    assert l1_selfservice_agent.model.model == "gemini-3-flash-preview"
-    assert l2_enterprise_rag_agent.model.model == "gemini-3-flash-preview"
+    assert l1_selfservice_agent.model.model == fast_m
+    assert l2_enterprise_rag_agent.model.model == fast_m
     
     # L3 uses high reasoning model for deep diagnosis & RCA
-    assert l3_deep_diagnostics_agent.model.model == "gemini-3-pro-preview"
+    assert l3_deep_diagnostics_agent.model.model == reasoning_m
 
 @pytest.mark.asyncio
 async def test_save_session_to_memory_callback():

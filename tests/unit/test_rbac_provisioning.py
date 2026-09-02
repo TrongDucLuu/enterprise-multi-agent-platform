@@ -123,12 +123,40 @@ class TestRBACProvisioning:
         assert roles.count("secops") == 1
         assert roles.count("employee") == 1
 
+    def test_role_resolution_from_group_mapping(self, monkeypatch):
+        """Test Priority 1a: Enterprise group in YAML group_role_mappings."""
+        # config/systems.yaml maps 'gcp-it-admins@company.com' -> ['it_admin', 'sys_admin']
+        roles = resolve_user_roles(
+            "new.engineer@company.com",
+            groups=["gcp-it-admins@company.com"]
+        )
+        assert "it_admin" in roles
+        assert "sys_admin" in roles
+        assert "employee" in roles
+
+    def test_role_resolution_from_env_group_mapping(self, monkeypatch):
+        """Test Priority 1b: Enterprise group in GROUP_ROLE_MAPPINGS env var."""
+        monkeypatch.setenv(
+            "GROUP_ROLE_MAPPINGS",
+            "secops-squad@company.com:security_officer,audit;devops-core@company.com:sys_admin"
+        )
+        reload_system_config()
+
+        roles = resolve_user_roles(
+            "dev@company.com",
+            groups=["secops-squad@company.com"]
+        )
+        assert "security_officer" in roles
+        assert "audit" in roles
+        assert "employee" in roles
+
     def test_verify_google_oidc_token_integrates_resolve_user_roles(self, monkeypatch):
         """
         End-to-End integration test: verify_google_oidc_token uses resolve_user_roles
         to accurately construct SSOUser with enterprise roles.
         """
         monkeypatch.setenv("SSO_CLIENT_ID", "test-client-id.apps.googleusercontent.com")
+        monkeypatch.setenv("ALLOWED_DOMAINS", "enterprise.com,company.com")
         monkeypatch.setenv("USER_ROLE_MAPPINGS", "chief_admin@enterprise.com:it_admin,secops")
         reload_system_config()
 
@@ -152,6 +180,35 @@ class TestRBACProvisioning:
             assert "secops" in sso_user.roles
             assert "employee" in sso_user.roles
             assert sso_user.is_authenticated is True
+
+    def test_verify_google_oidc_token_with_groups(self, monkeypatch):
+        """
+        Integration test: verify_google_oidc_token extracts groups from payload
+        and resolves roles via group_role_mappings.
+        """
+        monkeypatch.setenv("SSO_CLIENT_ID", "test-client-id.apps.googleusercontent.com")
+        monkeypatch.setenv("ALLOWED_DOMAINS", "company.com")
+        monkeypatch.setenv("GROUP_ROLE_MAPPINGS", "gcp-secops@company.com:it_admin,security_officer")
+        reload_system_config()
+
+        mock_payload = {
+            "sub": "889900112233",
+            "email": "analyst@company.com",
+            "email_verified": True,
+            "name": "Security Analyst",
+            "hd": "company.com",
+            "groups": ["gcp-secops@company.com"],
+            "iss": "https://accounts.google.com",
+            "aud": "test-client-id.apps.googleusercontent.com",
+        }
+
+        with patch("google.oauth2.id_token.verify_oauth2_token", return_value=mock_payload):
+            sso_user = verify_google_oidc_token("mock-valid-google-id-token")
+            assert isinstance(sso_user, SSOUser)
+            assert sso_user.email == "analyst@company.com"
+            assert "security_officer" in sso_user.roles
+            assert "it_admin" in sso_user.roles
+            assert sso_user.groups == ["gcp-secops@company.com"]
 
 
 class TestHashStability:

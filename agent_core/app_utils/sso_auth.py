@@ -31,8 +31,11 @@ ALLOWED_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 if SSO_ISSUER:
     ALLOWED_ISSUERS.add(SSO_ISSUER)
 
-raw_allowed_domains = os.getenv("ALLOWED_DOMAINS", "")
-ALLOWED_DOMAINS = [d.strip().lower() for d in raw_allowed_domains.split(",") if d.strip()]
+def get_allowed_domains() -> list[str]:
+    raw_allowed_domains = os.getenv("ALLOWED_DOMAINS", "").strip()
+    return [d.strip().lower() for d in raw_allowed_domains.split(",") if d.strip()]
+
+ALLOWED_DOMAINS = get_allowed_domains()
 
 DEV_JWT_SECRET = os.getenv("SSO_JWT_SECRET", "dev-only-secret-key-change-in-production-2026-xyz")
 
@@ -48,6 +51,7 @@ class SSOUser(BaseModel):
     full_name: str = Field(default="Employee", description="Full Name")
     department: str = Field(default="General", description="Company Department")
     roles: list[str] = Field(default_factory=lambda: ["employee"], description="Assigned Roles")
+    groups: list[str] = Field(default_factory=list, description="Enterprise Directory Groups")
     hosted_domain: Optional[str] = Field(default=None, description="Google Workspace Hosted Domain (hd)")
     is_authenticated: bool = True
 
@@ -126,6 +130,7 @@ def create_dev_mock_token(
         "name": user.full_name,
         "department": user.department,
         "roles": user.roles,
+        "groups": getattr(user, "groups", []),
         "hd": user.hosted_domain,
         "iss": issuer or SSO_ISSUER,
         "aud": audience or SSO_CLIENT_ID,
@@ -150,11 +155,13 @@ def verify_google_oidc_token(
     Strictly checks RS256 signature, expiry, audience (Client ID), and hosted domain (hd).
     Fail-closed: In production, ALLOWED_DOMAINS is strictly required.
     """
-    expected_client_id = client_id or SSO_CLIENT_ID
-    domains_to_check = allowed_domains if allowed_domains is not None else ALLOWED_DOMAINS
+    expected_client_id = client_id or os.getenv("SSO_CLIENT_ID", "it-helpdesk-agent-client-id")
+    domains_to_check = allowed_domains if allowed_domains is not None else get_allowed_domains()
+    env_str = os.getenv("ENVIRONMENT", "development").lower()
+    is_prod = env_str in ("production", "prod") or bool(os.getenv("K_SERVICE"))
 
     # P1.1: Fail-closed verification in production if ALLOWED_DOMAINS is missing
-    if IS_PRODUCTION and not domains_to_check:
+    if is_prod and not domains_to_check:
         logger.error("Enterprise Security Violation: ALLOWED_DOMAINS is not configured in production.")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -203,7 +210,11 @@ def verify_google_oidc_token(
 
         from agent_core.app_utils.system_config import resolve_user_roles
 
-        assigned_roles = resolve_user_roles(email, payload.get("roles"))
+        raw_groups = payload.get("groups", [])
+        if not isinstance(raw_groups, list):
+            raw_groups = [str(raw_groups)] if raw_groups else []
+
+        assigned_roles = resolve_user_roles(email, payload.get("roles"), raw_groups)
 
         return SSOUser(
             user_id=payload.get("sub", email),
@@ -212,6 +223,7 @@ def verify_google_oidc_token(
             full_name=payload.get("name", "Enterprise Employee"),
             department=payload.get("department", "General"),
             roles=assigned_roles,
+            groups=raw_groups,
             hosted_domain=hd,
             is_authenticated=True,
         )
@@ -269,13 +281,24 @@ def verify_dev_mock_token(
                 "verify_aud": bool(expected_aud),
             },
         )
+        from agent_core.app_utils.system_config import resolve_user_roles
+
+        raw_groups = payload.get("groups", [])
+        if not isinstance(raw_groups, list):
+            raw_groups = [str(raw_groups)] if raw_groups else []
+
+        email = payload.get("email", "dev@company.com")
+        raw_roles = payload.get("roles", ["employee"])
+        assigned_roles = resolve_user_roles(email, raw_roles, raw_groups)
+
         return SSOUser(
             user_id=payload.get("sub", payload.get("email", "dev_user")),
-            email=payload.get("email", "dev@company.com"),
+            email=email,
             email_verified=True,
             full_name=payload.get("name", "Local Dev Employee"),
             department=payload.get("department", "Engineering"),
-            roles=payload.get("roles", ["employee"]),
+            roles=assigned_roles,
+            groups=raw_groups,
             hosted_domain=payload.get("hd"),
             is_authenticated=True,
         )
@@ -467,3 +490,21 @@ class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
                 content={"detail": f"Authentication failed: {exc}"},
                 headers={"WWW-Authenticate": "Bearer"},
             )
+
+
+def validate_sso_configuration() -> tuple[bool, Optional[str]]:
+    """
+    Validates SSO configuration for readiness probes and startup integrity.
+    Fails closed in production if ALLOWED_DOMAINS is not configured.
+    """
+    env_str = os.getenv("ENVIRONMENT", "development").lower()
+    is_prod = env_str in ("production", "prod") or bool(os.getenv("K_SERVICE"))
+    if is_prod:
+        raw_domains = os.getenv("ALLOWED_DOMAINS", "").strip()
+        domains = [d.strip().lower() for d in raw_domains.split(",") if d.strip()]
+        if not domains:
+            return False, "Cấu hình bảo mật lỗi: ALLOWED_DOMAINS bắt buộc phải được thiết lập trong môi trường production."
+        allow_dev = os.getenv("ALLOW_LOCAL_DEV_SSO", "false").lower() in ("true", "1")
+        if allow_dev:
+            return False, "Cấu hình bảo mật lỗi: ALLOW_LOCAL_DEV_SSO phải bị vô hiệu hóa trong môi trường production."
+    return True, None

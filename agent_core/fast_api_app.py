@@ -120,6 +120,14 @@ async def health_check():
 @app.get("/readyz", tags=["Health"])
 async def readiness_check():
     """Readiness probe endpoint confirming system readiness."""
+    from agent_core.app_utils.sso_auth import validate_sso_configuration
+    is_valid, error_msg = validate_sso_configuration()
+    if not is_valid:
+        from fastapi import HTTPException, status
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Service not ready: {error_msg}",
+        )
     return {
         "status": "ready",
         "service": "it-helpdesk-agent",

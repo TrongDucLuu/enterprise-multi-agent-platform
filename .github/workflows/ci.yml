@@ -40,6 +40,8 @@ jobs:
         env:
           ENVIRONMENT: ${{ matrix.environment.name }}
           ALLOW_LOCAL_DEV_SSO: ${{ matrix.environment.allow_local_dev_sso }}
+          ALLOWED_DOMAINS: "company.com"
+          USE_VERTEX_EMBEDDING: "true"
           KNOWLEDGE_BACKEND: "in_memory"
           SEMANTIC_CACHE_ENABLED: "true"
           RATE_LIMIT_ENABLED: "true"
