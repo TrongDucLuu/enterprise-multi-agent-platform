@@ -94,16 +94,23 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 ```
 
-### Chạy Kiểm Thử Toàn Diện (269 Test Cases)
+### Chạy Kiểm Thử Toàn Diện (361 Test Cases trên 3 CI Suites)
 ```bash
-uv run pytest tests/ -v
+# Suite 1: Môi trường Development với Local SSO
+ENVIRONMENT=development ALLOW_LOCAL_DEV_SSO=true .venv/bin/pytest tests/ -q
+
+# Suite 2: Môi trường Production không cho phép Local SSO
+ENVIRONMENT=production ALLOW_LOCAL_DEV_SSO=false .venv/bin/pytest tests/ -q
+
+# Suite 3: Cô lập Domain Pack Template
+DOMAIN_PACK=_template ENVIRONMENT=development .venv/bin/pytest tests/ -q
 ```
 
 ### Khởi Chạy API Server
 ```bash
 # Chọn domain pack và backend tri thức
 export DOMAIN_PACK="it-helpdesk"
-export KNOWLEDGE_BACKEND="bigquery" # hoặc "vertex_ai_search"
+export KNOWLEDGE_BACKEND="bigquery" # hoặc "in_memory"
 export ENVIRONMENT="development"
 uv run python -m uvicorn agent_core.fast_api_app:app --host 0.0.0.0 --port 8000
 ```
@@ -112,7 +119,7 @@ uv run python -m uvicorn agent_core.fast_api_app:app --host 0.0.0.0 --port 8000
 ```bash
 curl http://localhost:8000/healthz
 # Response:
-# {"status":"healthy","service":"it-helpdesk-agent","core_version":"2.0.0","pack_id":"it-helpdesk","pack_version":"1.0.0","timestamp":...}
+# {"status":"healthy","service":"it-helpdesk-agent","core_version":"2.2.0","pack_id":"it-helpdesk","pack_version":"1.0.0","timestamp":...}
 ```
 
 ---
@@ -121,7 +128,13 @@ curl http://localhost:8000/healthz
 
 Hệ thống tuân thủ nguyên tắc **Cách ly bằng biên giới hạ tầng (Infrastructure Isolation)**:
 1. Tạo một Google Cloud Project riêng biệt cho khách hàng mới.
-2. Thiết lập cấu hình biến môi trường (`PROJECT_ID`, `AI_ASSETS_BUCKET`, `DOMAIN_PACK`, `KNOWLEDGE_BACKEND`).
+2. Thiết lập cấu hình biến môi trường (`PROJECT_ID`, `DOMAIN_PACK`, `KNOWLEDGE_BACKEND`, `REDIS_HOST`).
 3. Triển khai Terraform stack trong thư mục `deployment/terraform/` lên Cloud Run.
-4. Tham khảo tài liệu chi tiết tại [Runbook Onboarding Khách Hàng](Runbook_Onboarding_Khach_Hang.md).
+4. Tham khảo tài liệu chi tiết tại:
+   - 📘 [Hướng dẫn Vận hành & Triển khai Hạ tầng (DEVOPS_RUNBOOK.md)](DEVOPS_RUNBOOK.md)
+   - 📋 [Đặc tả Yêu cầu Sản phẩm & Nghiệp vụ (PRODUCT_SRS_DOCUMENT.md)](PRODUCT_SRS_DOCUMENT.md)
+   - ⚙️ [Đặc tả Kỹ thuật Hệ thống (Technical_Specification.md)](Technical_Specification.md)
+   - 🚀 [Runbook Onboarding Khách Hàng (Runbook_Onboarding_Khach_Hang.md)](Runbook_Onboarding_Khach_Hang.md)
+   - 📊 [Báo cáo Khả năng Mở rộng & Hiệu năng (SCALABILITY_PERFORMANCE_REPORT.md)](SCALABILITY_PERFORMANCE_REPORT.md)
+
 
