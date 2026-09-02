@@ -11,6 +11,20 @@ from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
     KnowledgeArticle,
     KnowledgeStoreUnavailableError,
 )
+from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
+
+
+@pytest.fixture(autouse=True)
+def default_adapter_sso_user():
+    user = SSOUser(
+        user_id="test-employee-01",
+        email="test.employee@company.com",
+        roles=["employee", "it_admin", "support_agent"],
+        clearance_level=3,
+    )
+    token = current_sso_user.set(user)
+    yield user
+    current_sso_user.reset(token)
 
 
 def test_in_memory_knowledge_store_search_and_get():

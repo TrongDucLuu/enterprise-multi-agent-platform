@@ -651,6 +651,37 @@ ENTERPRISE_ARTICLES: list[KnowledgeArticle] = [
 ]
 
 
+def resolve_security_context(
+    security_context: Optional[SecurityContext] = None,
+    user_roles: Optional[list[str]] = None,
+    user_clearance: Optional[int] = None,
+) -> SecurityContext:
+    """
+    Resolves the effective SecurityContext in a strict, fail-closed manner.
+    Never fabricates roles or elevated clearance levels.
+    """
+    if security_context is not None:
+        return security_context
+    if user_roles is not None or user_clearance is not None:
+        return SecurityContext.from_user(roles=user_roles, clearance_level=user_clearance)
+    try:
+        from agent_core.app_utils.sso_auth import get_current_sso_user
+        sso_u = get_current_sso_user()
+    except ImportError:
+        try:
+            from app_utils.sso_auth import get_current_sso_user
+            sso_u = get_current_sso_user()
+        except ImportError:
+            sso_u = None
+    if sso_u:
+        return SecurityContext.from_user(
+            user_id=getattr(sso_u, "email", getattr(sso_u, "user_id", "anonymous")),
+            roles=getattr(sso_u, "roles", []),
+            clearance_level=getattr(sso_u, "clearance_level", None),
+        )
+    return SecurityContext.anonymous()
+
+
 class BaseKnowledgeStore(ABC):
     """Abstract Base Class for Enterprise Knowledge Stores (Adapter Pattern)."""
 
@@ -661,11 +692,11 @@ class BaseKnowledgeStore(ABC):
         system: str = "ALL",
         limit: int = 3,
         allowed_systems: Optional[list[str]] = None,
+        security_context: Optional[SecurityContext] = None,
         user_roles: Optional[list[str]] = None,
         user_clearance: Optional[int] = None,
-        security_context: Optional[SecurityContext] = None,
     ) -> list[SearchResult]:
-        """Search knowledge articles matching the query, system filter, and authorized domain list."""
+        """Search knowledge articles matching the query, system filter, authorized systems, and security context."""
         pass
 
     @abstractmethod
@@ -689,11 +720,11 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         system: str = "ALL",
         limit: int = 3,
         allowed_systems: Optional[list[str]] = None,
+        security_context: Optional[SecurityContext] = None,
         user_roles: Optional[list[str]] = None,
         user_clearance: Optional[int] = None,
-        security_context: Optional[SecurityContext] = None,
     ) -> list[SearchResult]:
-        """Search knowledge articles by query keywords, system filter, and authorized systems."""
+        """Search knowledge articles by query keywords, system filter, authorized systems, and security context."""
         valid_systems = get_valid_system_filters()
         clean_system = system.upper().strip() if system else "ALL"
         if clean_system not in valid_systems:
@@ -701,15 +732,12 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
 
         allowed_upper = set(s.upper() for s in allowed_systems) if allowed_systems is not None else None
 
-        # Resolve effective security context (Fail-Closed when explicitly configured, default to employee in low-level tests)
-        if security_context is not None:
-            sec_ctx = security_context
-        elif user_roles is not None or (user_clearance is not None and user_clearance > 0):
-            sec_ctx = SecurityContext.from_user(roles=user_roles, clearance_level=user_clearance)
-        elif user_clearance == 0 and user_roles is None:
-            sec_ctx = SecurityContext.anonymous()
-        else:
-            sec_ctx = SecurityContext.from_user(roles=["employee", "user"], clearance_level=1)
+        # Resolve effective security context: Fail-closed (default to anonymous, never fabricate roles)
+        sec_ctx = resolve_security_context(
+            security_context=security_context,
+            user_roles=user_roles,
+            user_clearance=user_clearance,
+        )
 
         # Check if hybrid search is enabled in configuration
         retrieval_cfg = get_retrieval_config()
@@ -951,9 +979,9 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
         system: str = "ALL",
         limit: int = 3,
         allowed_systems: Optional[list[str]] = None,
+        security_context: Optional[SecurityContext] = None,
         user_roles: Optional[list[str]] = None,
         user_clearance: Optional[int] = None,
-        security_context: Optional[SecurityContext] = None,
     ) -> list[SearchResult]:
         """
         Searches BigQuery table using VECTOR_SEARCH with Pre-filtering subquery and scalar clearance level pre-filter.
@@ -968,14 +996,12 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
         if clean_system not in valid_systems:
             clean_system = "ALL"
 
-        if security_context is not None:
-            sec_ctx = security_context
-        elif user_roles is not None or (user_clearance is not None and user_clearance > 0):
-            sec_ctx = SecurityContext.from_user(roles=user_roles, clearance_level=user_clearance)
-        elif user_clearance == 0 and user_roles is None:
-            sec_ctx = SecurityContext.anonymous()
-        else:
-            sec_ctx = SecurityContext.from_user(roles=["employee", "user"], clearance_level=1)
+        # Resolve effective security context: Fail-closed (default to anonymous, never fabricate roles)
+        sec_ctx = resolve_security_context(
+            security_context=security_context,
+            user_roles=user_roles,
+            user_clearance=user_clearance,
+        )
 
         try:
             query_vec = self._generate_embedding(query)
@@ -1238,139 +1264,6 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 job_timeout_ms=int(bq_timeout * 1000),
             )
             query_job = self.bq_client.query(sql, job_config=job_config)
-
-            try:
-                rows = query_job.result(timeout=bq_timeout)
-            except Exception as query_err:
-                try:
-                    query_job.cancel()
-                except Exception as cancel_err:
-                    logger.debug("Failed to cancel BigQuery query job: %s", cancel_err)
-                raise query_err
-
-            # Telemetry: Record and log BigQuery query resource consumption
-            try:
-                bytes_billed = getattr(query_job, "total_bytes_billed", None)
-                bytes_processed = getattr(query_job, "total_bytes_processed", None)
-                cache_hit = getattr(query_job, "cache_hit", None)
-                slot_ms = getattr(query_job, "slot_millis", None)
-                logger.info(
-                    "BigQuery Vector Search Telemetry: bytes_billed=%s, bytes_processed=%s, cache_hit=%s, slot_ms=%s, job_id=%s",
-                    bytes_billed, bytes_processed, cache_hit, slot_ms, getattr(query_job, "job_id", None)
-                )
-            except Exception as telem_err:
-                logger.debug("Error recording BigQuery telemetry: %s", telem_err)
-
-            results = []
-            for row in rows:
-                content_raw = getattr(row, "content", "")
-                content_str = str(content_raw) if content_raw is not None else ""
-                
-                dist_val = getattr(row, "distance", 0.0)
-                dist_float = float(dist_val) if isinstance(dist_val, (int, float)) else 0.0
-                relevance = round(max(0.0, min(1.0, 1.0 - dist_float)), 2)
-
-                sec_h1 = _extract_str(getattr(row, "section_h1", None))
-                sec_h2 = _extract_str(getattr(row, "section_h2", None))
-                sec_h3 = _extract_str(getattr(row, "section_h3", None))
-                
-                raw_hier = getattr(row, "section_hierarchy", None)
-                if raw_hier and not any([sec_h1, sec_h2, sec_h3]):
-                    hier_dict = dict(raw_hier) if hasattr(raw_hier, "items") else (raw_hier if isinstance(raw_hier, dict) else {})
-                    sec_h1 = _extract_str(hier_dict.get("h1"))
-                    sec_h2 = _extract_str(hier_dict.get("h2"))
-                    sec_h3 = _extract_str(hier_dict.get("h3"))
-
-                sec_hier = None
-                if any([sec_h1, sec_h2, sec_h3]):
-                    sec_hier = SectionHierarchy(h1=sec_h1, h2=sec_h2, h3=sec_h3)
-
-                art_id = _extract_str(getattr(row, "id", "")) or ""
-                art_sys = _extract_str(getattr(row, "system", "")) or ""
-                art_title = _extract_str(getattr(row, "title", "")) or ""
-                category = _extract_str(getattr(row, "category", None))
-                
-                context_path = sec_hier.format_path() if sec_hier else f"{art_sys} > {category or 'General'} > {art_title}"
-                
-                is_truncated = len(content_str) > 1200
-                raw_snippet = content_str[:1200].strip() + "..." if is_truncated else content_str.strip()
-                snippet = wrap_retrieved_document(
-                    content=raw_snippet,
-                    doc_id=art_id,
-                    system=art_sys,
-                    title=art_title,
-                )
-
-                results.append(SearchResult(
-                    article_id=art_id,
-                    parent_doc_id=_extract_str(getattr(row, "parent_doc_id", None)),
-                    chunk_index=getattr(row, "chunk_index", None) if isinstance(getattr(row, "chunk_index", None), int) else None,
-                    system=art_sys,
-                    title=art_title,
-                    snippet=snippet,
-                    relevance_score=relevance,
-                    section_h1=sec_h1,
-                    section_h2=sec_h2,
-                    section_h3=sec_h3,
-                    section_hierarchy=sec_hier,
-                    context_path=context_path,
-                    allowed_roles=_extract_list(getattr(row, "allowed_roles", None)),
-                    sensitivity=_extract_str(getattr(row, "sensitivity", None)),
-                    clearance_level=getattr(row, "clearance_level", None),
-                    source_uri=_extract_str(getattr(row, "source_uri", None)),
-                    category=category,
-                    keywords=_extract_list(getattr(row, "keywords", None)),
-                    owner=_extract_str(getattr(row, "owner", None)),
-                    effective_date=_extract_str(getattr(row, "effective_date", None)),
-                    expiry_date=_extract_str(getattr(row, "expiry_date", None)),
-                    is_deleted=_extract_bool(getattr(row, "is_deleted", False)),
-                    is_truncated=is_truncated,
-                ))
-
-            if retrieval_cfg.get("reranker_enabled", False) or os.getenv("USE_VERTEX_RERANKER", "false").lower() in ("true", "1", "yes"):
-                results = rerank_search_results(
-                    query=query,
-                    candidates=results,
-                    top_n=limit,
-                    project_id=self.project_id,
-                    ranking_model=retrieval_cfg.get("reranker_model", "semantic-ranker-512@latest"),
-                )
-            return results
-        except Exception as e:
-            logger.error("BigQuery vector search failed (%s). Raising KnowledgeStoreUnavailableError.", e)
-            raise KnowledgeStoreUnavailableError(f"Truy vấn BigQuery Vector Search thất bại hoặc quá thời gian chờ: {e}") from e
-
-    def get_article_by_id(self, article_id: str) -> Optional[KnowledgeArticle]:
-        """Retrieves article by ID from BigQuery table, aggregating multi-chunk documents if present. Fails closed on failure."""
-        if not self.bq_client:
-            logger.error("BigQuery client is not initialized for get_article_by_id.")
-            raise KnowledgeStoreUnavailableError("Dịch vụ BigQuery Knowledge Store chưa được khởi tạo.")
-
-        clean_id = article_id.upper().strip()
-        full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
-        sql = f"""
-        SELECT 
-            id, parent_doc_id, chunk_index, system, title, category, content, keywords,
-            section_h1, section_h2, section_h3, allowed_roles, sensitivity,
-            source_uri, owner, effective_date, expiry_date, is_deleted, deleted_at 
-        FROM {full_table} 
-        WHERE UPPER(id) = @article_id 
-           OR UPPER(parent_doc_id) = @article_id 
-           OR UPPER(parent_doc_id) = (
-               SELECT UPPER(parent_doc_id) FROM {full_table} WHERE UPPER(id) = @article_id AND parent_doc_id IS NOT NULL LIMIT 1
-           )
-        ORDER BY chunk_index ASC
-        """
-        try:
-            bq_timeout = float(os.getenv("BIGQUERY_QUERY_TIMEOUT_SECONDS", "3.0"))
-            from google.cloud import bigquery
-            job_config = bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ScalarQueryParameter("article_id", "STRING", clean_id)
-                ],
-                job_timeout_ms=int(bq_timeout * 1000),
-            )
-            query_job = self.bq_client.query(sql, job_config=job_config)
             try:
                 rows = list(query_job.result(timeout=bq_timeout))
             except Exception as q_err:
@@ -1413,6 +1306,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                 section_hierarchy=sec_hier,
                 allowed_roles=_extract_list(getattr(r, "allowed_roles", None)),
                 sensitivity=_extract_str(getattr(r, "sensitivity", None)),
+                clearance_level=getattr(r, "clearance_level", None),
                 source_uri=_extract_str(getattr(r, "source_uri", None)),
                 owner=_extract_str(getattr(r, "owner", None)),
                 effective_date=_extract_str(getattr(r, "effective_date", None)),
@@ -1499,23 +1393,21 @@ class VertexAISearchKnowledgeStore(BaseKnowledgeStore):
         system: str = "ALL",
         limit: int = 3,
         allowed_systems: Optional[list[str]] = None,
+        security_context: Optional[SecurityContext] = None,
         user_roles: Optional[list[str]] = None,
         user_clearance: Optional[int] = None,
-        security_context: Optional[SecurityContext] = None,
     ) -> list[SearchResult]:
         if not query or not query.strip():
             return []
 
         clean_sys = system.upper().strip() if system else "ALL"
 
-        if security_context is not None:
-            sec_ctx = security_context
-        elif user_roles is not None or (user_clearance is not None and user_clearance > 0):
-            sec_ctx = SecurityContext.from_user(roles=user_roles, clearance_level=user_clearance)
-        elif user_clearance == 0 and user_roles is None:
-            sec_ctx = SecurityContext.anonymous()
-        else:
-            sec_ctx = SecurityContext.from_user(roles=["employee", "user"], clearance_level=1)
+        # Resolve effective security context: Fail-closed (default to anonymous, never fabricate roles)
+        sec_ctx = resolve_security_context(
+            security_context=security_context,
+            user_roles=user_roles,
+            user_clearance=user_clearance,
+        )
 
         # Build filter expression
         filter_parts = []
@@ -2229,7 +2121,8 @@ class BigQueryFactsStore(BaseFactsStore):
         sql = f"""
         SELECT 
             fact_id, domain, key, value, value_type, unit, source_document,
-            date_updated, updated_by, status, superseded_by, notes
+            date_updated, updated_by, status, superseded_by, notes,
+            clearance_level, allowed_roles
         FROM {full_table}
         WHERE LOWER(key) = LOWER(@key) AND status = 'active'
         LIMIT 1
@@ -2270,6 +2163,8 @@ class BigQueryFactsStore(BaseFactsStore):
                 status=_extract_str(getattr(r, "status", "active")),
                 superseded_by=_extract_str(getattr(r, "superseded_by", None)),
                 notes=_extract_str(getattr(r, "notes", None)),
+                clearance_level=getattr(r, "clearance_level", 1) if getattr(r, "clearance_level", None) is not None else 1,
+                allowed_roles=_extract_list(getattr(r, "allowed_roles", None)),
             )
         except Exception as e:
             logger.error("BigQuery get_fact failed: %s", e)
@@ -2289,7 +2184,8 @@ class BigQueryFactsStore(BaseFactsStore):
         sql = f"""
         SELECT 
             fact_id, domain, key, value, value_type, unit, source_document,
-            date_updated, updated_by, status, superseded_by, notes
+            date_updated, updated_by, status, superseded_by, notes,
+            clearance_level, allowed_roles
         FROM {full_table}
         WHERE {" AND ".join(where_clauses)}
         """
@@ -2315,6 +2211,8 @@ class BigQueryFactsStore(BaseFactsStore):
                     status=_extract_str(getattr(r, "status", "active")),
                     superseded_by=_extract_str(getattr(r, "superseded_by", None)),
                     notes=_extract_str(getattr(r, "notes", None)),
+                    clearance_level=getattr(r, "clearance_level", 1) if getattr(r, "clearance_level", None) is not None else 1,
+                    allowed_roles=_extract_list(getattr(r, "allowed_roles", None)),
                 )
                 for r in rows
             ]

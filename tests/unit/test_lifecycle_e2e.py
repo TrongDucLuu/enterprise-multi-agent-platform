@@ -9,6 +9,20 @@ from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
 )
 from agent_core.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle
 from scripts.ingest.loaders import reconcile_deleted_documents, purge_tombstoned_chunks
+from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
+
+
+@pytest.fixture(autouse=True)
+def default_lifecycle_sso_user():
+    user = SSOUser(
+        user_id="test-lifecycle-user",
+        email="lifecycle@company.com",
+        roles=["employee", "it_admin", "support_agent"],
+        clearance_level=3,
+    )
+    token = current_sso_user.set(user)
+    yield user
+    current_sso_user.reset(token)
 
 
 def test_e2e_document_lifecycle_v1_to_v2_to_deleted():

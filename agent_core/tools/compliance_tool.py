@@ -153,8 +153,8 @@ def review_it_contract_sla(
     from agent_core.app_utils.artifact_storage import resolve_artifact_content
     effective_ref = contract_ref
     effective_raw = contract_text
-    if effective_raw and not effective_ref and (effective_raw.startswith("gs://") or (os.path.exists(effective_raw) and "\n" not in effective_raw)):
-        effective_ref = effective_raw
+    if effective_raw and not effective_ref and effective_raw.strip().startswith("gs://"):
+        effective_ref = effective_raw.strip()
         effective_raw = None
 
     content, err = resolve_artifact_content(ref=effective_ref, raw_text=effective_raw, resource_label="hợp đồng")

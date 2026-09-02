@@ -8,6 +8,20 @@ from scripts.eval_harness import (
 )
 from agent_core.tools.enterprise_rag_mcp.knowledge_store import InMemoryKnowledgeStore
 from agent_core.tools.enterprise_rag_mcp.rag_models import SearchResult
+from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
+
+
+@pytest.fixture(autouse=True)
+def default_eval_sso_user():
+    user = SSOUser(
+        user_id="test-eval-user",
+        email="eval@company.com",
+        roles=["employee", "it_admin", "support_agent"],
+        clearance_level=3,
+    )
+    token = current_sso_user.set(user)
+    yield user
+    current_sso_user.reset(token)
 
 
 def test_eval_retrieval_precision_at_k_normal_flow():

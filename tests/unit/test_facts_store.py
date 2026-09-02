@@ -198,8 +198,24 @@ def test_bigquery_facts_store_timeout_and_cancel():
     assert mock_query_job.cancel.called
 
 
+from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
+
+
+@pytest.fixture(autouse=True)
+def default_sso_user():
+    """Sets a standard authorized employee user in context for facts tests."""
+    user = SSOUser(
+        user_id="emp-01",
+        email="emp@company.com",
+        roles=["employee"],
+    )
+    token = current_sso_user.set(user)
+    yield user
+    current_sso_user.reset(token)
+
+
 def test_lookup_fact_tool():
-    # Success lookup
+    # Success lookup for authenticated employee
     res = lookup_fact("erp.po.sla_hours")
     assert res["status"] == "success"
     assert res["key"] == "erp.po.sla_hours"
@@ -217,3 +233,14 @@ def test_lookup_fact_tool():
     res_empty = lookup_fact("   ")
     assert res_empty["status"] == "error"
     assert "không được để trống" in res_empty["message"]
+
+
+def test_lookup_fact_tool_anonymous_forbidden():
+    # Reset SSO user to None (anonymous)
+    token = current_sso_user.set(None)
+    try:
+        res = lookup_fact("erp.po.sla_hours")
+        assert res["status"] == "forbidden"
+        assert res["error"] == "Access Denied"
+    finally:
+        current_sso_user.reset(token)

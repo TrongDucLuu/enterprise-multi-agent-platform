@@ -201,7 +201,7 @@ def lookup_fact(key: str) -> dict:
             clearance_level=getattr(current_user, "clearance_level", None),
         )
     else:
-        sec_ctx = SecurityContext.from_user(user_id="internal-agent", roles=["employee", "user"], clearance_level=1)
+        sec_ctx = SecurityContext.anonymous()
 
     try:
         fact = facts_store.get_fact(clean_key)
@@ -276,7 +276,7 @@ def get_obligation(obligation_id: str) -> dict:
             clearance_level=getattr(current_user, "clearance_level", None),
         )
     else:
-        sec_ctx = SecurityContext.from_user(user_id="internal-agent", roles=["compliance_officer", "it_admin"], clearance_level=2)
+        sec_ctx = SecurityContext.anonymous()
 
     if not obligation_id or not str(obligation_id).strip():
         return {

@@ -69,19 +69,17 @@ def default_admin_user():
     current_sso_user.reset(token)
 
 
-def test_large_log_file_reference_rca():
-    """Verify analyze_system_logs_for_rca handles 50KB+ log file via log_ref (P1.4)."""
-    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".log") as f:
-        # Write > 50KB of log lines
-        lines = ["[2026-09-01 10:00:00] INFO Normal healthcheck ping ok\n"] * 1000
-        lines.append("[2026-09-01 10:05:00] ERROR java.lang.OutOfMemoryError: Java heap space at com.erp.OrderService.process(OrderService.java:120)\n")
-        f.writelines(lines)
-        temp_path = f.name
+def test_large_log_file_reference_rca(monkeypatch):
+    """Verify analyze_system_logs_for_rca handles 50KB+ log file via GCS log_ref (P1.4)."""
+    from unittest.mock import patch
+    lines = ["[2026-09-01 10:00:00] INFO Normal healthcheck ping ok\n"] * 1000
+    lines.append("[2026-09-01 10:05:00] ERROR java.lang.OutOfMemoryError: Java heap space at com.erp.OrderService.process(OrderService.java:120)\n")
+    fake_log_content = "".join(lines)
+    assert len(fake_log_content) > 50 * 1024  # > 50KB
 
-    try:
-        assert os.path.getsize(temp_path) > 50 * 1024  # > 50KB
+    with patch("agent_core.app_utils.artifact_storage.read_gcs_artifact", return_value=fake_log_content):
         result = analyze_system_logs_for_rca(
-            log_ref=temp_path,
+            log_ref="gs://company-artifacts-dev/logs/erp.log",
             system_name="ERP System",
             incident_description="Service crashed unexpectedly"
         )
@@ -89,26 +87,21 @@ def test_large_log_file_reference_rca():
         assert "OUT_OF_MEMORY" in result["detected_anomalies"]
         assert any("Heap memory" in h or "OOM" in h for h in result["root_cause_hypotheses"])
         assert result["requires_human_review"] is True
-    finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
 
 
-def test_large_contract_file_reference_review():
-    """Verify review_it_contract_sla handles contract file via contract_ref (P1.4)."""
-    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".txt") as f:
-        f.write("""
+def test_large_contract_file_reference_review(monkeypatch):
+    """Verify review_it_contract_sla handles contract file via GCS contract_ref (P1.4)."""
+    from unittest.mock import patch
+    fake_contract = """
 MASTER IT SERVICES AGREEMENT
 1. Uptime: The Vendor commits to 99.0% service availability per calendar month.
 2. Incident Response MTTR: P1 incidents shall be resolved within 48 hours.
 3. Service Credits: Maximum penalty cap is 2% of monthly fee.
 4. Data Privacy: Vendor may transfer EU customer data to third-party subcontractors without prior consent.
-""")
-        temp_path = f.name
-
-    try:
+"""
+    with patch("agent_core.app_utils.artifact_storage.read_gcs_artifact", return_value=fake_contract):
         result = review_it_contract_sla(
-            contract_ref=temp_path,
+            contract_ref="gs://company-artifacts-dev/contracts/master_agreement.txt",
             vendor_name="CloudCorp",
             focus_area="ALL"
         )
@@ -116,9 +109,6 @@ MASTER IT SERVICES AGREEMENT
         assert result["confidence_level"] in ["MEDIUM", "HIGH"]
         assert result["requires_human_review"] is True
         assert len(result["identified_legal_risks"]) > 0
-    finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
 
 
 def test_subagent_zero_trust_rbac_enforcement():
