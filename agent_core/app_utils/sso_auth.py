@@ -14,16 +14,30 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+import time
+from agent_core.app_utils.env import is_production_mode
+
 logger = logging.getLogger(__name__)
 security_scheme = HTTPBearer(auto_error=False)
 
-# Security Environment & Flags
-ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
-IS_PRODUCTION = ENVIRONMENT == "production" or bool(os.getenv("K_SERVICE"))
+def is_allow_local_dev_sso() -> bool:
+    """
+    Evaluates whether local dev mock SSO tokens are allowed.
+    Strict Fail-Closed Default: In production, local dev SSO is ALWAYS False.
+    """
+    if is_production_mode():
+        return False
+    import sys
+    mod = sys.modules.get("agent_core.app_utils.sso_auth")
+    if mod is not None and hasattr(mod, "ALLOW_LOCAL_DEV_SSO"):
+        val = getattr(mod, "ALLOW_LOCAL_DEV_SSO")
+        if isinstance(val, bool):
+            return val
+    return os.getenv("ALLOW_LOCAL_DEV_SSO", "true").lower() in ("true", "1", "yes")
 
-# Strict Fail-Closed Default:
-# In production, ALLOW_LOCAL_DEV_SSO is ALWAYS False regardless of env variable.
-ALLOW_LOCAL_DEV_SSO = (not IS_PRODUCTION) and (os.getenv("ALLOW_LOCAL_DEV_SSO", "false").lower() in ("true", "1"))
+# Dynamic property aliases for backward compatibility
+IS_PRODUCTION = is_production_mode()
+ALLOW_LOCAL_DEV_SSO = is_allow_local_dev_sso()
 
 SSO_CLIENT_ID = os.getenv("SSO_CLIENT_ID", "it-helpdesk-agent-client-id")
 SSO_ISSUER = os.getenv("SSO_ISSUER", "https://accounts.google.com")
@@ -42,6 +56,52 @@ DEV_JWT_SECRET = os.getenv("SSO_JWT_SECRET", "dev-only-secret-key-change-in-prod
 # Singleton Request Adapter with Session Connection Pool for fast JWKS lookups
 _SHARED_SESSION = requests.Session()
 _SHARED_GOOGLE_REQUEST_ADAPTER = google_requests.Request(session=_SHARED_SESSION)
+
+_WORKSPACE_GROUPS_CACHE: dict[str, tuple[float, list[str]]] = {}
+_WORKSPACE_GROUPS_CACHE_TTL = 300.0  # 5 minutes
+
+
+def fetch_google_workspace_groups(user_email: str) -> list[str]:
+    """
+    Fetches transitive group memberships for a Google Workspace user via Cloud Identity API.
+    Enabled when ENABLE_CLOUD_IDENTITY_GROUP_LOOKUP=true or GOOGLE_WORKSPACE_GROUPS_ENABLED=true.
+    Gracefully falls back to empty list on network or permission errors.
+    """
+    if not user_email or "@" not in user_email:
+        return []
+
+    enabled = os.getenv("ENABLE_CLOUD_IDENTITY_GROUP_LOOKUP", os.getenv("GOOGLE_WORKSPACE_GROUPS_ENABLED", "false")).lower() in ("true", "1", "yes")
+    if not enabled:
+        return []
+
+    now = time.time()
+    if user_email in _WORKSPACE_GROUPS_CACHE:
+        cached_time, cached_groups = _WORKSPACE_GROUPS_CACHE[user_email]
+        if now - cached_time < _WORKSPACE_GROUPS_CACHE_TTL:
+            return cached_groups
+
+    try:
+        from googleapiclient import discovery
+        import google.auth
+        credentials, project = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-identity.groups.readonly"])
+        service = discovery.build("cloudidentity", "v1", credentials=credentials, cache_discovery=False)
+        request = service.groups().memberships().searchTransitiveGroups(
+            parent="groups/-",
+            query=f"member_key_id == '{user_email}'",
+        )
+        response = request.execute()
+        memberships = response.get("memberships", [])
+        groups = []
+        for m in memberships:
+            group_key = m.get("groupKey", {})
+            group_id = group_key.get("id")
+            if group_id:
+                groups.append(group_id.lower())
+        _WORKSPACE_GROUPS_CACHE[user_email] = (now, groups)
+        return groups
+    except Exception as exc:
+        logger.warning("Cloud Identity / Google Workspace group lookup failed for %s: %s", user_email, exc)
+        return []
 
 
 class SSOUser(BaseModel):
@@ -73,7 +133,7 @@ def get_current_sso_user() -> Optional[SSOUser]:
 def get_current_sso_token() -> Optional[str]:
     """Retrieves the raw OIDC/JWT token from the current context or generates dev token if permitted."""
     token = current_sso_raw_token.get()
-    if token is None and ALLOW_LOCAL_DEV_SSO:
+    if token is None and is_allow_local_dev_sso():
         user = get_current_sso_user()
         if user:
             try:
@@ -115,7 +175,7 @@ def create_dev_mock_token(
     Creates a signed HMAC-SHA256 mock JWT token for local testing.
     Strictly prohibited in production mode.
     """
-    if not ALLOW_LOCAL_DEV_SSO:
+    if not is_allow_local_dev_sso():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Dev token creation is strictly disabled in production.",
@@ -157,8 +217,7 @@ def verify_google_oidc_token(
     """
     expected_client_id = client_id or os.getenv("SSO_CLIENT_ID", "it-helpdesk-agent-client-id")
     domains_to_check = allowed_domains if allowed_domains is not None else get_allowed_domains()
-    env_str = os.getenv("ENVIRONMENT", "development").lower()
-    is_prod = env_str in ("production", "prod") or bool(os.getenv("K_SERVICE"))
+    is_prod = is_production_mode()
 
     # P1.1: Fail-closed verification in production if ALLOWED_DOMAINS is missing
     if is_prod and not domains_to_check:
@@ -210,9 +269,17 @@ def verify_google_oidc_token(
 
         from agent_core.app_utils.system_config import resolve_user_roles
 
-        raw_groups = payload.get("groups", [])
-        if not isinstance(raw_groups, list):
+        groups_claim_name = os.getenv("SSO_GROUPS_CLAIM", "groups")
+        raw_groups = payload.get(groups_claim_name) or payload.get("groups", [])
+        if isinstance(raw_groups, str):
+            raw_groups = [g.strip() for g in raw_groups.split(",") if g.strip()]
+        elif not isinstance(raw_groups, list):
             raw_groups = [str(raw_groups)] if raw_groups else []
+
+        if not raw_groups:
+            ws_groups = fetch_google_workspace_groups(email)
+            if ws_groups:
+                raw_groups = ws_groups
 
         assigned_roles = resolve_user_roles(email, payload.get("roles"), raw_groups)
 
@@ -248,7 +315,7 @@ def verify_dev_mock_token(
     Validates a local dev/test mock JWT token using HS256 algorithm ONLY.
     Strictly isolated from RS256 to eliminate Algorithm Confusion vulnerabilities.
     """
-    if not ALLOW_LOCAL_DEV_SSO:
+    if not is_allow_local_dev_sso():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Dev Mock HMAC authentication is strictly disabled in production mode.",
@@ -283,8 +350,11 @@ def verify_dev_mock_token(
         )
         from agent_core.app_utils.system_config import resolve_user_roles
 
-        raw_groups = payload.get("groups", [])
-        if not isinstance(raw_groups, list):
+        groups_claim_name = os.getenv("SSO_GROUPS_CLAIM", "groups")
+        raw_groups = payload.get(groups_claim_name) or payload.get("groups", [])
+        if isinstance(raw_groups, str):
+            raw_groups = [g.strip() for g in raw_groups.split(",") if g.strip()]
+        elif not isinstance(raw_groups, list):
             raw_groups = [str(raw_groups)] if raw_groups else []
 
         email = payload.get("email", "dev@company.com")
@@ -341,7 +411,7 @@ def verify_sso_token(
     if alg == "RS256":
         return verify_google_oidc_token(token, client_id=allowed_audience)
     elif alg == "HS256":
-        if not ALLOW_LOCAL_DEV_SSO:
+        if not is_allow_local_dev_sso():
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="HMAC (HS256) tokens are prohibited in production mode. Use Google OIDC (RS256).",
@@ -368,7 +438,7 @@ async def get_current_user(
     FastAPI dependency that extracts and validates the Bearer SSO token from Authorization header.
     """
     if not credentials:
-        if ALLOW_LOCAL_DEV_SSO:
+        if is_allow_local_dev_sso():
             logger.info("Using default local development SSO user context.")
             return SSOUser(
                 user_id="dev-user-001",
@@ -412,8 +482,7 @@ class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
 
     @property
     def public_paths(self) -> set[str]:
-        is_prod = os.getenv("ENVIRONMENT", "development").lower() == "production" or bool(os.getenv("K_SERVICE"))
-        if is_prod:
+        if is_production_mode():
             return {
                 "/healthz",
                 "/health",
@@ -433,7 +502,7 @@ class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
         # 2. Extract Authorization Bearer token
         auth_header = request.headers.get("Authorization")
         if not auth_header or not auth_header.startswith("Bearer "):
-            if ALLOW_LOCAL_DEV_SSO:
+            if is_allow_local_dev_sso():
                 dev_user = SSOUser(
                     user_id="dev-user-001",
                     email="dev.employee@company.com",
@@ -497,14 +566,12 @@ def validate_sso_configuration() -> tuple[bool, Optional[str]]:
     Validates SSO configuration for readiness probes and startup integrity.
     Fails closed in production if ALLOWED_DOMAINS is not configured.
     """
-    env_str = os.getenv("ENVIRONMENT", "development").lower()
-    is_prod = env_str in ("production", "prod") or bool(os.getenv("K_SERVICE"))
-    if is_prod:
+    if is_production_mode():
         raw_domains = os.getenv("ALLOWED_DOMAINS", "").strip()
         domains = [d.strip().lower() for d in raw_domains.split(",") if d.strip()]
         if not domains:
             return False, "Cấu hình bảo mật lỗi: ALLOWED_DOMAINS bắt buộc phải được thiết lập trong môi trường production."
-        allow_dev = os.getenv("ALLOW_LOCAL_DEV_SSO", "false").lower() in ("true", "1")
+        allow_dev = os.getenv("ALLOW_LOCAL_DEV_SSO", "false").lower() in ("true", "1", "yes")
         if allow_dev:
             return False, "Cấu hình bảo mật lỗi: ALLOW_LOCAL_DEV_SSO phải bị vô hiệu hóa trong môi trường production."
     return True, None

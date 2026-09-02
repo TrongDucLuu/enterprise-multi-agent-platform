@@ -162,16 +162,16 @@ def _check_case_access(case_user_id: str) -> tuple[bool, Optional[str]]:
     Returns (is_allowed, error_message).
     """
     try:
-        from agent_core.app_utils.sso_auth import get_current_sso_user, ALLOW_LOCAL_DEV_SSO
+        from agent_core.app_utils.sso_auth import get_current_sso_user, is_allow_local_dev_sso
     except ImportError:
         try:
-            from app_utils.sso_auth import get_current_sso_user, ALLOW_LOCAL_DEV_SSO
+            from app_utils.sso_auth import get_current_sso_user, is_allow_local_dev_sso
         except ImportError:
             return False, "Hệ thống xác thực SSO không khả dụng (ImportError). Truy cập bị từ chối theo nguyên tắc Fail-Closed."
 
     current_user = get_current_sso_user()
     if not current_user:
-        if ALLOW_LOCAL_DEV_SSO:
+        if is_allow_local_dev_sso():
             return True, None
         return False, "Yêu cầu đăng nhập xác thực SSO trước khi truy cập case/ticket."
 

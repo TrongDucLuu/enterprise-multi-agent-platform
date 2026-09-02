@@ -59,6 +59,8 @@ def test_record_interaction_and_summary_stats():
 
 
 def test_analytics_summary_endpoint(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("ALLOW_LOCAL_DEV_SSO", "true")
     monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
 
     ProductMetricsCollector.record_interaction(

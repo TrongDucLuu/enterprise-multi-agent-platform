@@ -751,7 +751,7 @@ resource "google_cloud_run_v2_service" "default" {
 
       startup_probe {
         http_get {
-          path = "/healthz"
+          path = "/readyz"
           port = 8080
         }
         initial_delay_seconds = 5

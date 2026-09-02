@@ -6,6 +6,7 @@ import pytest
 from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
     InMemoryKnowledgeStore,
     BigQueryVectorKnowledgeStore,
+    SecurityContext,
 )
 from agent_core.tools.enterprise_rag_mcp.rag_models import KnowledgeArticle
 from scripts.ingest.loaders import reconcile_deleted_documents, purge_tombstoned_chunks
@@ -33,6 +34,8 @@ def test_e2e_document_lifecycle_v1_to_v2_to_deleted():
     Stage (c): Delete document (tombstone) -> search returns empty.
     Stage (d): User without RBAC permission gets empty results across all stages.
     """
+    admin_ctx = SecurityContext.admin()
+
     # --- STAGE (a): Ingest v1 (3 chunks) ---
     v1_chunks = [
         KnowledgeArticle(
@@ -69,16 +72,16 @@ def test_e2e_document_lifecycle_v1_to_v2_to_deleted():
     store = InMemoryKnowledgeStore(articles=list(v1_chunks))
 
     # Search v1 with ERP permission
-    res_a1 = store.search("ME21N Purchase Order", system="ERP", allowed_systems=["ERP"])
+    res_a1 = store.search("ME21N Purchase Order", security_context=admin_ctx, system="ERP", allowed_systems=["ERP"])
     assert len(res_a1) > 0
     assert any(r.article_id == "ERP-PO-001_c1" for r in res_a1)
 
-    res_a3 = store.search("Phụ lục hướng dẫn legacy 2024", system="ERP", allowed_systems=["ERP"])
+    res_a3 = store.search("Phụ lục hướng dẫn legacy 2024", security_context=admin_ctx, system="ERP", allowed_systems=["ERP"])
     assert len(res_a3) > 0
     assert any(r.article_id == "ERP-PO-001_c3" for r in res_a3)
 
     # Stage (d) check: User without ERP permission gets 0 results
-    res_rbac = store.search("ME21N Purchase Order", system="ERP", allowed_systems=["HRM", "CRM"])
+    res_rbac = store.search("ME21N Purchase Order", security_context=admin_ctx, system="ERP", allowed_systems=["HRM", "CRM"])
     assert len(res_rbac) == 0
 
     # --- STAGE (b): Replace with v2 (2 chunks) via cleanup & re-ingest ---
@@ -112,10 +115,10 @@ def test_e2e_document_lifecycle_v1_to_v2_to_deleted():
     store.articles.extend(v2_chunks)
 
     # Search v2: ONLY v2 chunks are returned, c3 (phụ lục cũ) is completely gone
-    res_b = store.search("Phụ lục Cũ legacy 2024", system="ERP", allowed_systems=["ERP"])
+    res_b = store.search("Phụ lục Cũ legacy 2024", security_context=admin_ctx, system="ERP", allowed_systems=["ERP"])
     assert len(res_b) == 0  # v1 chunk 3 is cleaned up!
 
-    res_b_v2 = store.search("S/4HANA Cloud", system="ERP", allowed_systems=["ERP"])
+    res_b_v2 = store.search("S/4HANA Cloud", security_context=admin_ctx, system="ERP", allowed_systems=["ERP"])
     assert len(res_b_v2) > 0
     assert res_b_v2[0].article_id == "ERP-PO-001_v2_c1"
     assert res_b_v2[0].source_uri == target_source_uri
@@ -127,10 +130,10 @@ def test_e2e_document_lifecycle_v1_to_v2_to_deleted():
             a.is_deleted = True
 
     # Search after tombstone: Must return 0 results
-    res_c = store.search("S/4HANA Cloud", system="ERP", allowed_systems=["ERP"])
+    res_c = store.search("S/4HANA Cloud", security_context=admin_ctx, system="ERP", allowed_systems=["ERP"])
     assert len(res_c) == 0
 
-    res_c_all = store.search("SAP", system="ERP", allowed_systems=["ERP"])
+    res_c_all = store.search("SAP", security_context=admin_ctx, system="ERP", allowed_systems=["ERP"])
     assert len([r for r in res_c_all if r.source_uri == target_source_uri]) == 0
 
 
@@ -139,6 +142,7 @@ def test_mutation_cleanup_sql_failure_leads_to_stale_chunk_leakage():
     MUTATION TEST:
     If cleanup_sql is omitted/disabled during document update, obsolete chunks from v1 leak into search results.
     """
+    admin_ctx = SecurityContext.admin()
     v1_chunks = [
         KnowledgeArticle(
             id=f"DOC_c{i}",
@@ -167,7 +171,7 @@ def test_mutation_cleanup_sql_failure_leads_to_stale_chunk_leakage():
     )
 
     # Verification: If cleanup is omitted, search finds leaked deprecated content
-    leaked_results = store.search("Secret v1 deprecated content 3", system="ERP")
+    leaked_results = store.search("Secret v1 deprecated content 3", security_context=admin_ctx, system="ERP")
     assert len(leaked_results) > 0  # Demonstrates bug/mutation would be caught
 
 
@@ -176,6 +180,7 @@ def test_mutation_tombstone_prefilter_disabled_leads_to_compliance_breach():
     MUTATION TEST:
     If 'NOT is_deleted' filter is removed, deleted/revoked SOPs leak into retrieval.
     """
+    admin_ctx = SecurityContext.admin()
     revoked_sop = KnowledgeArticle(
         id="REVOKED_SOP",
         system="ERP",
@@ -188,7 +193,7 @@ def test_mutation_tombstone_prefilter_disabled_leads_to_compliance_breach():
     store = InMemoryKnowledgeStore(articles=[revoked_sop])
 
     # Standard search: is_deleted is respected
-    clean_results = store.search("Quy trình xuất hóa đơn cũ", system="ERP")
+    clean_results = store.search("Quy trình xuất hóa đơn cũ", security_context=admin_ctx, system="ERP")
     assert len(clean_results) == 0
 
     # If is_deleted filter is bypassed (simulated mutation)

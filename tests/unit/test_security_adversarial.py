@@ -13,6 +13,7 @@ from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
     InMemoryKnowledgeStore,
     BigQueryVectorKnowledgeStore,
     KnowledgeStoreUnavailableError,
+    SecurityContext,
 )
 from agent_core.tools.enterprise_rag_mcp.main import (
     search_enterprise_knowledge,
@@ -212,7 +213,7 @@ def test_sql_injection_payload_sanitized_in_knowledge_store():
 
     for payload in malicious_payloads:
         # Should gracefully treat invalid system payload as ALL or filter safely without crashing
-        results = store.search(query="mật khẩu", system=payload)
+        results = store.search(query="mật khẩu", security_context=SecurityContext.anonymous(), system=payload)
         assert isinstance(results, list)
 
 
@@ -227,7 +228,12 @@ def test_bigquery_vector_store_parameterization():
     store.bq_client = mock_bq_client
 
     # Execute search with SQL injection payload in system
-    store.search(query="SAP ME21N", system="ERP' OR 1=1 --", limit=5)
+    store.search(
+        query="SAP ME21N",
+        security_context=SecurityContext.from_user(roles=["employee"]),
+        system="ERP' OR 1=1 --",
+        limit=5,
+    )
 
     # Assert query was invoked with parameterized job_config
     assert mock_bq_client.query.called
@@ -253,7 +259,13 @@ def test_bigquery_vector_store_allowed_systems_parameterization():
     store.bq_client = mock_bq_client
 
     # Search with allowed_systems list
-    store.search(query="quy trình nghỉ phép", system="ALL", limit=3, allowed_systems=["HRM", "CRM"])
+    store.search(
+        query="quy trình nghỉ phép",
+        security_context=SecurityContext.from_user(roles=["employee"]),
+        system="ALL",
+        limit=3,
+        allowed_systems=["HRM", "CRM"],
+    )
 
     assert mock_bq_client.query.called
     called_args, called_kwargs = mock_bq_client.query.call_args
@@ -277,7 +289,12 @@ def test_bigquery_fallback_logging_error(caplog):
 
     with caplog.at_level(logging.ERROR):
         with pytest.raises(KnowledgeStoreUnavailableError, match="Truy vấn BigQuery Vector Search thất bại"):
-            store.search(query="SAP PO", system="ERP", limit=1)
+            store.search(
+                query="SAP PO",
+                security_context=SecurityContext.from_user(roles=["employee"]),
+                system="ERP",
+                limit=1,
+            )
 
     # Verify ERROR log was emitted for Cloud Monitoring alerting
     assert any(
@@ -476,7 +493,12 @@ def test_indirect_prompt_injection_snippet_boundary_encapsulation():
     current_sso_user.set(admin_user)
 
     store = InMemoryKnowledgeStore()
-    results = store.search(query="Purchase Order", system="ERP", limit=3)
+    results = store.search(
+        query="Purchase Order",
+        security_context=SecurityContext.from_user(roles=["employee"]),
+        system="ERP",
+        limit=3,
+    )
 
     assert len(results) > 0
     for r in results:
@@ -533,7 +555,12 @@ def test_indirect_prompt_injection_poisoned_document_isolated_as_passive_data():
     )
 
     store = InMemoryKnowledgeStore(articles=[poisoned_article])
-    results = store.search(query="Purchase Order ME21N", system="ERP", limit=1)
+    results = store.search(
+        query="Purchase Order ME21N",
+        security_context=SecurityContext.from_user(roles=["employee"]),
+        system="ERP",
+        limit=1,
+    )
 
     assert len(results) == 1
     snippet = results[0].snippet
@@ -575,7 +602,12 @@ def test_indirect_prompt_injection_delimiter_escaping_and_tag_count():
     )
 
     store = InMemoryKnowledgeStore(articles=[delimiter_injection_article])
-    results = store.search(query="quy trình bảo mật SAP", system="ERP", limit=1)
+    results = store.search(
+        query="quy trình bảo mật SAP",
+        security_context=SecurityContext.from_user(roles=["employee"]),
+        system="ERP",
+        limit=1,
+    )
 
     assert len(results) == 1
     snippet = results[0].snippet
@@ -624,7 +656,12 @@ def test_indirect_prompt_injection_xml_attribute_escaping():
     )
 
     store = InMemoryKnowledgeStore(articles=[attr_injection_article])
-    results = store.search(query="sổ tay cẩm nang SAP", system="ERP", limit=1)
+    results = store.search(
+        query="sổ tay cẩm nang SAP",
+        security_context=SecurityContext.from_user(roles=["employee"]),
+        system="ERP",
+        limit=1,
+    )
 
     assert len(results) == 1
     snippet = results[0].snippet
@@ -718,13 +755,21 @@ def test_confidential_document_not_returned_to_employee():
     store.articles = [pub_doc, conf_doc]
 
     # 1. Employee searching should only see public/internal document
-    emp_results = store.search("chính sách thưởng và nghỉ phép ban điều hành", system="HRM", user_roles=["employee"])
+    emp_results = store.search(
+        "chính sách thưởng và nghỉ phép ban điều hành",
+        security_context=SecurityContext.from_user(roles=["employee"]),
+        system="HRM",
+    )
     emp_ids = [r.article_id for r in emp_results]
     assert "HRM-CONF-001" not in emp_ids
     assert "HRM-PUB-001" in emp_ids
 
     # 2. HR Admin searching should be able to see the confidential document
-    hr_results = store.search("chính sách thưởng và nghỉ phép ban điều hành", system="HRM", user_roles=["hr_admin"])
+    hr_results = store.search(
+        "chính sách thưởng và nghỉ phép ban điều hành",
+        security_context=SecurityContext.from_user(roles=["hr_admin"]),
+        system="HRM",
+    )
     hr_ids = [r.article_id for r in hr_results]
     assert "HRM-CONF-001" in hr_ids
 
@@ -748,7 +793,11 @@ def test_bigquery_search_sql_contains_role_and_sensitivity_trimming():
         embedding_fn=lambda t: [0.1] * 64
     )
 
-    store.search("Chính sách bảo mật", system="ERP", user_roles=["employee"])
+    store.search(
+        "Chính sách bảo mật",
+        security_context=SecurityContext.from_user(roles=["employee"], clearance_level=1),
+        system="ERP",
+    )
     assert mock_bq.query.called
     sql = mock_bq.query.call_args[0][0]
     job_config = mock_bq.query.call_args[1]["job_config"]
@@ -855,7 +904,11 @@ def test_public_faq_returned_regardless_of_clearance():
     ]
 
     # User with clearance 0 (anonymous/public) searching
-    results = test_store.search("wifi guest kết nối", system="ERP", user_clearance=0)
+    results = test_store.search(
+        "wifi guest kết nối",
+        security_context=SecurityContext.from_user(clearance_level=0),
+        system="ERP",
+    )
     article_ids = [r.article_id for r in results]
 
     assert "FAQ-PUB-WIFI" in article_ids

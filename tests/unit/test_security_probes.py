@@ -91,10 +91,9 @@ def test_search_fail_closed_for_anonymous_caller():
     """
     token = current_sso_user.set(None)
     try:
-        # 1. Test InMemoryKnowledgeStore
+        # 1. Test InMemoryKnowledgeStore with anonymous context
         store = InMemoryKnowledgeStore()
-        # Default search with no user context
-        results = store.search(query="SAP purchase order")
+        results = store.search(query="SAP purchase order", security_context=SecurityContext.anonymous())
         # Should return 0 results because ERP-KB-001 is INTERNAL (clearance 1 > 0)
         assert len(results) == 0, f"Expected 0 results for anonymous caller, got {len(results)}"
 
@@ -105,11 +104,10 @@ def test_search_fail_closed_for_anonymous_caller():
         )
         assert len(anon_results) == 0
 
-        # 3. Test explicit empty roles
+        # 3. Test explicit empty roles context
         empty_role_results = store.search(
             query="SAP purchase order",
-            user_roles=[],
-            user_clearance=0,
+            security_context=SecurityContext.from_user(roles=[], clearance_level=0),
         )
         assert len(empty_role_results) == 0
 

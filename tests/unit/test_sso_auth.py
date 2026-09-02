@@ -54,8 +54,8 @@ def test_verify_google_oidc_token_valid():
 
 
 def test_verify_google_oidc_token_prod_fails_closed_if_no_domains(monkeypatch):
-    monkeypatch.setattr("agent_core.app_utils.sso_auth.IS_PRODUCTION", True)
-    monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOWED_DOMAINS", [])
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("ALLOWED_DOMAINS", "")
 
     with pytest.raises(HTTPException) as exc_info:
         verify_google_oidc_token(token="dummy.token", allowed_domains=[])
@@ -132,6 +132,8 @@ def test_algorithm_confusion_prevention_hs256_in_prod(monkeypatch):
 
 
 def test_create_and_verify_dev_mock_token(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("ALLOW_LOCAL_DEV_SSO", "true")
     monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
 
     user = SSOUser(
@@ -154,6 +156,8 @@ def test_create_and_verify_dev_mock_token(monkeypatch):
 
 
 def test_verify_expired_dev_mock_token(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("ALLOW_LOCAL_DEV_SSO", "true")
     monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
 
     user = SSOUser(
@@ -171,6 +175,8 @@ def test_verify_expired_dev_mock_token(monkeypatch):
 
 
 def test_verify_invalid_signature_dev_mock_token(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("ALLOW_LOCAL_DEV_SSO", "true")
     monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
 
     user = SSOUser(
@@ -251,6 +257,8 @@ def test_sso_authentication_middleware_protects_agent_endpoints(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_current_user_local_dev_bypass(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("ALLOW_LOCAL_DEV_SSO", "true")
     monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
     user = await get_current_user(credentials=None)
     assert user.is_authenticated is True
@@ -275,7 +283,8 @@ def test_swagger_openapi_disabled_in_production(monkeypatch):
     3. OpenAPI paths are not whitelisted in SSO middleware.
     """
     monkeypatch.setenv("ENVIRONMENT", "production")
-    monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", False)
+    monkeypatch.setenv("ALLOWED_DOMAINS", "company.com")
+    monkeypatch.setenv("ALLOW_LOCAL_DEV_SSO", "false")
 
     test_app = FastAPI(docs_url="/docs", redoc_url="/redoc", openapi_url="/openapi.json")
 
@@ -318,4 +327,71 @@ def test_swagger_openapi_disabled_in_production(monkeypatch):
         assert client.get("/openapi.json", headers=auth_headers).status_code == 404
         assert client.get("/docs", headers=auth_headers).status_code == 404
         assert client.get("/redoc", headers=auth_headers).status_code == 404
+
+
+def test_verify_google_oidc_token_groups_claim_list(monkeypatch):
+    monkeypatch.setenv("SSO_GROUPS_CLAIM", "custom_groups")
+    mock_payload = {
+        "sub": "google-uid-12345",
+        "email": "admin@company.com",
+        "email_verified": True,
+        "iss": "https://accounts.google.com",
+        "aud": SSO_CLIENT_ID,
+        "custom_groups": ["gcp-it-admins@company.com", "all-employees@company.com"],
+    }
+    with patch("google.oauth2.id_token.verify_oauth2_token", return_value=mock_payload):
+        user = verify_google_oidc_token(
+            token="dummy.token",
+            client_id=SSO_CLIENT_ID,
+            allowed_domains=["company.com"],
+        )
+        assert "gcp-it-admins@company.com" in user.groups
+        assert "it_admin" in user.roles
+
+
+def test_verify_google_oidc_token_groups_claim_csv_string(monkeypatch):
+    monkeypatch.setenv("SSO_GROUPS_CLAIM", "groups")
+    mock_payload = {
+        "sub": "google-uid-12345",
+        "email": "hr@company.com",
+        "email_verified": True,
+        "iss": "https://accounts.google.com",
+        "aud": SSO_CLIENT_ID,
+        "groups": "gcp-hr-admins@company.com, all-employees@company.com",
+    }
+    with patch("google.oauth2.id_token.verify_oauth2_token", return_value=mock_payload):
+        user = verify_google_oidc_token(
+            token="dummy.token",
+            client_id=SSO_CLIENT_ID,
+            allowed_domains=["company.com"],
+        )
+        assert "gcp-hr-admins@company.com" in user.groups
+        assert "hr_admin" in user.roles
+
+
+def test_fetch_google_workspace_groups_cached(monkeypatch):
+    from agent_core.app_utils.sso_auth import fetch_google_workspace_groups, _WORKSPACE_GROUPS_CACHE
+    _WORKSPACE_GROUPS_CACHE.clear()
+    monkeypatch.setenv("ENABLE_CLOUD_IDENTITY_GROUP_LOOKUP", "true")
+
+    with patch("google.auth.default", return_value=(MagicMock(), "test-project")):
+        with patch("googleapiclient.discovery.build") as mock_build:
+            mock_service = MagicMock()
+            mock_build.return_value = mock_service
+            mock_memberships = MagicMock()
+            mock_service.groups().memberships().searchTransitiveGroups.return_value = mock_memberships
+            mock_memberships.execute.return_value = {
+                "memberships": [
+                    {"group": "groups/01234", "groupKey": {"id": "gcp-it-admins@company.com"}}
+                ]
+            }
+            groups_1 = fetch_google_workspace_groups("test.user@company.com")
+            assert "gcp-it-admins@company.com" in groups_1
+
+            # Second call should use TTL cache without calling mock_build again
+            groups_2 = fetch_google_workspace_groups("test.user@company.com")
+            assert groups_2 == groups_1
+            assert mock_build.call_count == 1
+
+
 

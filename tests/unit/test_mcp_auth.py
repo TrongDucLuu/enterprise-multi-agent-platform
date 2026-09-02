@@ -67,6 +67,8 @@ def test_mcp_auth_middleware_rejects_missing_token_in_prod(monkeypatch):
 
 
 def test_mcp_auth_middleware_accepts_valid_token(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("ALLOW_LOCAL_DEV_SSO", "true")
     monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
     test_user = SSOUser(
         user_id="it-admin-99",

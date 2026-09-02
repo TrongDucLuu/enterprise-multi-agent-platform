@@ -657,26 +657,16 @@ def resolve_security_context(
     user_clearance: Optional[int] = None,
 ) -> SecurityContext:
     """
-    Resolves the effective SecurityContext in a strict, fail-closed manner.
+    Resolves the effective SecurityContext in an explicit, fail-closed manner.
     1. If explicit SecurityContext is passed, use it.
     2. If explicit roles/clearance are passed, construct from them.
-    3. If active authenticated SSO user exists in ContextVar, construct from SSO user.
-    4. Otherwise, strictly defaults to SecurityContext.anonymous() (clearance 0, roles []).
+    3. Otherwise, strictly defaults to SecurityContext.anonymous() (clearance 0, roles []).
+    No ambient thread/context lookups are performed at the store layer.
     """
     if security_context is not None:
         return security_context
     if user_roles is not None or user_clearance is not None:
         return SecurityContext.from_user(roles=user_roles, clearance_level=user_clearance)
-    
-    from agent_core.app_utils.sso_auth import get_current_sso_user
-    current_user = get_current_sso_user()
-    if current_user is not None:
-        return SecurityContext.from_user(
-            user_id=getattr(current_user, "email", getattr(current_user, "user_id", "anonymous")),
-            roles=getattr(current_user, "roles", []),
-            clearance_level=getattr(current_user, "clearance_level", None),
-        )
-
     return SecurityContext.anonymous()
 
 
@@ -687,12 +677,10 @@ class BaseKnowledgeStore(ABC):
     def search(
         self,
         query: str,
+        security_context: SecurityContext,
         system: str = "ALL",
         limit: int = 3,
         allowed_systems: Optional[list[str]] = None,
-        security_context: Optional[SecurityContext] = None,
-        user_roles: Optional[list[str]] = None,
-        user_clearance: Optional[int] = None,
     ) -> list[SearchResult]:
         """Search knowledge articles matching the query, system filter, authorized systems, and security context."""
         pass
@@ -715,12 +703,10 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
     def search(
         self,
         query: str,
+        security_context: SecurityContext,
         system: str = "ALL",
         limit: int = 3,
         allowed_systems: Optional[list[str]] = None,
-        security_context: Optional[SecurityContext] = None,
-        user_roles: Optional[list[str]] = None,
-        user_clearance: Optional[int] = None,
     ) -> list[SearchResult]:
         """Search knowledge articles by query keywords, system filter, authorized systems, and security context."""
         valid_systems = get_valid_system_filters()
@@ -731,11 +717,7 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         allowed_upper = set(s.upper() for s in allowed_systems) if allowed_systems is not None else None
 
         # Resolve effective security context: Fail-closed (default to anonymous, never fabricate roles)
-        sec_ctx = resolve_security_context(
-            security_context=security_context,
-            user_roles=user_roles,
-            user_clearance=user_clearance,
-        )
+        sec_ctx = resolve_security_context(security_context=security_context)
 
         # Check if hybrid search is enabled in configuration
         retrieval_cfg = get_retrieval_config()
@@ -974,12 +956,10 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
     def search(
         self,
         query: str,
+        security_context: SecurityContext,
         system: str = "ALL",
         limit: int = 3,
         allowed_systems: Optional[list[str]] = None,
-        security_context: Optional[SecurityContext] = None,
-        user_roles: Optional[list[str]] = None,
-        user_clearance: Optional[int] = None,
     ) -> list[SearchResult]:
         """
         Searches BigQuery table using VECTOR_SEARCH with Pre-filtering subquery and scalar clearance level pre-filter.
@@ -995,11 +975,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             clean_system = "ALL"
 
         # Resolve effective security context: Fail-closed (default to anonymous, never fabricate roles)
-        sec_ctx = resolve_security_context(
-            security_context=security_context,
-            user_roles=user_roles,
-            user_clearance=user_clearance,
-        )
+        sec_ctx = resolve_security_context(security_context=security_context)
 
         try:
             query_vec = self._generate_embedding(query)
@@ -1388,12 +1364,10 @@ class VertexAISearchKnowledgeStore(BaseKnowledgeStore):
     def search(
         self,
         query: str,
+        security_context: SecurityContext,
         system: str = "ALL",
         limit: int = 3,
         allowed_systems: Optional[list[str]] = None,
-        security_context: Optional[SecurityContext] = None,
-        user_roles: Optional[list[str]] = None,
-        user_clearance: Optional[int] = None,
     ) -> list[SearchResult]:
         if not query or not query.strip():
             return []
@@ -1401,11 +1375,7 @@ class VertexAISearchKnowledgeStore(BaseKnowledgeStore):
         clean_sys = system.upper().strip() if system else "ALL"
 
         # Resolve effective security context: Fail-closed (default to anonymous, never fabricate roles)
-        sec_ctx = resolve_security_context(
-            security_context=security_context,
-            user_roles=user_roles,
-            user_clearance=user_clearance,
-        )
+        sec_ctx = resolve_security_context(security_context=security_context)
 
         # Build filter expression
         filter_parts = []
@@ -1566,7 +1536,7 @@ class VertexAISearchKnowledgeStore(BaseKnowledgeStore):
         clean_id = article_id.strip()
 
         try:
-            results = self.search(query=clean_id, limit=5)
+            results = self.search(query=clean_id, security_context=SecurityContext.admin(), limit=5)
             for r in results:
                 if r.article_id.lower() == clean_id.lower():
                     return KnowledgeArticle(

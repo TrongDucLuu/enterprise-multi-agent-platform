@@ -31,6 +31,11 @@ class MockTextEmbeddingModel:
         return [MockEmbeddingItem(_compute_deterministic_embedding(t)) for t in texts]
 
 
+# NOTE: In unit test environments, we use a lightweight 128-dimensional deterministic mock vector
+# for performance and hermetic testing without GCP network calls.
+# In live production environments, Vertex AI TextEmbeddingModel (e.g. text-multilingual-embedding-002)
+# produces 768-dimensional embeddings.
+# USE_VERTEX_EMBEDDING=true is set as default so all code paths utilizing embeddings are exercised in tests.
 os.environ.setdefault("USE_VERTEX_EMBEDDING", "true")
 
 
@@ -56,5 +61,5 @@ def mock_vertex_embeddings_for_tests(monkeypatch):
             "from_pretrained",
             _mock_from_pretrained,
         )
-    except Exception:
+    except (ImportError, AttributeError):
         pass

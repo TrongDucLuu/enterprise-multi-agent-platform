@@ -116,8 +116,8 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
         auth_header = request.headers.get("Authorization")
         if not auth_header or not auth_header.startswith("Bearer "):
             try:
-                from agent_core.app_utils.sso_auth import ALLOW_LOCAL_DEV_SSO, SSOUser, current_sso_user
-                if ALLOW_LOCAL_DEV_SSO:
+                from agent_core.app_utils.sso_auth import is_allow_local_dev_sso, SSOUser, current_sso_user
+                if is_allow_local_dev_sso():
                     dev_user = SSOUser(
                         user_id="dev-user-001",
                         email="dev.employee@company.com",

@@ -148,13 +148,7 @@ class BaseSemanticCache(ABC):
         pass
 
 
-def is_production_mode() -> bool:
-    """
-    Checks whether the application is running in a production environment.
-    Evaluates ENVIRONMENT, ENV, and GCP Cloud Run runtime indicator K_SERVICE.
-    """
-    env = os.getenv("ENVIRONMENT", os.getenv("ENV", "")).lower().strip()
-    return env in ("prod", "production") or bool(os.getenv("K_SERVICE"))
+from agent_core.app_utils.env import is_production_mode
 
 
 class InMemorySemanticCache(BaseSemanticCache):

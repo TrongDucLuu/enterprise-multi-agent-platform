@@ -32,16 +32,20 @@ class TestRBACProvisioning:
 
     def test_role_resolution_from_yaml_mapping(self, monkeypatch):
         """Test Priority 1a: Email present in YAML user_role_mappings."""
-        # config/systems.yaml defines admin@company.com and finance.lead@company.com
-        admin_roles = resolve_user_roles("admin@company.com")
-        assert "it_admin" in admin_roles
-        assert "sys_admin" in admin_roles
-        assert "employee" in admin_roles
+        mock_yaml_mappings = {
+            "admin@company.com": ["it_admin", "sys_admin"],
+            "finance.lead@company.com": ["finance_user", "accountant"],
+        }
+        with patch("agent_core.app_utils.system_config.get_user_role_mappings", return_value=mock_yaml_mappings):
+            admin_roles = resolve_user_roles("admin@company.com")
+            assert "it_admin" in admin_roles
+            assert "sys_admin" in admin_roles
+            assert "employee" in admin_roles
 
-        finance_roles = resolve_user_roles("finance.lead@company.com")
-        assert "finance_user" in finance_roles
-        assert "accountant" in finance_roles
-        assert "employee" in finance_roles
+            finance_roles = resolve_user_roles("finance.lead@company.com")
+            assert "finance_user" in finance_roles
+            assert "accountant" in finance_roles
+            assert "employee" in finance_roles
 
     def test_role_resolution_from_env_string_format(self, monkeypatch):
         """Test Priority 1b: Email present in USER_ROLE_MAPPINGS env var (colon-separated format)."""

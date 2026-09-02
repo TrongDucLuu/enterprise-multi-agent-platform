@@ -5,13 +5,13 @@ from fastapi import FastAPI, Depends, Query
 from google.adk.cli.fast_api import get_fast_api_app
 from google.cloud import logging as cloud_logging
 from vertexai import agent_engines
-from agent_core.app_utils.env import init_environment
+from agent_core.app_utils.env import init_environment, is_production_mode
 from agent_core.app_utils.sso_auth import (
     SSOUser,
     get_current_user,
     create_dev_mock_token,
     SSOAuthenticationMiddleware,
-    ALLOW_LOCAL_DEV_SSO,
+    is_allow_local_dev_sso,
 )
 from agent_core.app_utils.semantic_cache import get_semantic_cache
 from agent_core.app_utils.rate_limiter import RateLimitMiddleware
@@ -70,9 +70,7 @@ app: FastAPI = get_fast_api_app(
 )
 
 # Enterprise Security Hardening: Disable Swagger UI, ReDoc, and OpenAPI schema in Production
-ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
-IS_PRODUCTION = ENVIRONMENT == "production" or bool(os.getenv("K_SERVICE"))
-if IS_PRODUCTION:
+if is_production_mode():
     _blocked = {"/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"}
     app.router.routes = [
         r for r in app.router.routes
@@ -177,7 +175,7 @@ async def get_analytics_summary(user: SSOUser = Depends(get_current_user)):
     return ProductMetricsCollector.get_summary_stats()
 
 # 5. Development-Only Mock Token Minting Route (Omitted in Production)
-if ALLOW_LOCAL_DEV_SSO:
+if is_allow_local_dev_sso():
     @app.post("/api/auth/dev-token", tags=["Development Only"])
     async def generate_dev_sso_token(
         email: str = "employee@company.com",

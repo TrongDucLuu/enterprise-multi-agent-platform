@@ -10,8 +10,14 @@ from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
     get_knowledge_store,
     KnowledgeArticle,
     KnowledgeStoreUnavailableError,
+    SecurityContext,
 )
 from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
+
+
+@pytest.fixture
+def test_sec_ctx():
+    return SecurityContext.from_user(roles=["employee", "it_admin", "support_agent"], clearance_level=3)
 
 
 @pytest.fixture(autouse=True)
@@ -27,12 +33,12 @@ def default_adapter_sso_user():
     current_sso_user.reset(token)
 
 
-def test_in_memory_knowledge_store_search_and_get():
+def test_in_memory_knowledge_store_search_and_get(test_sec_ctx):
     store = InMemoryKnowledgeStore()
     assert isinstance(store, BaseKnowledgeStore)
 
     # Search ERP
-    results = store.search("Purchase Order phân quyền", system="ERP", limit=2)
+    results = store.search("Purchase Order phân quyền", security_context=test_sec_ctx, system="ERP", limit=2)
     assert len(results) > 0
     assert results[0].system == "ERP"
     assert "ERP-KB-001" == results[0].article_id
@@ -46,7 +52,7 @@ def test_in_memory_knowledge_store_search_and_get():
     assert store.get_article_by_id("NON-EXISTENT") is None
 
 
-def test_bigquery_vector_store_with_mock_client():
+def test_bigquery_vector_store_with_mock_client(test_sec_ctx):
     mock_bq = MagicMock()
     
     # Using SimpleNamespace or explicit object to prevent MagicMock dynamic attribute creation
@@ -94,7 +100,7 @@ def test_bigquery_vector_store_with_mock_client():
     )
 
     # 1. Test search with system="ERP" (Pre-filter subquery)
-    results = store.search("Lỗi tạo PO", system="ERP", limit=1)
+    results = store.search("Lỗi tạo PO", security_context=test_sec_ctx, system="ERP", limit=1)
     assert len(results) == 1
     assert results[0].article_id == "ERP-KB-001"
     assert results[0].relevance_score == 0.85
@@ -116,7 +122,7 @@ def test_bigquery_vector_store_with_mock_client():
     assert "clearance_level IS NULL OR clearance_level <= @user_clearance" in sql_arg
 
     # 2. Test search with system="HRM"
-    store.search("Chấm công", system="HRM", limit=3)
+    store.search("Chấm công", security_context=test_sec_ctx, system="HRM", limit=3)
     sql_arg_hrm = mock_bq.query.call_args[0][0]
     assert "WHERE system = @system_param" in sql_arg_hrm
     assert "is_deleted IS NOT TRUE" in sql_arg_hrm
@@ -125,7 +131,7 @@ def test_bigquery_vector_store_with_mock_client():
     assert "clearance_level IS NULL OR clearance_level <= @user_clearance" in sql_arg_hrm
 
     # 3. Test search with system="ALL" and RBAC allowed_systems (Pre-filter with allowed systems)
-    store.search("Reset password", system="ALL", limit=5, allowed_systems=["ERP", "HRM"])
+    store.search("Reset password", security_context=test_sec_ctx, system="ALL", limit=5, allowed_systems=["ERP", "HRM"])
     sql_arg_all = mock_bq.query.call_args[0][0]
     assert "WHERE system IN UNNEST(@allowed_systems_param)" in sql_arg_all
     assert "is_deleted IS NOT TRUE" in sql_arg_all
@@ -144,7 +150,7 @@ def test_bigquery_vector_store_with_mock_client():
     assert "lexical_search_columns=['title', 'content', 'keywords']" in ddl_call
 
 
-def test_mutation_bigquery_search_omitting_base_filters_fails(monkeypatch):
+def test_mutation_bigquery_search_omitting_base_filters_fails(monkeypatch, test_sec_ctx):
     """
     🔴 P0 MUTATION TEST:
     If base_filters is stripped from BigQueryVectorKnowledgeStore.search() SQL generation
@@ -164,7 +170,7 @@ def test_mutation_bigquery_search_omitting_base_filters_fails(monkeypatch):
     )
 
     # Perform normal search
-    store.search("Tìm tài liệu M_BEST_EKO", system="ERP", limit=2)
+    store.search("Tìm tài liệu M_BEST_EKO", security_context=test_sec_ctx, system="ERP", limit=2)
     generated_sql = mock_bq.query.call_args[0][0]
 
     # Verify that the correct SQL passes
@@ -187,7 +193,7 @@ def test_mutation_bigquery_search_omitting_base_filters_fails(monkeypatch):
         assert "clearance_level IS NULL OR clearance_level <= @user_clearance" in mutated_sql
 
 
-def test_bigquery_hybrid_search_sql_generation_and_behavior(monkeypatch):
+def test_bigquery_hybrid_search_sql_generation_and_behavior(monkeypatch, test_sec_ctx):
     """
     🔴 P0 NATIVE HYBRID SEARCH TEST:
     Verifies that when hybrid_search_enabled=True, BigQueryVectorKnowledgeStore generates
@@ -219,7 +225,7 @@ def test_bigquery_hybrid_search_sql_generation_and_behavior(monkeypatch):
     )
 
     query_str = "Lỗi phân quyền M_BEST_EKO khi tạo ME21N"
-    store.search(query_str, system="ERP", limit=3)
+    store.search(query_str, security_context=test_sec_ctx, system="ERP", limit=3)
     sql_hybrid = mock_bq.query.call_args[0][0]
     job_config_hybrid = mock_bq.query.call_args[1]["job_config"]
     param_names = [p.name for p in job_config_hybrid.query_parameters]
@@ -252,7 +258,7 @@ def test_bigquery_hybrid_search_sql_generation_and_behavior(monkeypatch):
         lambda: {"fraction_lists_to_search": 0.05, "hybrid_search_enabled": False}
     )
 
-    store.search(query_str, system="ERP", limit=3)
+    store.search(query_str, security_context=test_sec_ctx, system="ERP", limit=3)
     sql_pure_vec = mock_bq.query.call_args[0][0]
     job_config_pure = mock_bq.query.call_args[1]["job_config"]
     param_names_pure = [p.name for p in job_config_pure.query_parameters]
@@ -271,7 +277,7 @@ def test_bigquery_hybrid_search_sql_generation_and_behavior(monkeypatch):
     assert sql_hybrid != sql_pure_vec
 
 
-def test_vietnamese_query_produces_no_token_fragmentation_noise():
+def test_vietnamese_query_produces_no_token_fragmentation_noise(test_sec_ctx):
     """
     🔴 P0 VIETNAMESE TOKENIZATION TEST:
     Verifies that complex non-ASCII Vietnamese queries ("lỗi phân quyền đơn hàng")
@@ -291,7 +297,7 @@ def test_vietnamese_query_produces_no_token_fragmentation_noise():
     )
 
     vn_query = "lỗi phân quyền đơn hàng"
-    store.search(vn_query, system="ERP", limit=3)
+    store.search(vn_query, security_context=test_sec_ctx, system="ERP", limit=3)
 
     job_config = mock_bq.query.call_args[1]["job_config"]
     query_text_param = next(p for p in job_config.query_parameters if p.name == "query_text")
@@ -300,9 +306,9 @@ def test_vietnamese_query_produces_no_token_fragmentation_noise():
 
 
 
-def test_in_memory_knowledge_store_section_hierarchy():
+def test_in_memory_knowledge_store_section_hierarchy(test_sec_ctx):
     store = InMemoryKnowledgeStore()
-    results = store.search("Purchase Order", system="ERP", limit=1)
+    results = store.search("Purchase Order", security_context=test_sec_ctx, system="ERP", limit=1)
     assert len(results) > 0
     assert results[0].section_hierarchy is not None
     assert results[0].section_hierarchy.h1 == "Tài liệu ERP"
@@ -319,7 +325,7 @@ def test_get_knowledge_store_factory(monkeypatch):
     assert isinstance(store_bq, BigQueryVectorKnowledgeStore)
 
 
-def test_hybrid_search_boosts_exact_transaction_codes():
+def test_hybrid_search_boosts_exact_transaction_codes(test_sec_ctx):
     """
     P2.6 Hybrid Search:
     Verifies that exact transaction codes (M_BEST_EKO, ME21N, OB52) receive relevance boosts
@@ -328,19 +334,19 @@ def test_hybrid_search_boosts_exact_transaction_codes():
     store = InMemoryKnowledgeStore()
 
     # Query with exact authorization object M_BEST_EKO
-    results_eko = store.search("Không thể duyệt PO do mã M_BEST_EKO", system="ERP", limit=3)
+    results_eko = store.search("Không thể duyệt PO do mã M_BEST_EKO", security_context=test_sec_ctx, system="ERP", limit=3)
     assert len(results_eko) > 0
     assert results_eko[0].article_id == "ERP-KB-001"
     assert results_eko[0].relevance_score >= 0.8
 
     # Query with transaction code OB52
-    results_ob52 = store.search("Lỗi kỳ kế toán đóng OB52", system="ERP", limit=3)
+    results_ob52 = store.search("Lỗi kỳ kế toán đóng OB52", security_context=test_sec_ctx, system="ERP", limit=3)
     assert len(results_ob52) > 0
     assert results_ob52[0].article_id == "ERP-KB-002"
     assert results_ob52[0].relevance_score >= 0.8
 
 
-def test_content_governance_date_filtering():
+def test_content_governance_date_filtering(test_sec_ctx):
     """
     P2.7 Content Governance Metadata:
     Verifies that expired documents (expiry_date < today) and future documents (effective_date > today)
@@ -376,20 +382,20 @@ def test_content_governance_date_filtering():
     store = InMemoryKnowledgeStore(articles=[expired_article, future_article])
 
     # Search: Neither expired nor future articles should appear
-    results = store.search("Quy trình mua hàng", system="ERP")
+    results = store.search("Quy trình mua hàng", security_context=test_sec_ctx, system="ERP")
     retrieved_ids = [r.article_id for r in results]
     assert "ERP-EXPIRED-999" not in retrieved_ids
     assert "ERP-FUTURE-999" not in retrieved_ids
 
 
-def test_search_result_metadata_propagation():
+def test_search_result_metadata_propagation(test_sec_ctx):
     """
     P1.3 Metadata Flow & Traceability:
     Verifies that SearchResult contains valid source_uri, category, keywords, owner, effective_date,
     and does NOT default to 'built-in' or null when metadata exists in store.
     """
     store = InMemoryKnowledgeStore()
-    results = store.search("Purchase Order phân quyền", system="ERP", limit=1)
+    results = store.search("Purchase Order phân quyền", security_context=test_sec_ctx, system="ERP", limit=1)
     assert len(results) == 1
     sr = results[0]
     assert sr.source_uri == "docs/erp_po_manual.md"
@@ -402,7 +408,7 @@ def test_search_result_metadata_propagation():
     assert sr.is_deleted is False
 
 
-def test_mutation_removing_expiry_date_filter_leaks_expired_policy():
+def test_mutation_removing_expiry_date_filter_leaks_expired_policy(test_sec_ctx):
     """
     MUTATION TEST:
     If expiry_date pre-filter is omitted, expired documents leak into search results (RED).
@@ -421,23 +427,23 @@ def test_mutation_removing_expiry_date_filter_leaks_expired_policy():
     store = InMemoryKnowledgeStore(articles=[expired_article])
 
     # With proper filtering, returns 0 results
-    clean_results = store.search("Biểu thuế VAT", system="ERP")
+    clean_results = store.search("Biểu thuế VAT", security_context=test_sec_ctx, system="ERP")
     assert "EXPIRED_TAX_GUIDE" not in [r.article_id for r in clean_results]
 
 
-def test_mutation_removing_source_uri_breaks_citation_integrity():
+def test_mutation_removing_source_uri_breaks_citation_integrity(test_sec_ctx):
     """
     MUTATION TEST:
     If source_uri is missing from SearchResult, downstream agent citations cannot be grounded.
     """
     store = InMemoryKnowledgeStore()
-    results = store.search("Timesheet", system="HRM", limit=1)
+    results = store.search("Timesheet", security_context=test_sec_ctx, system="HRM", limit=1)
     assert len(results) > 0
     assert results[0].source_uri is not None
     assert results[0].source_uri == "docs/hrm_timesheet_sync.md"
 
 
-def test_hybrid_search_enabled_unified_default_across_backends(monkeypatch):
+def test_hybrid_search_enabled_unified_default_across_backends(monkeypatch, test_sec_ctx):
     """
     P1.3 Hybrid Search Default Parity:
     Verifies that when hybrid_search_enabled is omitted from config,
@@ -462,7 +468,7 @@ def test_hybrid_search_enabled_unified_default_across_backends(monkeypatch):
         embedding_fn=lambda t: [0.1] * 64
     )
 
-    store_bq.search("Lỗi ME21N", system="ERP", limit=3)
+    store_bq.search("Lỗi ME21N", security_context=test_sec_ctx, system="ERP", limit=3)
     sql_bq = mock_bq.query.call_args[0][0]
     job_config_bq = mock_bq.query.call_args[1]["job_config"]
     param_names = [p.name for p in job_config_bq.query_parameters]
@@ -474,7 +480,7 @@ def test_hybrid_search_enabled_unified_default_across_backends(monkeypatch):
     assert "query_text" in param_names
 
 
-def test_hybrid_search_long_query_native_parameterization(monkeypatch):
+def test_hybrid_search_long_query_native_parameterization(monkeypatch, test_sec_ctx):
     """
     🔴 P0 NATIVE HYBRID SEARCH LONG QUERY TEST:
     Verifies that a complex 50-word technical query passes cleanly to @query_text parameter
@@ -500,7 +506,7 @@ def test_hybrid_search_long_query_native_parameterization(monkeypatch):
         "kỳ đóng OB52 và các thiết lập tài khoản phụ cấp chi tiết"
     )
 
-    store_bq.search(long_50_word_query, system="ERP", limit=3)
+    store_bq.search(long_50_word_query, security_context=test_sec_ctx, system="ERP", limit=3)
     job_config = mock_bq.query.call_args[1]["job_config"]
     query_text_param = next(p for p in job_config.query_parameters if p.name == "query_text")
 
@@ -620,7 +626,7 @@ def test_bigquery_get_article_by_id_multi_chunk():
     assert doc.content.index("Phần 1") < doc.content.index("Phần 2")
 
 
-def test_vector_index_active_check_conditional_options(monkeypatch):
+def test_vector_index_active_check_conditional_options(monkeypatch, test_sec_ctx):
     """
     P0.3 Conditional fraction_lists_to_search:
     Verifies that options => '{"fraction_lists_to_search": ...}' is ONLY added when index status is ACTIVE and coverage >= 95.0.
@@ -644,7 +650,7 @@ def test_vector_index_active_check_conditional_options(monkeypatch):
         embedding_fn=lambda t: [0.1] * 64,
     )
 
-    store.search("Lỗi kiểm thử", system="ERP", limit=2)
+    store.search("Lỗi kiểm thử", security_context=test_sec_ctx, system="ERP", limit=2)
     # Search SQL should NOT contain fraction_lists_to_search when index coverage is < 95.0
     search_sql = mock_bq.query.call_args_list[1][0][0]
     assert "fraction_lists_to_search" not in search_sql
@@ -713,7 +719,7 @@ def test_bigquery_knowledge_store_missing_library_raises_importerror():
         assert "google-cloud-bigquery" in str(exc_info.value)
 
 
-def test_bigquery_telemetry_and_job_timeout_cancel(caplog):
+def test_bigquery_telemetry_and_job_timeout_cancel(caplog, test_sec_ctx):
     """
     0.10: Verifies that BigQueryVectorKnowledgeStore:
     1. Sets job_timeout_ms on QueryJobConfig matching timeout (e.g. 3000ms).
@@ -739,7 +745,7 @@ def test_bigquery_telemetry_and_job_timeout_cancel(caplog):
     )
 
     with caplog.at_level(logging.INFO, logger="agent_core"):
-        store.search("Lỗi mạng LAN", system="ALL", limit=5)
+        store.search("Lỗi mạng LAN", security_context=test_sec_ctx, system="ALL", limit=5)
 
     # 1. Verify job_timeout_ms passed in QueryJobConfig
     call_kwargs = mock_bq.query.call_args[1]
@@ -759,7 +765,7 @@ def test_bigquery_telemetry_and_job_timeout_cancel(caplog):
     mock_bq.query.return_value = mock_fail_job
 
     with pytest.raises(KnowledgeStoreUnavailableError):
-        store.search("Lỗi mạng LAN", system="ALL", limit=5)
+        store.search("Lỗi mạng LAN", security_context=test_sec_ctx, system="ALL", limit=5)
 
     mock_fail_job.cancel.assert_called_once()
 
@@ -781,7 +787,7 @@ def test_vertex_ai_search_store_initialization():
     assert store._get_serving_config_path() == expected_path
 
 
-def test_vertex_ai_search_store_search_single_system():
+def test_vertex_ai_search_store_search_single_system(test_sec_ctx):
     """Verifies search with single system filter, extraction of snippets and metadata."""
     from types import SimpleNamespace
     mock_client = MagicMock()
@@ -821,7 +827,7 @@ def test_vertex_ai_search_store_search_single_system():
         search_client=mock_client,
     )
 
-    results = store.search("cấp quyền SAP", system="ERP", limit=2)
+    results = store.search("cấp quyền SAP", security_context=test_sec_ctx, system="ERP", limit=2)
     assert len(results) == 1
     assert results[0].article_id == "ERP-KB-001"
     assert results[0].title == "Hướng dẫn cấp quyền ERP"
@@ -840,7 +846,7 @@ def test_vertex_ai_search_store_search_single_system():
     assert req.page_size == 2
 
 
-def test_vertex_ai_search_store_search_allowed_systems():
+def test_vertex_ai_search_store_search_allowed_systems(test_sec_ctx):
     """Verifies search with allowed_systems security trimming."""
     from types import SimpleNamespace
     mock_client = MagicMock()
@@ -856,6 +862,7 @@ def test_vertex_ai_search_store_search_allowed_systems():
 
     results = store.search(
         "chính sách làm việc",
+        security_context=test_sec_ctx,
         system="ALL",
         limit=3,
         allowed_systems=["HRM", "ERP"],
@@ -911,7 +918,7 @@ def test_vertex_ai_search_store_get_article_by_id():
     assert store.get_article_by_id("") is None
 
 
-def test_vertex_ai_search_store_fail_closed_on_error():
+def test_vertex_ai_search_store_fail_closed_on_error(test_sec_ctx):
     """Verifies that VertexAISearchKnowledgeStore raises KnowledgeStoreUnavailableError on failures."""
     mock_client = MagicMock()
     mock_client.search.side_effect = TimeoutError("Vertex AI Search API timed out after 5.0s")
@@ -924,7 +931,7 @@ def test_vertex_ai_search_store_fail_closed_on_error():
     )
 
     with pytest.raises(KnowledgeStoreUnavailableError) as exc_info:
-        store.search("Lỗi SAP", system="ERP")
+        store.search("Lỗi SAP", security_context=test_sec_ctx, system="ERP")
     assert "Vertex AI Search" in str(exc_info.value)
 
 
