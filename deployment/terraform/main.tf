@@ -1,3 +1,13 @@
+terraform {
+  required_version = ">= 1.9"
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 5.0"
+    }
+  }
+}
+
 # 1. Enable Required Google Cloud APIs
 resource "google_project_service" "services" {
   project = var.project_id
@@ -763,9 +773,29 @@ resource "google_cloud_run_v2_service" "default" {
         name  = "REDIS_PORT"
         value = var.redis_enabled ? tostring(google_redis_instance.cache_redis[0].port) : "6379"
       }
-      env {
-        name  = "REDIS_AUTH_STRING"
-        value = var.redis_enabled ? google_redis_instance.cache_redis[0].auth_string : ""
+      dynamic "env" {
+        for_each = var.redis_enabled ? [1] : []
+        content {
+          name = "REDIS_AUTH_STRING"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.redis_auth[0].secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+      dynamic "env" {
+        for_each = var.redis_enabled ? [1] : []
+        content {
+          name = "REDIS_CA_CERT"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.redis_ca_cert[0].secret_id
+              version = "latest"
+            }
+          }
+        }
       }
       env {
         name  = "REDIS_USE_TLS"
@@ -840,6 +870,14 @@ resource "google_cloud_run_v2_service" "default" {
       condition     = var.environment != "production" || (var.min_instance_count >= 1 && var.max_instance_count >= 2)
       error_message = "Production deployment requires min_instance_count >= 1 and max_instance_count >= 2 for high availability."
     }
+    precondition {
+      condition     = var.environment != "production" || var.knowledge_backend != "in_memory"
+      error_message = "CRITICAL CONFIGURATION ERROR: Production environment cannot use 'in_memory' knowledge backend. In-memory knowledge base loses all vector search, dynamic updates, and document governance capabilities. Set knowledge_backend = 'bigquery' or 'vertex_ai_search'."
+    }
+    precondition {
+      condition     = !(var.environment == "production" && var.allow_unauthenticated && !var.enable_cloud_armor)
+      error_message = "CRITICAL SECURITY ERROR: In 'production' environment, setting allow_unauthenticated=true exposes Cloud Run directly without WAF / DDoS protection. Enable Google Cloud Armor (enable_cloud_armor=true) or set allow_unauthenticated=false."
+    }
   }
 
   depends_on = [
@@ -859,14 +897,9 @@ resource "google_cloud_run_v2_service_iam_member" "invoker" {
   member   = "allUsers"
 }
 
-# 10. Enterprise Production Guardrails & SLA Checks
-check "production_edge_security" {
-  assert {
-    condition = !(var.environment == "production" && var.allow_unauthenticated && !var.enable_cloud_armor)
-    error_message = "CRITICAL SECURITY WARNING: In 'production' environment, setting allow_unauthenticated=true exposes Cloud Run directly without WAF / DDoS protection. Enable Google Cloud Armor (enable_cloud_armor=true) or set allow_unauthenticated=false."
-  }
-}
-
+# 10. Enterprise Production SLA Warning Checks
+# Note: production_model_sla is intentionally kept as an advisory check block (warning) rather than a hard precondition,
+# because choosing preview models in production is a business risk decision rather than an invalid configuration syntax error.
 check "production_model_sla" {
   assert {
     condition = !(var.environment == "production" && (can(regex("preview", var.fast_model_name)) || can(regex("preview", var.reasoning_model_name))))
@@ -874,18 +907,5 @@ check "production_model_sla" {
   }
 }
 
-check "production_knowledge_backend" {
-  assert {
-    condition = !(var.environment == "production" && var.knowledge_backend == "in_memory")
-    error_message = "CRITICAL CONFIGURATION ERROR: Production environment cannot use 'in_memory' knowledge backend. In-memory knowledge base loses all vector search, dynamic updates, and document governance capabilities. Set knowledge_backend = 'bigquery'."
-  }
-}
-
-check "production_allowed_domains" {
-  assert {
-    condition = !(var.environment == "production" && trimspace(var.allowed_domains) == "")
-    error_message = "CRITICAL SECURITY CONFIGURATION ERROR: Production environment requires non-empty 'allowed_domains' to enforce SSO email domain shielding. Set allowed_domains (e.g. 'company.com,subsidiary.com')."
-  }
-}
 
 

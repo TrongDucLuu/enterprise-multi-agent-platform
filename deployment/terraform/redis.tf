@@ -82,3 +82,52 @@ resource "google_redis_instance" "cache_redis" {
     google_project_service.services
   ]
 }
+
+# 6. Secret Manager Secrets for Redis Auth String and Server CA Certificate
+resource "google_secret_manager_secret" "redis_auth" {
+  count     = var.redis_enabled ? 1 : 0
+  project   = var.project_id
+  secret_id = "${var.service_name}-redis-auth"
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.services]
+}
+
+resource "google_secret_manager_secret_version" "redis_auth_version" {
+  count       = var.redis_enabled ? 1 : 0
+  secret      = google_secret_manager_secret.redis_auth[0].id
+  secret_data = google_redis_instance.cache_redis[0].auth_string
+}
+
+resource "google_secret_manager_secret_iam_member" "redis_auth_accessor" {
+  count     = var.redis_enabled ? 1 : 0
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.redis_auth[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.agent_sa.email}"
+}
+
+resource "google_secret_manager_secret" "redis_ca_cert" {
+  count     = var.redis_enabled ? 1 : 0
+  project   = var.project_id
+  secret_id = "${var.service_name}-redis-ca-cert"
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.services]
+}
+
+resource "google_secret_manager_secret_version" "redis_ca_cert_version" {
+  count       = var.redis_enabled ? 1 : 0
+  secret      = google_secret_manager_secret.redis_ca_cert[0].id
+  secret_data = google_redis_instance.cache_redis[0].server_ca_certs[0].cert
+}
+
+resource "google_secret_manager_secret_iam_member" "redis_ca_cert_accessor" {
+  count     = var.redis_enabled ? 1 : 0
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.redis_ca_cert[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.agent_sa.email}"
+}

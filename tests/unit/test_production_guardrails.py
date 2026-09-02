@@ -386,7 +386,7 @@ class TestProductionTerraformAndModelSLA:
         assert "enable_cloud_armor" in content
 
     def test_terraform_check_blocks_exist_in_main_tf(self):
-        """Validates that Terraform check blocks guard against unauthenticated edge exposure and non-GA models."""
+        """Validates that Terraform lifecycle preconditions and check blocks guard against unauthenticated edge exposure and non-GA models."""
         tf_main_path = os.path.join(
             os.path.dirname(__file__), "../../deployment/terraform/main.tf"
         )
@@ -394,9 +394,10 @@ class TestProductionTerraformAndModelSLA:
         with open(tf_main_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        assert 'check "production_edge_security"' in content
+        assert "setting allow_unauthenticated=true exposes Cloud Run directly without WAF" in content
         assert 'check "production_model_sla"' in content
-        assert "CRITICAL SECURITY WARNING" in content
+        assert "PRODUCTION SLA WARNING" in content
+
 
     def test_agent_model_selection_switches_to_ga_in_production(self, monkeypatch):
         """Validates that agent automatically selects GA models in production environment."""

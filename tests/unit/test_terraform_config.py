@@ -66,23 +66,29 @@ def test_terraform_safe_defaults():
 
 
 def test_terraform_check_blocks_and_validations():
-    """Asserts that main.tf contains production guardrail checks and environment validations."""
+    """Asserts that main.tf contains required_version >= 1.9, hard blocking lifecycle preconditions, and advisory SLA check."""
     tf_dir = _get_terraform_dir()
     main_file = tf_dir / "main.tf"
     assert main_file.exists(), f"main.tf not found at {main_file}"
     content = main_file.read_text(encoding="utf-8")
 
-    assert 'check "production_knowledge_backend"' in content
-    assert 'check "production_allowed_domains"' in content
-    assert 'check "production_edge_security"' in content
-    assert 'name  = "DOMAIN_PACK"' in content
+    # Required Terraform version >= 1.9
+    assert 'required_version = ">= 1.9"' in content
+
+    # Hard blocking preconditions in Cloud Run service lifecycle
     assert 'precondition' in content
     assert 'Production deployment requires explicit non-wildcard allowed_domains' in content
     assert 'Production deployment requires min_instance_count >= 1' in content
+    assert 'Production environment cannot use \'in_memory\' knowledge backend' in content
+    assert 'setting allow_unauthenticated=true exposes Cloud Run directly without WAF' in content
+
+    # Advisory model SLA warning check
+    assert 'check "production_model_sla"' in content
+    assert 'name  = "DOMAIN_PACK"' in content
 
 
 def test_terraform_redis_auth_and_tls():
-    """Asserts that Redis configuration enforces auth_enabled and in-transit TLS."""
+    """Asserts that Redis configuration enforces auth_enabled, in-transit TLS, and Secret Manager secret storage."""
     tf_dir = _get_terraform_dir()
     redis_file = tf_dir / "redis.tf"
     assert redis_file.exists(), f"redis.tf not found at {redis_file}"
@@ -91,11 +97,29 @@ def test_terraform_redis_auth_and_tls():
     assert "auth_enabled            = true" in content or "auth_enabled = true" in content
     assert 'transit_encryption_mode = "SERVER_AUTHENTICATION"' in content
 
+    # Secret Manager secret and IAM for Redis Auth & CA cert
+    assert 'resource "google_secret_manager_secret" "redis_auth"' in content
+    assert 'resource "google_secret_manager_secret_version" "redis_auth_version"' in content
+    assert 'resource "google_secret_manager_secret_iam_member" "redis_auth_accessor"' in content
+
+    assert 'resource "google_secret_manager_secret" "redis_ca_cert"' in content
+    assert 'resource "google_secret_manager_secret_version" "redis_ca_cert_version"' in content
+    assert 'resource "google_secret_manager_secret_iam_member" "redis_ca_cert_accessor"' in content
+
+    # Main.tf Cloud Run environment variables mapping from Secret Manager
+    main_file = tf_dir / "main.tf"
+    main_content = main_file.read_text(encoding="utf-8")
+    assert 'name = "REDIS_AUTH_STRING"' in main_content
+    assert 'google_secret_manager_secret.redis_auth[0].secret_id' in main_content
+    assert 'name = "REDIS_CA_CERT"' in main_content
+    assert 'google_secret_manager_secret.redis_ca_cert[0].secret_id' in main_content
+
     outputs_file = tf_dir / "outputs.tf"
     assert outputs_file.exists(), f"outputs.tf not found at {outputs_file}"
     out_content = outputs_file.read_text(encoding="utf-8")
     assert 'output "redis_auth_string"' in out_content
     assert "sensitive = true" in out_content or "sensitive   = true" in out_content
+
 
 
 def test_terraform_tfvars_example_exists_and_complete():
