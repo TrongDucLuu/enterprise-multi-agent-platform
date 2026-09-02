@@ -61,11 +61,11 @@ resource "google_project_iam_member" "log_writer" {
   member  = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-# Scope storage admin strictly to the designated AI assets bucket (Least Privilege)
+# Scope storage access strictly to objectViewer on the designated AI assets bucket (Least Privilege)
 resource "google_storage_bucket_iam_member" "ai_assets_storage_user" {
   count  = var.ai_assets_bucket != "" ? 1 : 0
   bucket = var.ai_assets_bucket
-  role   = "roles/storage.objectAdmin"
+  role   = "roles/storage.objectViewer"
   member = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
@@ -636,6 +636,10 @@ resource "google_cloud_run_v2_service" "default" {
       }
       env {
         name  = "AI_ASSETS_BUCKET"
+        value = var.ai_assets_bucket
+      }
+      env {
+        name  = "ALLOWED_ARTIFACT_BUCKET"
         value = var.ai_assets_bucket
       }
       env {
