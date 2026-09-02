@@ -12,6 +12,7 @@ from agent_core.app_utils.sso_auth import (
     create_dev_mock_token,
     SSOAuthenticationMiddleware,
     is_allow_local_dev_sso,
+    check_cloud_identity_startup_access,
 )
 from agent_core.app_utils.semantic_cache import get_semantic_cache
 from agent_core.app_utils.rate_limiter import RateLimitMiddleware
@@ -98,6 +99,13 @@ try:
 except Exception:
     PACK_ID = os.getenv("DOMAIN_PACK", "it-helpdesk")
     PACK_VERSION = "1.0.0"
+
+
+@app.on_event("startup")
+async def on_startup():
+    """Startup lifespan hook performing self-checks."""
+    check_cloud_identity_startup_access()
+
 
 # 1. System Health & Readiness Endpoints (Used by Cloud Run startup/liveness probes & Load Balancer)
 @app.get("/healthz", tags=["Health"])

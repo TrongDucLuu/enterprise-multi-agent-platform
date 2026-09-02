@@ -75,6 +75,56 @@ def _get_cloud_identity_service():
 _WORKSPACE_GROUPS_CACHE: dict[str, tuple[float, list[str]]] = {}
 _WORKSPACE_GROUPS_CACHE_TTL = 300.0  # 5 minutes for valid group memberships
 _WORKSPACE_GROUPS_ERROR_CACHE_TTL = 60.0  # 1 minute negative caching for errors/empty lookups
+_WORKSPACE_GROUPS_CACHE_MAX_SIZE = 10000  # Bounded cache size to prevent unbounded memory growth
+
+
+def _store_workspace_groups_cache(email: str, timestamp: float, groups: list[str]) -> None:
+    """Stores groups in cache with bounded size enforcement."""
+    if len(_WORKSPACE_GROUPS_CACHE) >= _WORKSPACE_GROUPS_CACHE_MAX_SIZE and email not in _WORKSPACE_GROUPS_CACHE:
+        # Evict oldest entry (FIFO)
+        try:
+            oldest_key = next(iter(_WORKSPACE_GROUPS_CACHE))
+            _WORKSPACE_GROUPS_CACHE.pop(oldest_key, None)
+        except (StopIteration, KeyError):
+            pass
+    _WORKSPACE_GROUPS_CACHE[email] = (timestamp, groups)
+
+
+def check_cloud_identity_startup_access() -> bool:
+    """
+    Performs a single startup self-check if ENABLE_CLOUD_IDENTITY_GROUP_LOOKUP is enabled.
+    Logs a high-visibility ERROR once if Cloud Identity API returns 403 Forbidden, alerting DevOps
+    that the Service Account requires Google Workspace Admin Console role assignment ('Groups Reader')
+    or Domain-Wide Delegation.
+    """
+    enabled = os.getenv("ENABLE_CLOUD_IDENTITY_GROUP_LOOKUP", os.getenv("GOOGLE_WORKSPACE_GROUPS_ENABLED", "false")).lower() in ("true", "1", "yes")
+    if not enabled:
+        return True
+
+    try:
+        service = _get_cloud_identity_service()
+        # Probe using dummy healthcheck member_key_id
+        request = service.groups().memberships().searchTransitiveGroups(
+            parent="groups/-",
+            query="member_key_id == 'healthcheck-probe@domain.invalid'",
+        )
+        request.execute()
+        logger.info("Cloud Identity API startup probe succeeded.")
+        return True
+    except Exception as exc:
+        err_str = str(exc)
+        if "403" in err_str or "PermissionDenied" in err_str or "forbidden" in err_str.lower():
+            logger.error(
+                "Cloud Identity Groups API returned 403 Forbidden during startup self-check. "
+                "The GCP Service Account lacks permissions to read Google Workspace groups. "
+                "Action Required: Grant the Service Account the 'Groups Reader' admin role in Google Workspace Admin Console "
+                "(admin.google.com -> Account -> Admin roles) or configure Domain-Wide Delegation. "
+                "Group lookup will fail closed and fallback to token claims. Error: %s",
+                exc,
+            )
+        else:
+            logger.warning("Cloud Identity startup probe returned non-fatal error: %s", exc)
+        return False
 
 
 def fetch_google_workspace_groups(user_email: str) -> list[str]:
@@ -113,11 +163,11 @@ def fetch_google_workspace_groups(user_email: str) -> list[str]:
             group_id = group_key.get("id")
             if group_id:
                 groups.append(group_id.lower())
-        _WORKSPACE_GROUPS_CACHE[user_email] = (now, groups)
+        _store_workspace_groups_cache(user_email, now, groups)
         return groups
     except Exception as exc:
         logger.warning("Cloud Identity / Google Workspace group lookup failed for %s: %s", user_email, exc)
-        _WORKSPACE_GROUPS_CACHE[user_email] = (now, [])
+        _store_workspace_groups_cache(user_email, now, [])
         return []
 
 

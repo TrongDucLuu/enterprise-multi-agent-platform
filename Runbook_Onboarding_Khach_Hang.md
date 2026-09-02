@@ -231,6 +231,22 @@ pytest tests/unit/test_agent_builder.py -v
    terraform apply -auto-approve
    ```
 
+4. **Cấp Quyền Đọc Google Workspace / Cloud Identity Groups Cho Service Account (Thủ công):**
+   > [!IMPORTANT]
+   > Quyền đọc nhóm người dùng (`searchTransitiveGroups`) thuộc phạm vi Google Workspace / Cloud Identity Directory, **không thể cấp hoàn toàn qua GCP IAM thông thường**. Nếu bật `ENABLE_CLOUD_IDENTITY_GROUP_LOOKUP=true`, bạn **bắt buộc** phải hoàn tất 1 trong 2 phương án phân quyền sau:
+   >
+   > **Phương án 1: Gán Admin Role trong Google Workspace Admin Console (Khuyến nghị)**
+   > 1. Đăng nhập vào [Google Workspace Admin Console](https://admin.google.com) với tài khoản Super Admin.
+   > 2. Điều hướng tới **Account** > **Admin roles**.
+   > 3. Chọn quyền quản trị **Groups Reader** (hoặc tạo Custom Role với đặc quyền *Groups: Read*).
+   > 4. Chọn **Admins assigned** > **Assign service accounts**.
+   > 5. Dán địa chỉ email của Cloud Run Service Account (ví dụ: `it-helpdesk-agent-sa@<project-id>.iam.gserviceaccount.com`) và xác nhận **Assign**.
+   >
+   > **Phương án 2: Cấu hình Domain-Wide Delegation (DWD)**
+   > 1. Trong GCP Console > **IAM & Admin** > **Service Accounts**, mở Service Account của Agent và bật **Domain-Wide Delegation**.
+   > 2. Mở Google Workspace Admin Console > **Security** > **Access and data control** > **API controls** > **Manage Domain Wide Delegation**.
+   > 3. Thêm Client ID của Service Account kèm OAuth Scope: `https://www.googleapis.com/auth/cloud-identity.groups.readonly`.
+
 ---
 
 ## 3. Bảng Kiểm Tra Sẵn Sàng Vận Hành (Go-Live Checklist)
@@ -241,6 +257,8 @@ pytest tests/unit/test_agent_builder.py -v
 | **Tool Registry Integrity** | 100% tool trong `agents.yaml` đã được đăng ký bằng `@register_tool` | ✅ Bắt buộc |
 | **Prompt Injection Guard** | `INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION` được tự động tiêm | ✅ Bắt buộc |
 | **SSO Domain Shielding** | `ALLOWED_SSO_DOMAINS` đã được điền chính xác domain email công ty khách hàng | ✅ Bắt buộc |
+| **Cloud Identity Groups** | Service Account được gán quyền `Groups Reader` trong Google Workspace Admin | ✅ Nếu bật tra cứu nhóm |
+| **Artifact Storage Bucket**| `ALLOWED_ARTIFACT_BUCKET` trỏ đúng GCS bucket và SA có quyền `objectViewer` | ✅ Bắt buộc |
 | **Knowledge Store Backend** | Bảng BigQuery hoặc Vertex AI Search Datastore đã nạp dữ liệu và cấu hình đúng | ✅ Bắt buộc |
 | **Facts & Obligations** | Các bảng `enterprise_facts` và `contract_obligations` đã sẵn sàng | ✅ Bắt buộc |
 | **Telemetry Privacy** | `TELEMETRY_ANONYMIZE_USERS=true`, `TELEMETRY_INCLUDE_QUERY=false` | ✅ Bắt buộc |
@@ -261,3 +279,11 @@ pytest tests/unit/test_agent_builder.py -v
 ### Sự cố 3: Người dùng không thể xem dữ liệu dù đã đăng nhập SSO
 - **Nguyên nhân:** Email người dùng chưa được cấp quyền trong `user_role_mappings` của `systems.yaml` và không có claim `roles` trong token.
 - **Xử lý:** Bổ sung email người dùng vào `user_role_mappings` hoặc thêm tài khoản vào danh mục phân quyền tương ứng.
+
+### Sự cố 4: Log ERROR lúc khởi động: `Cloud Identity Groups API returned 403 Forbidden`
+- **Nguyên nhân:** Service Account của Cloud Run chưa được cấp quyền đọc nhóm người dùng trong Google Workspace Admin Console, dẫn đến RBAC tự động chuyển sang chế độ an toàn fail-closed (chỉ dùng role tĩnh từ token).
+- **Xử lý:** Thực hiện lại mục **Bước 7 (Khoản 4)** ở trên để gán vai trò **Groups Reader** cho Service Account trong `admin.google.com`.
+
+### Sự cố 5: L3 tools báo lỗi `ARTIFACT_BUCKET_NOT_CONFIGURED` hoặc `FORBIDDEN_BUCKET`
+- **Nguyên nhân:** Biến môi trường `ALLOWED_ARTIFACT_BUCKET` chưa được truyền vào Cloud Run hoặc URI tài liệu trỏ tới bucket nằm ngoài cấu hình.
+- **Xử lý:** Đảm bảo `var.ai_assets_bucket` trong Terraform đã được khai báo và Cloud Run service đã nhận đúng biến môi trường `ALLOWED_ARTIFACT_BUCKET`.
