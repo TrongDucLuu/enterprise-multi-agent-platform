@@ -10,24 +10,8 @@ shared_admin_roles:
   - "lead_engineer"
 
 # Enterprise User / Service Role Mappings
-# Maps authenticated email addresses to enterprise RBAC roles
-user_role_mappings:
-  "admin@company.com":
-    - "it_admin"
-    - "sys_admin"
-  "it.admin@company.com":
-    - "it_admin"
-  "erp.user@company.com":
-    - "erp_user"
-  "finance.lead@company.com":
-    - "finance_user"
-    - "accountant"
-  "hr.manager@company.com":
-    - "hr_manager"
-    - "hr_specialist"
-  "sales.director@company.com":
-    - "sales_manager"
-    - "sales_rep"
+# Maps authenticated email addresses to enterprise RBAC roles (empty by default; prefer group_role_mappings in production)
+user_role_mappings: {}
 
 # Google Workspace / Okta / Enterprise Group Role Mappings
 group_role_mappings:

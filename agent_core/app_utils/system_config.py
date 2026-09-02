@@ -29,14 +29,29 @@ _CACHED_CONFIG_PATH: Optional[str] = None
 
 
 def get_default_config_path() -> str:
-    """Returns the default absolute or relative path to config/systems.yaml."""
+    """Returns the default path to the systems configuration file, prioritizing active domain pack."""
     env_path = os.getenv("SYSTEMS_CONFIG_PATH")
     if env_path:
         return env_path
     
     # Resolve relative to project root (2 levels up from app_utils)
     base_dir = Path(__file__).resolve().parent.parent.parent
-    return str(base_dir / "config" / "systems.yaml")
+
+    # Check active domain pack path
+    pack_name = os.getenv("DOMAIN_PACK", "it-helpdesk")
+    pack_systems = base_dir / "domain_packs" / pack_name / "systems.yaml"
+    if pack_systems.is_file():
+        return str(pack_systems)
+
+    config_systems = base_dir / "config" / "systems.yaml"
+    if config_systems.is_file():
+        return str(config_systems)
+
+    example_systems = base_dir / "config" / "systems.example.yaml"
+    if example_systems.is_file():
+        return str(example_systems)
+
+    return str(pack_systems)
 
 
 def load_system_config(config_path: Optional[str] = None, force_reload: bool = False) -> dict[str, Any]:

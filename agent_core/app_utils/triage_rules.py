@@ -1,15 +1,15 @@
 """
 Rule-based Triage Fast-Path Classifier.
 
-Provides deterministic regex & keyword matching for obvious enterprise IT queries,
+Provides deterministic regex & keyword matching for enterprise queries,
 routing them directly to the appropriate operational tier (L1, L2, L3) before the LLM loop.
+Leverages domain keywords configured in active domain pack systems.yaml with robust fallbacks.
 """
 
 import re
 from typing import Optional, Dict, Any
 
-
-# Precompiled fast-path rules
+# Precompiled fast-path rules fallback
 L3_PATTERNS = [
     r"(?i)\b(stack\s*trace|traceback|out\s*of\s*memory|oomkiller|nullpointerexception|segmentation\s*fault|fatal\s*error|core\s*dump)\b",
     r"(?i)\b(root\s*cause\s*analysis|rca|phân\s*tích\s*log|rà\s*soát\s*hợp\s*đồng|review\s*contract|điều\s*khoản\s*sla|service\s*credits)\b",
@@ -32,6 +32,7 @@ L1_PATTERNS = [
 def classify_intent_fast_path(query: str) -> Optional[Dict[str, Any]]:
     """
     Classifies user intent using deterministic high-confidence regex rules.
+    Prioritizes dynamic patterns from active domain pack systems.yaml.
     Returns a dict with target_agent, tier, confidence, and rule match details, or None if ambiguous.
     """
     if not query or not query.strip():
@@ -39,7 +40,41 @@ def classify_intent_fast_path(query: str) -> Optional[Dict[str, Any]]:
 
     clean_q = query.strip()
 
-    # 1. Check L3 (High Risk / Deep Diagnostics / SLA)
+    # Try dynamic patterns from system config first
+    try:
+        from agent_core.app_utils.system_config import get_domain_keyword_patterns
+        dyn_patterns = get_domain_keyword_patterns()
+        
+        # 1. Check L3 Diagnostics
+        l3_pat = dyn_patterns.get("L3_DIAGNOSTICS")
+        if l3_pat:
+            m = l3_pat.search(clean_q)
+            if m:
+                return {
+                    "target_agent": "l3_deep_diagnostics_agent",
+                    "tier": "L3",
+                    "confidence": 0.99,
+                    "matched_pattern": m.group(0),
+                    "reason": "Dynamic match on L3 diagnostics keyword",
+                }
+        
+        # 2. Check L2 Enterprise systems (ERP, HRM, CRM)
+        for domain in ("ERP", "HRM", "CRM"):
+            d_pat = dyn_patterns.get(domain)
+            if d_pat:
+                m = d_pat.search(clean_q)
+                if m:
+                    return {
+                        "target_agent": "l2_enterprise_rag_agent",
+                        "tier": "L2",
+                        "confidence": 0.95,
+                        "matched_pattern": m.group(0),
+                        "reason": f"Dynamic match on {domain} enterprise system keyword",
+                    }
+    except Exception:
+        pass
+
+    # Static fallback rules
     for p in L3_PATTERNS:
         match = re.search(p, clean_q)
         if match:
@@ -51,7 +86,6 @@ def classify_intent_fast_path(query: str) -> Optional[Dict[str, Any]]:
                 "reason": "Deterministic match on diagnostic log/RCA/SLA keyword",
             }
 
-    # 2. Check L2 (Enterprise Systems: ERP, HRM, CRM)
     for p in L2_PATTERNS:
         match = re.search(p, clean_q)
         if match:
@@ -63,7 +97,6 @@ def classify_intent_fast_path(query: str) -> Optional[Dict[str, Any]]:
                 "reason": "Deterministic match on Enterprise System (ERP/HRM/CRM) keyword",
             }
 
-    # 3. Check L1 (Self-Service / FAQ / Passwords / Tickets)
     for p in L1_PATTERNS:
         match = re.search(p, clean_q)
         if match:

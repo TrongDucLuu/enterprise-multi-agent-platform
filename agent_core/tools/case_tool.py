@@ -21,6 +21,37 @@ MAX_LOCAL_CASES_CACHE = int(os.getenv("MAX_LOCAL_CASES_CACHE", os.getenv("MAX_LO
 CASE_CACHE_TTL_SECONDS = int(os.getenv("CASE_CACHE_TTL_SECONDS", os.getenv("TICKET_CACHE_TTL_SECONDS", "30")))
 
 
+_CASE_SCHEMA_CACHE = None
+
+
+def get_case_schema() -> dict:
+    """Loads and caches case schema configuration from active domain pack."""
+    global _CASE_SCHEMA_CACHE
+    if _CASE_SCHEMA_CACHE is not None:
+        return _CASE_SCHEMA_CACHE
+    
+    try:
+        from agent_core.agent_builder import load_domain_pack
+        pack = load_domain_pack()
+        schema = pack.get("case_schema", {})
+        if schema:
+            _CASE_SCHEMA_CACHE = schema
+            return schema
+    except Exception as e:
+        logger.debug("Failed to load case schema from domain pack: %s", e)
+
+    _CASE_SCHEMA_CACHE = {
+        "categories": ["General", "Hardware", "Software", "Access_Permissions", "Network", "ERP", "HRM", "CRM", "Other"],
+        "priorities": ["Low", "Medium", "High", "Critical"],
+        "tiers": ["L1_SelfService", "L2_Enterprise_RAG", "L3_Deep_Diagnostics", "Human_Ops"],
+        "statuses": ["Open", "In_Progress", "Escalated", "Resolved", "Closed"],
+        "initial_tier": "L1_SelfService",
+        "default_category": "General",
+        "default_priority": "Medium",
+    }
+    return _CASE_SCHEMA_CACHE
+
+
 class CaseRecord(BaseModel):
     id: str
     user_id: str
@@ -301,6 +332,16 @@ def update_case_status(
     case, err_resp = _load_and_authorize_case(case_id)
     if err_resp:
         return err_resp
+
+    schema = get_case_schema()
+    valid_statuses = schema.get("statuses", [])
+    if valid_statuses and status not in valid_statuses:
+        return {
+            "status": "error",
+            "message": f"Trạng thái '{status}' không hợp lệ theo case schema. Các trạng thái hợp lệ: {valid_statuses}",
+            "case_id": case.id,
+            "ticket_id": case.id,
+        }
 
     case.status = status
     if resolution_notes:
