@@ -1,6 +1,7 @@
 import ast
 import os
 import glob
+import logging
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -333,7 +334,6 @@ FIXTURE_ARTICLES = [
 def _create_mock_bigquery_store(articles: list[KnowledgeArticle]) -> BigQueryVectorKnowledgeStore:
     """Instantiates a BigQueryVectorKnowledgeStore with a mock BigQuery client returning the fixtures."""
     mock_bq = MagicMock()
-    mock_job = MagicMock()
 
     # Convert KnowledgeArticle objects to mock BigQuery row objects
     rows = []
@@ -361,8 +361,18 @@ def _create_mock_bigquery_store(articles: list[KnowledgeArticle]) -> BigQueryVec
         row_mock.distance = 0.05
         rows.append(row_mock)
 
-    mock_job.result.return_value = rows
-    mock_bq.query.return_value = mock_job
+    def mock_query(sql, job_config=None, timeout=None):
+        mock_job = MagicMock()
+        if job_config and hasattr(job_config, "query_parameters"):
+            art_id_param = next((p.value for p in job_config.query_parameters if p.name == "article_id"), None)
+            if art_id_param:
+                matching = [r for r in rows if r.id.upper() == art_id_param.upper()]
+                mock_job.result.return_value = matching
+                return mock_job
+        mock_job.result.return_value = rows
+        return mock_job
+
+    mock_bq.query.side_effect = mock_query
 
     return BigQueryVectorKnowledgeStore(
         project_id="test-proj",
@@ -376,40 +386,42 @@ def _create_mock_bigquery_store(articles: list[KnowledgeArticle]) -> BigQueryVec
 def _create_mock_vertex_search_store(articles: list[KnowledgeArticle]) -> VertexAISearchKnowledgeStore:
     """Instantiates a VertexAISearchKnowledgeStore with a mock Discovery Engine client returning the fixtures."""
     mock_client = MagicMock()
-    mock_response = MagicMock()
 
-    results = []
-    for a in articles:
-        item = MagicMock()
-        doc = MagicMock()
-        doc.id = a.id
-        doc.title = a.title
-        doc.name = f"projects/p/locations/l/collections/default_collection/dataStores/ds/branches/0/documents/{a.id}"
-        doc.struct_data = {
-            "id": a.id,
-            "title": a.title,
-            "system": a.system,
-            "category": a.category,
-            "content": a.content,
-            "allowed_roles": a.allowed_roles,
-            "sensitivity": a.sensitivity,
-            "clearance_level": a.clearance_level,
-            "keywords": a.keywords,
-            "source_uri": a.source_uri,
-            "owner": a.owner,
-            "effective_date": a.effective_date,
-            "expiry_date": a.expiry_date,
-            "is_deleted": a.is_deleted,
-        }
-        doc.derived_struct_data = {
-            "snippets": [{"snippet": a.content}]
-        }
-        item.document = doc
-        item.relevance_score = 0.95
-        results.append(item)
+    def mock_search(request=None, **kwargs):
+        mock_response = MagicMock()
+        results = []
+        for a in articles:
+            item = MagicMock()
+            doc = MagicMock()
+            doc.id = a.id
+            doc.title = a.title
+            doc.name = f"projects/p/locations/l/collections/default_collection/dataStores/ds/branches/0/documents/{a.id}"
+            doc.struct_data = {
+                "id": a.id,
+                "title": a.title,
+                "system": a.system,
+                "category": a.category,
+                "content": a.content,
+                "allowed_roles": a.allowed_roles,
+                "sensitivity": a.sensitivity,
+                "clearance_level": a.clearance_level,
+                "keywords": a.keywords,
+                "source_uri": a.source_uri,
+                "owner": a.owner,
+                "effective_date": a.effective_date,
+                "expiry_date": a.expiry_date,
+                "is_deleted": a.is_deleted,
+            }
+            doc.derived_struct_data = {
+                "snippets": [{"snippet": a.content}]
+            }
+            item.document = doc
+            item.relevance_score = 0.95
+            results.append(item)
+        mock_response.results = results
+        return mock_response
 
-    mock_response.results = results
-    mock_client.search.return_value = mock_response
+    mock_client.search.side_effect = mock_search
 
     return VertexAISearchKnowledgeStore(
         project_id="test-proj",
@@ -433,7 +445,7 @@ def _create_mock_vertex_search_store(articles: list[KnowledgeArticle]) -> Vertex
 ])
 def test_authorization_matrix_parity_across_all_3_stores(roles, clearance, expected_doc_ids):
     """
-    CRITICAL PROBE 5: 3 Backends x 8 Scenarios Parity Test.
+    CRITICAL PROBE 5a: 3 Backends x 8 Scenarios Parity Test for search().
     Asserts that InMemoryKnowledgeStore, BigQueryVectorKnowledgeStore, and VertexAISearchKnowledgeStore
     enforce IDENTICAL RBAC, MAC, Tombstone, Expiry, and Effective date access controls.
     """
@@ -467,6 +479,85 @@ def test_authorization_matrix_parity_across_all_3_stores(roles, clearance, expec
         assert "DOC-TOMBSTONE" not in result_ids, f"{store_name} returned deleted document DOC-TOMBSTONE"
         assert "DOC-EXPIRED" not in result_ids, f"{store_name} returned expired document DOC-EXPIRED"
         assert "DOC-FUTURE" not in result_ids, f"{store_name} returned not-yet-effective document DOC-FUTURE"
+
+
+@pytest.mark.parametrize("article_id,roles,clearance,expect_accessible", [
+    # Scenario 1: Public doc -> Accessible by Anonymous, Employee, Admin
+    ("DOC-PUB-001", [], 0, True),
+    ("DOC-PUB-001", ["employee"], 1, True),
+    ("DOC-PUB-001", ["it_admin"], 3, True),
+
+    # Scenario 2: Internal doc (clearance 1) -> Denied for Anonymous (clearance 0), Allowed for Employee
+    ("DOC-INT-001", [], 0, False),
+    ("DOC-INT-001", ["employee"], 1, True),
+
+    # Scenario 3: HR General (clearance 2, allowed_roles: [hr_specialist, hr_admin, it_admin])
+    # Employee with clearance 2 lacks required role -> Denied
+    ("DOC-HR-001", ["employee"], 2, False),
+    # HR Specialist with clearance 1 lacks clearance -> Denied
+    ("DOC-HR-001", ["hr_specialist"], 1, False),
+    # HR Specialist with clearance 2 -> Allowed
+    ("DOC-HR-001", ["hr_specialist"], 2, True),
+
+    # Scenario 4: HR Executive Salary (clearance 2, allowed_roles: [hr_admin, it_admin])
+    # HR Specialist has clearance 2 but not in allowed_roles -> Denied
+    ("DOC-HR-EXEC", ["hr_specialist"], 2, False),
+    # HR Admin has clearance 2 and in allowed_roles -> Allowed
+    ("DOC-HR-EXEC", ["hr_admin"], 2, True),
+
+    # Scenario 5: Root Key Rotation (clearance 3, allowed_roles: [it_admin])
+    # HR Admin has clearance 2 -> Denied
+    ("DOC-RESTRICTED", ["hr_admin"], 2, False),
+    # IT Admin has clearance 3 -> Allowed
+    ("DOC-RESTRICTED", ["it_admin"], 3, True),
+
+    # Scenario 6: Tombstoned/Deleted Document -> Always Denied across all users including IT Admin
+    ("DOC-TOMBSTONE", ["it_admin"], 3, False),
+    ("DOC-TOMBSTONE", ["employee"], 1, False),
+
+    # Scenario 7: Expired Document -> Always Denied across all users including IT Admin
+    ("DOC-EXPIRED", ["it_admin"], 3, False),
+    ("DOC-EXPIRED", ["employee"], 1, False),
+
+    # Scenario 8: Future-dated Document -> Always Denied across all users including IT Admin
+    ("DOC-FUTURE", ["it_admin"], 3, False),
+    ("DOC-FUTURE", ["employee"], 1, False),
+
+    # Scenario 9: Non-existent Document -> Always None
+    ("DOC-NONEXISTENT", ["it_admin"], 3, False),
+])
+def test_get_article_by_id_parity_matrix_across_all_3_stores(article_id, roles, clearance, expect_accessible):
+    """
+    CRITICAL PROBE 5b: 3 Backends x get_article_by_id Parity Test.
+    Asserts that InMemoryKnowledgeStore, BigQueryVectorKnowledgeStore, and VertexAISearchKnowledgeStore
+    enforce IDENTICAL authorization, MAC, RBAC, Tombstone, Expiry, and Effective date access controls
+    when retrieving individual articles via get_article_by_id().
+    """
+    sec_ctx = SecurityContext.from_user(user_id="test-user", roles=roles, clearance_level=clearance)
+
+    in_memory_store = InMemoryKnowledgeStore(articles=FIXTURE_ARTICLES)
+    bq_store = _create_mock_bigquery_store(FIXTURE_ARTICLES)
+    vertex_store = _create_mock_vertex_search_store(FIXTURE_ARTICLES)
+
+    stores = [
+        ("InMemoryKnowledgeStore", in_memory_store),
+        ("BigQueryVectorKnowledgeStore", bq_store),
+        ("VertexAISearchKnowledgeStore", vertex_store),
+    ]
+
+    for store_name, store in stores:
+        article = store.get_article_by_id(article_id=article_id, security_context=sec_ctx)
+        if expect_accessible:
+            assert article is not None, (
+                f"Backend '{store_name}' unexpectedly denied get_article_by_id for article_id={article_id}, "
+                f"roles={roles}, clearance={clearance}"
+            )
+            assert article.id.upper() == article_id.upper()
+        else:
+            assert article is None, (
+                f"Backend '{store_name}' unexpectedly ALLOWED get_article_by_id for article_id={article_id}, "
+                f"roles={roles}, clearance={clearance}"
+            )
 
 
 # =====================================================================
@@ -506,3 +597,46 @@ def test_bigquery_vector_store_sql_filters_and_clearance():
     assert "user_clearance" in param_names
     clearance_param = next(p for p in job_config.query_parameters if p.name == "user_clearance")
     assert clearance_param.value == 1
+
+
+# =====================================================================
+# PROBE 7: Cloud Identity Startup Self-Check & Bounded Cache
+# =====================================================================
+
+def test_cloud_identity_startup_probe_403_error_logging(monkeypatch, caplog):
+    """Asserts that check_cloud_identity_startup_access logs an explicit ERROR on 403 Forbidden."""
+    from agent_core.app_utils import sso_auth
+
+    monkeypatch.setenv("ENABLE_CLOUD_IDENTITY_GROUP_LOOKUP", "true")
+
+    mock_service = MagicMock()
+    mock_request = MagicMock()
+    mock_request.execute.side_effect = Exception("403 Forbidden: The caller does not have permission")
+    mock_service.groups().memberships().searchTransitiveGroups.return_value = mock_request
+
+    monkeypatch.setattr(sso_auth, "_get_cloud_identity_service", lambda: mock_service)
+
+    with caplog.at_level(logging.ERROR):
+        result = sso_auth.check_cloud_identity_startup_access()
+        assert result is False
+        assert any("Cloud Identity Groups API returned 403 Forbidden" in r.message for r in caplog.records)
+        assert any("Groups Reader" in r.message for r in caplog.records)
+
+
+def test_cloud_identity_cache_bounded_eviction(monkeypatch):
+    """Asserts that _store_workspace_groups_cache evicts older items when reaching MAX_SIZE."""
+    from agent_core.app_utils import sso_auth
+
+    monkeypatch.setattr(sso_auth, "_WORKSPACE_GROUPS_CACHE_MAX_SIZE", 3)
+    sso_auth._WORKSPACE_GROUPS_CACHE.clear()
+
+    sso_auth._store_workspace_groups_cache("user1@example.com", 100.0, ["g1"])
+    sso_auth._store_workspace_groups_cache("user2@example.com", 101.0, ["g2"])
+    sso_auth._store_workspace_groups_cache("user3@example.com", 102.0, ["g3"])
+    assert len(sso_auth._WORKSPACE_GROUPS_CACHE) == 3
+
+    # Adding 4th user must evict the first user
+    sso_auth._store_workspace_groups_cache("user4@example.com", 103.0, ["g4"])
+    assert len(sso_auth._WORKSPACE_GROUPS_CACHE) == 3
+    assert "user1@example.com" not in sso_auth._WORKSPACE_GROUPS_CACHE
+    assert "user4@example.com" in sso_auth._WORKSPACE_GROUPS_CACHE
