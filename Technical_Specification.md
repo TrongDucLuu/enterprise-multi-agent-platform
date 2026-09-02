@@ -1,18 +1,18 @@
 # TÀI LIỆU ĐẶC TẢ KỸ THUẬT VÀ THIẾT KẾ KIẾN TRÚC HỆ THỐNG
-# (SYSTEM TECHNICAL SPECIFICATION & ARCHITECTURE DESIGN DOCUMENT)
+# (ENTERPRISE MULTI-AGENT PLATFORM - TECHNICAL SPECIFICATION & ARCHITECTURE DESIGN)
 
-**Dự án:** Enterprise Multi-Agent AI Platform (`agent_core`) & Domain Pack Architecture  
-**Nền tảng:** Google Cloud Platform (GCP), Vertex AI Gemini 2.5 / 3 & Google Agent Development Kit (ADK)  
+**Nền tảng:** Enterprise Autonomous Multi-Agent AI Platform (`agent_core`)  
+**Công nghệ Cốt lõi:** Google Cloud Platform (GCP), Vertex AI Gemini 2.5 / 3 & Google Agent Development Kit (ADK)  
 **Tác giả:** Solutions Architecture & Platform Engineering Team  
-**Phiên bản:** `2.2.0-Enterprise` (Decoupled Domain Pack, Zero-Hardcode & Resilience-Hardened)  
+**Phiên bản:** `2.2.0-Enterprise` (Domain-Agnostic Platform, Decoupled Domain Packs & Zero-Hardcode Architecture)  
 **Trạng thái:** Approved & Production-Ready  
 **Ngày cập nhật:** 02/09/2026  
 
 ---
 
 ## MỤC LỤC
-1. [TỔNG QUAN HỆ THỐNG VÀ MỤC TIÊU KIẾN TRÚC](#1-tổng-quan-hệ-thống-và-mục-tiêu-kiến-trúc)
-2. [KIẾN TRÚC TỔNG THỂ (HIGH-LEVEL ARCHITECTURE)](#2-kiến-trúc-tổng-thể-high-level-architecture)
+1. [TỔNG QUAN NỀN TẢNG VÀ MỤC TIÊU KIẾN TRÚC](#1-tổng-quan-nền-tảng-và-mục-tiêu-kiến-trúc)
+2. [KIẾN TRÚC TỔNG THỂ NỀN TẢNG (HIGH-LEVEL ARCHITECTURE)](#2-kiến-trúc-tổng-thể-nền-tảng-high-level-architecture)
 3. [KIẾN TRÚC TÁCH RỜI DOMAIN PACK VÀ DYNAMIC AGENT BUILDER](#3-kiến-trúc-tách-rời-domain-pack-và-dynamic-agent-builder)
 4. [PHÂN RÃ HỆ THỐNG ĐA ĐẶC VỤ, CANONICAL REGISTRY VÀ CASE STORE OCC](#4-phân-rã-hệ-thống-đa-đặc-vụ-canonical-registry-và-case-store-occ)
 5. [KIẾN TRÚC BẢO MẬT VÀ PHÂN QUYỀN ZERO-TRUST (SECURITY, SSO & RBAC)](#5-kiến-trúc-bảo-mật-và-phân-quyền-zero-trust-security-sso--rbac)
@@ -25,27 +25,35 @@
 
 ---
 
-## 1. TỔNG QUAN HỆ THỐNG VÀ MỤC TIÊU KIẾN TRÚC
+## 1. TỔNG QUAN NỀN TẢNG VÀ MỤC TIÊU KIẾN TRÚC
 
-### 1.1. Bối cảnh Doanh nghiệp
-Hệ thống **Enterprise Multi-Agent AI Platform (`agent_core`)** là nền tảng AI Agent tự chủ đa tầng cấp doanh nghiệp (Multi-Tier Enterprise Autonomous Agent Platform). Nền tảng được thiết kế theo mô hình **Độc Lập Hạ Tầng (Infrastructure Isolation)**: mỗi khách hàng sở hữu 1 GCP Project riêng biệt, hoàn toàn không sử dụng chung cơ sở dữ liệu (No Shared Multi-Tenancy DB), loại bỏ triệt để nguy cơ rò rỉ dữ liệu chéo giữa các tổ chức và tuân thủ các chuẩn mực bảo mật ISO 27001, SOC 2 Type II và GDPR.
+### 1.1. Bối cảnh & Định vị Nền tảng (Platform Positioning)
+**Enterprise Multi-Agent AI Platform (`agent_core`)** là nền tảng AI Agent tự chủ đa tầng cấp doanh nghiệp (Multi-Tier Enterprise Autonomous Agent Platform). Hệ thống được thiết kế hoàn toàn **phi phụ thuộc lĩnh vực (Domain-Agnostic)**:
+- **Tầng Nền tảng (`agent_core/`)**: Cung cấp toàn bộ năng lực lõi bao gồm: Xác thực SSO OIDC & RBAC, Dynamic Agent Builder, Canonical Tool Registry, Clearance-Aware Semantic Cache, Dual-Engine RAG, Optimistic Concurrency Control (OCC) Case Management, và Distributed Telemetry.
+- **Tầng Gói Nghiệp vụ (`domain_packs/`)**: Đóng gói toàn bộ cấu trúc phân cấp tác tử, chỉ dẫn chuyên môn (Instructions), quy tắc phân loại sự cố (`case_schema.yaml`), danh mục hệ thống nội bộ (`systems.yaml`) và kho tri thức đặc thù. Nền tảng có thể phục vụ bất kỳ lĩnh vực nào trong doanh nghiệp:
+  - **IT Operations & Helpdesk** (`domain_packs/it-helpdesk/` - Reference Implementation): Hỗ trợ kỹ thuật, ERP/HRM/CRM manuals, phân tích log sự cố RCA, rà soát cam kết SLA hợp đồng.
+  - **Human Resources & Employee Services** (`domain_packs/hr-service/`): Quy chế nhân sự, tính lương, phúc lợi, nghỉ phép, onboarding.
+  - **Legal & Compliance** (`domain_packs/legal-compliance/`): Rà soát hợp đồng, điều khoản tuân thủ DPA/GDPR/SOC2, kiểm soát rủi ro pháp lý.
+  - **Customer Support & Operations** (`domain_packs/customer-ops/`): Chăm sóc khách hàng, tra cứu chính sách bảo hành, xử lý khiếu nại dịch vụ.
+  - **Financial Shared Services** (`domain_packs/financial-services/`): Quy trình thanh quyết toán, hóa đơn, phê duyệt ngân sách.
 
 ### 1.2. Mục tiêu Kỹ thuật Cốt lõi (Architectural Goals)
-- **Decoupled Domain Pack Architecture**: Tách rời 100% mã nguồn Core Engine (`agent_core/`) khỏi định nghĩa nghiệp vụ (`domain_packs/`). Cho phép mở rộng sang mọi lĩnh vực (IT Helpdesk, Customer Operations, Pháp chế, Tài chính) chỉ qua khai báo declarative YAML.
-- **Dynamic Agent Construction & Canonical Tool Resolution**: Khởi tạo cấu trúc cây Agent phân cấp và tự động phân giải công cụ từ `agent_core/tools/registry.py` tại runtime, loại bỏ hoàn toàn hardcoded agent factories.
+- **Decoupled Domain Pack Architecture**: Tách rời 100% mã nguồn Core Engine (`agent_core/`) khỏi định nghĩa nghiệp vụ (`domain_packs/`). Cho phép mở rộng sang bất kỳ bài toán nghiệp vụ nào chỉ qua khai báo declarative YAML.
+- **Dynamic Agent Construction & Canonical Tool Resolution**: Khởi tạo cấu trúc cây Agent phân cấp và tự động phân giải công cụ từ [`agent_core/tools/registry.py`](agent_core/tools/registry.py) tại runtime, loại bỏ hoàn toàn hardcoded agent factories.
 - **Zero-Trust Security & Indirect Injection Defense**: Tự động tiêm chỉ dẫn phòng thủ Prompt Injection (`INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION`) vào mọi Agent. Kiểm soát chặt chẽ xác thực Google OIDC JWKS, Fail-Closed domain whitelist và 4 cấp độ Clearance ($0 \dots 3$).
 - **Optimistic Concurrency Control (OCC) & Audit Trail**: Quản lý trạng thái Case/Ticket với trường `version` chống ghi đè phân tán và nhật ký `history` bất biến (append-only).
 - **Clearance-Aware Semantic Cache & Resilient RAG**: Phân vùng bộ đệm ngữ nghĩa theo quyền người dùng (`_c0..c3_`), ngăn chặn rò rỉ tri thức nhạy cảm, đồng thời trang bị cơ chế Re-ranker Circuit Breaker tự động fallback về BM25/Cosine khi quá tải.
 - **Serverless Cost Efficiency ($0 Idle Cost)**: Sử dụng BigQuery Serverless Vector Search và Memorystore Redis với Secret Manager Auth/TLS, tối thiểu hóa chi phí hạ tầng tĩnh.
+- **Infrastructure-Isolated Multi-Tenancy**: Triển khai theo mô hình 1 Khách hàng / Tenant = 1 GCP Project riêng biệt, đảm bảo cô lập dữ liệu tuyệt đối và không dùng chung database (No Shared DB Multi-Tenancy).
 
 ---
 
-## 2. KIẾN TRÚC TỔNG THỂ (HIGH-LEVEL ARCHITECTURE)
+## 2. KIẾN TRÚC TỔNG THỂ NỀN TẢNG (HIGH-LEVEL ARCHITECTURE)
 
 ```mermaid
 flowchart TD
     subgraph ClientLayer ["Client & Network Ingress (Zero-Trust)"]
-        User["End User / Enterprise Employee"] -->|HTTPS / TLS 1.3| CloudArmor["Cloud Armor WAF (Rate Limit & DDoS)"]
+        User["Enterprise Requester / Customer / Employee"] -->|HTTPS / TLS 1.3| CloudArmor["Cloud Armor WAF (Rate Limit & DDoS)"]
         CloudArmor --> ExtLB["Global External HTTPS Load Balancer"]
         ExtLB --> ServerlessNEG["Serverless NEG"]
     end
@@ -69,9 +77,9 @@ flowchart TD
         BeforeCB -->|Cache Hit < 25ms| TelemetryCache["Record Cache Hit Telemetry"]
         BeforeCB -->|Cache Miss| RootAgent["Root Orchestrator Agent (Gemini Flash)"]
         
-        RootAgent --> Sub1["L1 Self-Service Specialist (Gemini Flash)"]
-        RootAgent --> Sub2["L2 Enterprise RAG Specialist (Gemini Flash)"]
-        RootAgent --> Sub3["L3 Deep Diagnostics Specialist (Gemini Pro - High Reasoning)"]
+        RootAgent --> Sub1["Tier-1 Self-Service Specialist (Gemini Flash)"]
+        RootAgent --> Sub2["Tier-2 Enterprise RAG Specialist (Gemini Flash)"]
+        RootAgent --> Sub3["Tier-3 Deep Diagnostics & Specialist (Gemini Pro - High Reasoning)"]
         
         Sub1 --> AfterCB["semantic_cache_after_model_callback (eff_clearance)"]
         Sub2 --> AfterCB
@@ -81,11 +89,11 @@ flowchart TD
 
     subgraph ToolRegistryBackends ["Canonical Tool Registry & Enterprise Backends"]
         Sub1 --> CaseTool["Generic Case Tool (Firestore Native OCC / In-Memory)"]
-        Sub1 --> FactTool["L1 Facts Registry (Deterministic SQL Lookup)"]
+        Sub1 --> FactTool["Facts Registry (Deterministic SQL Lookup)"]
         Sub2 --> RAG_MCP["Enterprise RAG MCP (BigQuery Vector Search + Reranker Fallback)"]
-        Sub2 --> EmailTool["Email Draft Tool (Standard Corporate Template)"]
-        Sub3 --> PluginLog["Plugin: IT Log Analyzer RCA"]
-        Sub3 --> ObligationTool["L3 Obligations Registry (Compliance & SLA Review)"]
+        Sub2 --> EmailTool["Notification & Email Draft Tool"]
+        Sub3 --> PluginLog["Domain Diagnostic Plugins (Log Analyzer, RCA, Data Ingestion)"]
+        Sub3 --> ObligationTool["Obligations Registry (Compliance & SLA Review)"]
     end
 ```
 
@@ -111,9 +119,7 @@ domain_packs/<pack_id>/
 - **Phân giải Công cụ Tự động & Canonical Fallback (`resolve_tools`)**: Đọc danh sách tên tool từ `agents.yaml`, tự động tìm kiếm trong Domain Pack hoặc fallback về [`agent_core/tools/registry.py`](agent_core/tools/registry.py). Nếu tool không tồn tại, hệ thống báo lỗi rõ ràng kèm danh sách tool hợp lệ.
 - **Tiêm Phòng vệ Prompt Injection Tự động**: Tự động tiêm `INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION` vào cuối instruction của mọi Agent:
   ```python
-  full_instruction = f"{user_instruction}
-
-{INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION}"
+  full_instruction = f"{user_instruction}\n\n{INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION}"
   ```
 - **Xây dựng Cây Phân cấp Đệ quy (`build_agent_hierarchy`)**: Duyệt cây `sub_agents` từ `entry_agent`, tạo các đối tượng `Agent` của Google ADK với đúng mô hình AI và danh sách công cụ đã phân giải.
 
@@ -134,17 +140,17 @@ def register_tool(name: str):
     return decorator
 ```
 
-### 4.2. Bảng Phân Tầng Đặc Vụ Chuẩn
+### 4.2. Khung Phân Tầng Đặc Vụ Mẫu (Multi-Tier Agent Framework)
 
-| Tiêu chí | L1 Self-Service Specialist | L2 Enterprise RAG Specialist | L3 Deep Diagnostics Specialist |
-| :--- | :--- | :--- | :--- |
-| **Trọng tâm Nghiệp vụ** | FAQ, Tra cứu Fact cứng, Tự phục vụ, Quản lý Case/Ticket | Tra cứu tài liệu nghiệp vụ (ERP/HRM/CRM), Soạn email | Phân tích Log RCA, Rà soát SLA & Cam kết pháp lý |
-| **Mô hình AI** | `gemini-2.5-flash` / `gemini-1.5-flash` | `gemini-2.5-flash` / `gemini-1.5-flash` | `gemini-2.5-pro` (Reasoning CoT) |
-| **Công cụ Khả dụng** | `lookup_fact`, `create_case`, `get_case`, `list_user_cases`, `update_case_status` | `search_enterprise_knowledge`, `get_system_manual`, `draft_email_response` | `analyze_system_logs_for_rca`, `get_obligation`, `list_contract_obligations`, `review_it_contract_sla` |
-| **Hạn mức Gọi** | 60 req/phút | 60 req/phút | **10 req/phút / user** (Bảo vệ Quota Gemini Pro) |
+| Tầng Đặc Vụ | Trọng tâm Nghiệp vụ Nền tảng | Mô hình AI Đề xuất | Công cụ Tiêu biểu | Hạn mức Gọi (Rate Limit) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Tier-0: Root Orchestrator** | Tiếp nhận yêu cầu, phân tích ý định, định tuyến chuyên gia | `gemini-2.5-flash` / `gemini-1.5-flash` | Sub-agents delegation | Không giới hạn nội bộ |
+| **Tier-1: Self-Service Specialist** | FAQ, Tra cứu Fact cứng, Tự phục vụ, Quản lý Case/Ticket | `gemini-2.5-flash` / `gemini-1.5-flash` | `lookup_fact`, `create_case`, `get_case`, `list_user_cases`, `update_case_status` | 60 req/phút / user |
+| **Tier-2: Enterprise RAG Specialist** | Tra cứu tài liệu nghiệp vụ sâu, quy trình nội bộ, soạn thông báo | `gemini-2.5-flash` / `gemini-1.5-flash` | `search_enterprise_knowledge`, `get_system_manual`, `draft_email_response` | 60 req/phút / user |
+| **Tier-3: Deep Diagnostics & Specialist** | Phân tích dữ liệu chuyên sâu, chẩn đoán nguyên nhân lỗi, rà soát pháp lý | `gemini-2.5-pro` (Reasoning CoT) | Domain-specific plugins, `get_obligation`, `list_contract_obligations` | **10 req/phút / user** (Bảo vệ Quota Pro) |
 
 ### 4.3. Quản lý Trạng Thái Case với Optimistic Concurrency Control (OCC)
-Mô hình `CaseRecord` được thiết kế nhằm đảm bảo tính nhất quán dữ liệu phân tán:
+Mô hình `CaseRecord` tổng quát phục vụ cho mọi domain (IT Ticket, HR Request, Legal Inquiry, Customer Case):
 - **Trường dữ liệu**: `case_id`, `user_id`, `title`, `description`, `category`, `priority` (`P1`..`P4`), `status`, `assigned_tier`, `version` (int), `history` (list[dict]), `created_at`, `updated_at`.
 - **Cơ chế OCC**: Mỗi thao tác cập nhật (`update_case_status`, `escalate_case`, `resolve_case`) đều kiểm tra `expected_version == current_version`. Nếu phát hiện xung đột ghi đè đồng thời, hệ thống ném `CaseConcurrencyConflictError`.
 - **Append-Only Audit Trail**: Mọi thay đổi trạng thái, người thực hiện, lý do và thời gian được ghi nối tiếp vào mảng `history`, đảm bảo khả năng kiểm toán 100%.
@@ -157,10 +163,10 @@ Mô hình `CaseRecord` được thiết kế nhằm đảm bảo tính nhất qu
 
 | Cấp độ | Tên Cấp độ (Clearance Level) | Đối tượng Truy cập | Phạm vi Dữ liệu & Tài liệu |
 | :---: | :--- | :--- | :--- |
-| **0** | **PUBLIC** | Tất cả nhân viên, khách hàng | FAQ chung, Hướng dẫn Wi-Fi, Máy in, Quy trình Reset Pass |
-| **1** | **INTERNAL** | Nhân viên chính thức (`employee`) | Sổ tay nội bộ, Quy định chấm công HRM, Quy trình nghỉ phép |
-| **2** | **CONFIDENTIAL** | Quản lý, Kỹ sư IT, Kế toán | Cấu hình mạng VPN, Sơ đồ ERP SAP, Danh sách Lead CRM |
-| **3** | **RESTRICTED** | Ban Giám đốc, Lead SRE, Pháp chế | Hợp đồng SLA, Khóa bảo mật hạ tầng, Nhật ký Audit log |
+| **0** | **PUBLIC** | Tất cả người dùng trong tổ chức, khách hàng vãng lai | FAQ chung, Hướng dẫn cơ bản, Thông tin dịch vụ công khai |
+| **1** | **INTERNAL** | Nhân viên chính thức (`employee`, `requester`) | Quy chế nội bộ, Sổ tay nhân viên, Quy trình nghiệp vụ chuẩn (SOP) |
+| **2** | **CONFIDENTIAL** | Quản lý, Chuyên viên vận hành, Kỹ sư kỹ thuật | Tài liệu kiến trúc, Cấu hình hệ thống, Dữ liệu khách hàng CRM |
+| **3** | **RESTRICTED** | Ban Giám đốc, Lead SRE, Chuyên viên Pháp chế / CISO | Hợp đồng bảo mật, Cam kết pháp lý SLA/DPA, Khóa bí mật, Audit logs |
 
 ### 5.2. 5 Lớp Phòng Thủ Chuyên Sâu (Defense-in-Depth)
 1. **Lớp 1 (Ingress Authentication)**: `SSOAuthenticationMiddleware` kiểm tra chữ ký số RS256 qua Google JWKS (`accounts.google.com`), từ chối miền lạ qua `ALLOWED_DOMAINS` (Fail-Closed).
@@ -191,17 +197,17 @@ Mô hình `CaseRecord` được thiết kế nhằm đảm bảo tính nhất qu
 ## 7. KIẾN TRÚC ENTERPRISE RAG, RERANKER FALLBACK, FACTS & OBLIGATIONS
 
 ### 7.1. Động Cơ Enterprise RAG & Re-ranker Circuit Breaker
-- **BigQuery Vector Search**: Thực thi truy vấn `VECTOR_SEARCH` trên dataset `it_helpdesk_kb`, áp dụng SQL pre-filtering theo `clearance_level <= @user_clearance`.
+- **BigQuery Vector Search**: Thực thi truy vấn `VECTOR_SEARCH` trên dataset tri thức doanh nghiệp, áp dụng SQL pre-filtering theo `clearance_level <= @user_clearance`.
 - **Cross-Encoder Re-ranker**: Chuẩn hóa điểm số và sắp xếp lại tài liệu theo độ tương quan ngữ cảnh sâu.
 - **Graceful Fallback & Circuit Breaker**: Nếu model weights của Cross-Encoder không khả dụng hoặc bị quá tải, hệ thống tự động fallback mềm sang BM25 / Vector Cosine Distance, ghi log cảnh báo và duy trì phản hồi liên tục mà không gián đoạn dịch vụ.
 
-### 7.2. Bảng Tri Thức Cứng (L1 Facts Registry)
-- **Mục đích**: Loại bỏ hoàn toàn ảo giác (hallucination) cho các thông số kỹ thuật, hạn mức số học, địa chỉ IP/Port, ngưỡng SLA cố định.
+### 7.2. Bảng Tri Thức Cứng (Facts Registry)
+- **Mục đích**: Loại bỏ hoàn toàn ảo giác (hallucination) cho các thông số kỹ thuật, định mức, quy định cứng, địa chỉ máy chủ, hạn mức giao dịch.
 - **Công cụ**: `@register_tool("lookup_fact")` thực hiện deterministic point-lookup qua `BaseFactsStore` (In-Memory hoặc BigQuery Table `enterprise_facts`).
 
-### 7.3. Sổ Đăng Ký Cam Kết Pháp Lý (L3 Obligations Registry)
-- **Mục đích**: Lưu trữ các điều khoản cam kết pháp lý, thời gian phản hồi MTTR, điều khoản bảo mật DPA/GDPR có giá trị ràng buộc.
-- **Công cụ**: `@register_tool("get_obligation")` và `@register_tool("list_contract_obligations")` được bảo vệ nghiêm ngặt bằng phân quyền RBAC (`compliance_officer`, `legal_counsel`, `it_admin`).
+### 7.3. Sổ Đăng Ký Cam Kết & Tuân Thủ (Obligations Registry)
+- **Mục đích**: Lưu trữ các điều khoản cam kết pháp lý, thỏa thuận SLA, điều khoản bảo mật DPA/GDPR có giá trị ràng buộc.
+- **Công cụ**: `@register_tool("get_obligation")` và `@register_tool("list_contract_obligations")` được bảo vệ nghiêm ngặt bằng phân quyền RBAC (`compliance_officer`, `legal_counsel`, `admin`).
 
 ---
 
@@ -243,7 +249,7 @@ Vô hiệu hóa `/docs`, `/redoc`, `/openapi.json` khi `ENVIRONMENT=production` 
   ```json
   {
     "status": "healthy",
-    "service": "it-helpdesk-agent",
+    "service": "enterprise-multi-agent-platform",
     "core_version": "2.2.0",
     "pack_id": "it-helpdesk",
     "pack_version": "1.0.0",
