@@ -59,6 +59,8 @@ class Obligation(BaseModel):
     date_expires: Optional[str] = None  # YYYY-MM-DD
     status: str = "active"  # 'active' | 'superseded' | 'expired'
     source_document_path: Optional[str] = None
+    clearance_level: int = 1
+    allowed_roles: list[str] = Field(default_factory=list)
 
 
 class SectionHierarchy(BaseModel):

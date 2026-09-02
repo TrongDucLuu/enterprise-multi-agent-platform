@@ -72,6 +72,7 @@ def default_admin_user():
 def test_large_log_file_reference_rca(monkeypatch):
     """Verify analyze_system_logs_for_rca handles 50KB+ log file via GCS log_ref (P1.4)."""
     from unittest.mock import patch
+    monkeypatch.setenv("ALLOWED_ARTIFACT_BUCKET", "company-artifacts-dev")
     lines = ["[2026-09-01 10:00:00] INFO Normal healthcheck ping ok\n"] * 1000
     lines.append("[2026-09-01 10:05:00] ERROR java.lang.OutOfMemoryError: Java heap space at com.erp.OrderService.process(OrderService.java:120)\n")
     fake_log_content = "".join(lines)
@@ -92,6 +93,7 @@ def test_large_log_file_reference_rca(monkeypatch):
 def test_large_contract_file_reference_review(monkeypatch):
     """Verify review_it_contract_sla handles contract file via GCS contract_ref (P1.4)."""
     from unittest.mock import patch
+    monkeypatch.setenv("ALLOWED_ARTIFACT_BUCKET", "company-artifacts-dev")
     fake_contract = """
 MASTER IT SERVICES AGREEMENT
 1. Uptime: The Vendor commits to 99.0% service availability per calendar month.

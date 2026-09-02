@@ -8,7 +8,88 @@ import json
 from pathlib import Path
 import pytest
 from google.cloud import bigquery
-from scripts.ingest.loaders import get_knowledge_articles_schema, get_dlq_schema
+from scripts.ingest.loaders import (
+    get_knowledge_articles_schema,
+    get_dlq_schema,
+    get_facts_schema,
+    get_obligations_schema,
+)
+
+
+def extract_terraform_schema_for_resource(resource_id: str) -> list[dict]:
+    """Parses JSON schema block for a specified google_bigquery_table from deployment/terraform/main.tf."""
+    tf_path = Path(__file__).parent.parent.parent / "deployment" / "terraform" / "main.tf"
+    assert tf_path.exists(), f"Terraform main.tf not found at {tf_path}"
+
+    content = tf_path.read_text(encoding="utf-8")
+    pattern = rf'resource\s+"google_bigquery_table"\s+"{resource_id}"\s*\{{.*?schema\s*=\s*<<EOF\s*(.*?)\s*EOF'
+    match = re.search(pattern, content, re.DOTALL)
+    assert match is not None, f"Could not find schema block in google_bigquery_table.{resource_id}"
+
+    raw_json = match.group(1).strip()
+    schema_fields = json.loads(raw_json)
+    assert isinstance(schema_fields, list), f"Terraform schema JSON for {resource_id} must be a list"
+    return schema_fields
+
+
+def test_facts_schema_parity_fields_and_types():
+    """Verifies that all 13 fields, types, and modes match between Terraform and loaders.py get_facts_schema()."""
+    tf_schema = extract_terraform_schema_for_resource("l1_facts")
+    py_schema = get_facts_schema()
+
+    assert len(tf_schema) == len(py_schema) == 13, (
+        f"Facts Schema count mismatch: Terraform has {len(tf_schema)} fields, "
+        f"Python get_facts_schema() has {len(py_schema)} fields (Expected exactly 13)."
+    )
+
+    tf_dict = {f["name"]: f for f in tf_schema}
+    py_dict = {f.name: f for f in py_schema}
+
+    for name, py_field in py_dict.items():
+        assert name in tf_dict, f"Field '{name}' defined in Python get_facts_schema() is missing from Terraform main.tf!"
+        tf_field = tf_dict[name]
+
+        expected_type = normalize_type(py_field.field_type)
+        actual_type = normalize_type(tf_field.get("type", ""))
+        assert actual_type == expected_type, (
+            f"Type mismatch for Facts field '{name}': Python={expected_type}, Terraform={actual_type}"
+        )
+
+        expected_mode = py_field.mode.upper() if py_field.mode else "NULLABLE"
+        actual_mode = tf_field.get("mode", "NULLABLE").upper()
+        assert actual_mode == expected_mode, (
+            f"Mode mismatch for Facts field '{name}': Python={expected_mode}, Terraform={actual_mode}"
+        )
+
+
+def test_obligations_schema_parity_fields_and_types():
+    """Verifies that all 15 fields, types, and modes match between Terraform and loaders.py get_obligations_schema()."""
+    tf_schema = extract_terraform_schema_for_resource("l3_obligations")
+    py_schema = get_obligations_schema()
+
+    assert len(tf_schema) == len(py_schema) == 15, (
+        f"Obligations Schema count mismatch: Terraform has {len(tf_schema)} fields, "
+        f"Python get_obligations_schema() has {len(py_schema)} fields (Expected exactly 15)."
+    )
+
+    tf_dict = {f["name"]: f for f in tf_schema}
+    py_dict = {f.name: f for f in py_schema}
+
+    for name, py_field in py_dict.items():
+        assert name in tf_dict, f"Field '{name}' defined in Python get_obligations_schema() is missing from Terraform main.tf!"
+        tf_field = tf_dict[name]
+
+        expected_type = normalize_type(py_field.field_type)
+        actual_type = normalize_type(tf_field.get("type", ""))
+        assert actual_type == expected_type, (
+            f"Type mismatch for Obligations field '{name}': Python={expected_type}, Terraform={actual_type}"
+        )
+
+        expected_mode = py_field.mode.upper() if py_field.mode else "NULLABLE"
+        actual_mode = tf_field.get("mode", "NULLABLE").upper()
+        assert actual_mode == expected_mode, (
+            f"Mode mismatch for Obligations field '{name}': Python={expected_mode}, Terraform={actual_mode}"
+        )
 
 
 def extract_terraform_schema() -> list[dict]:

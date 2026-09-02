@@ -53,10 +53,6 @@ def resolve_artifact_content(
 
     clean_ref = ref.strip()
 
-    # If ref contains newlines, it represents inline raw text passed into the ref parameter
-    if "\n" in clean_ref:
-        return clean_ref, None
-
     # Handle Cloud Storage gs:// URI with strict Whitelist validation
     if clean_ref.startswith("gs://"):
         match = GCS_URI_PATTERN.match(clean_ref)

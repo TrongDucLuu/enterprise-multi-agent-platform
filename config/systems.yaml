@@ -29,6 +29,25 @@ user_role_mappings:
     - "sales_manager"
     - "sales_rep"
 
+# Google Workspace / Okta / Enterprise Group Role Mappings
+group_role_mappings:
+  "gcp-it-admins@company.com":
+    - "it_admin"
+    - "sys_admin"
+  "gcp-security-team@company.com":
+    - "it_admin"
+    - "security_officer"
+  "gcp-hr-admins@company.com":
+    - "hr_admin"
+  "gcp-hr-specialists@company.com":
+    - "hr_specialist"
+  "gcp-erp-finance@company.com":
+    - "erp_user"
+    - "finance_user"
+    - "accountant"
+  "all-employees@company.com":
+    - "employee"
+
 systems:
   ERP:
     display_name: "Enterprise Resource Planning (ERP)"

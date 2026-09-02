@@ -63,19 +63,7 @@ current_sso_raw_token: contextvars.ContextVar[Optional[str]] = contextvars.Conte
 
 def get_current_sso_user() -> Optional[SSOUser]:
     """Retrieves the authenticated SSO user from the current async context."""
-    user = current_sso_user.get()
-    if user is None and ALLOW_LOCAL_DEV_SSO:
-        # Provide default mock user context in local dev mode
-        return SSOUser(
-            user_id="dev-user-001",
-            email="dev.employee@company.com",
-            email_verified=True,
-            full_name="Local Dev Employee",
-            department="Engineering",
-            roles=["employee", "it_admin"],
-            is_authenticated=True,
-        )
-    return user
+    return current_sso_user.get()
 
 
 def get_current_sso_token() -> Optional[str]:
@@ -98,8 +86,6 @@ def require_role(required_roles: list[str]) -> tuple[bool, Optional[str]]:
     """
     user = get_current_sso_user()
     if not user:
-        if ALLOW_LOCAL_DEV_SSO:
-            return True, None
         return False, "Yêu cầu đăng nhập xác thực SSO trước khi sử dụng công cụ này."
 
     user_roles = [r.lower() for r in user.roles]

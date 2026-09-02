@@ -334,7 +334,7 @@ def get_obligation(obligation_id: str) -> dict:
         }
 
 
-RETRIEVE_K = 20
+RETRIEVE_K = 10
 FINAL_K = 3
 
 

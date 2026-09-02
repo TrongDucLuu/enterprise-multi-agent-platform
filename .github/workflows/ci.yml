@@ -13,6 +13,11 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.12", "3.13"]
+        environment:
+          - name: "development"
+            allow_local_dev_sso: "true"
+          - name: "production"
+            allow_local_dev_sso: "false"
 
     steps:
       - name: Checkout Code
@@ -33,9 +38,12 @@ jobs:
 
       - name: Run Pytest Suite (Unit, Security & Adversarial Tests)
         env:
-          ALLOW_LOCAL_DEV_SSO: "true"
+          ENVIRONMENT: ${{ matrix.environment.name }}
+          ALLOW_LOCAL_DEV_SSO: ${{ matrix.environment.allow_local_dev_sso }}
+          KNOWLEDGE_BACKEND: "in_memory"
           SEMANTIC_CACHE_ENABLED: "true"
           RATE_LIMIT_ENABLED: "true"
+          ALLOWED_ARTIFACT_BUCKET: "company-artifacts-dev"
         run: |
           uv run pytest tests/ -v --cov=agent_core --cov-report=term-missing
 

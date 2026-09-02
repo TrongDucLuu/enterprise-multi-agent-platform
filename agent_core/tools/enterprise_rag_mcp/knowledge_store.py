@@ -658,27 +658,28 @@ def resolve_security_context(
 ) -> SecurityContext:
     """
     Resolves the effective SecurityContext in a strict, fail-closed manner.
-    Never fabricates roles or elevated clearance levels.
+    1. If explicit SecurityContext is passed, use it.
+    2. If explicit roles/clearance are passed, construct from them.
+    3. If active authenticated SSO user exists in contextvar, construct from SSO user.
+    4. Otherwise, defaults strictly to SecurityContext.anonymous() (clearance 0, roles []).
     """
     if security_context is not None:
         return security_context
     if user_roles is not None or user_clearance is not None:
         return SecurityContext.from_user(roles=user_roles, clearance_level=user_clearance)
+    
     try:
         from agent_core.app_utils.sso_auth import get_current_sso_user
-        sso_u = get_current_sso_user()
-    except ImportError:
-        try:
-            from app_utils.sso_auth import get_current_sso_user
-            sso_u = get_current_sso_user()
-        except ImportError:
-            sso_u = None
-    if sso_u:
-        return SecurityContext.from_user(
-            user_id=getattr(sso_u, "email", getattr(sso_u, "user_id", "anonymous")),
-            roles=getattr(sso_u, "roles", []),
-            clearance_level=getattr(sso_u, "clearance_level", None),
-        )
+        current_user = get_current_sso_user()
+        if current_user:
+            return SecurityContext.from_user(
+                user_id=getattr(current_user, "email", getattr(current_user, "user_id", "anonymous")),
+                roles=getattr(current_user, "roles", []),
+                clearance_level=getattr(current_user, "clearance_level", None),
+            )
+    except Exception:
+        pass
+
     return SecurityContext.anonymous()
 
 
@@ -2222,7 +2223,9 @@ class BigQueryFactsStore(BaseFactsStore):
 
 
 def get_facts_store() -> BaseFactsStore:
-    backend = (os.getenv("FACTS_BACKEND") or os.getenv("KNOWLEDGE_BACKEND", "in_memory")).lower()
+    is_prod = os.getenv("ENVIRONMENT", "").lower() == "production" or bool(os.getenv("K_SERVICE"))
+    default_backend = "bigquery" if is_prod else "in_memory"
+    backend = (os.getenv("FACTS_BACKEND") or os.getenv("KNOWLEDGE_BACKEND") or default_backend).lower().strip()
     if backend == "bigquery":
         return BigQueryFactsStore()
     return InMemoryFactsStore()
@@ -2232,11 +2235,13 @@ def get_knowledge_store() -> BaseKnowledgeStore:
     """
     Factory to retrieve the appropriate Knowledge Store backend based on environment configuration.
     Supported backends:
-      - 'in_memory' / 'mock' (default): In-memory keyword store for local dev & unit tests.
-      - 'bigquery': BigQuery serverless vector search for cost-effective enterprise data warehouse RAG.
+      - 'in_memory' / 'mock': In-memory keyword store for local dev & unit tests.
+      - 'bigquery': BigQuery serverless vector search (default in production).
       - 'vertex_ai_search' / 'discoveryengine': Google Cloud Vertex AI Search Managed Enterprise Grounding.
     """
-    backend = os.getenv("KNOWLEDGE_BACKEND", "in_memory").lower().strip()
+    is_prod = os.getenv("ENVIRONMENT", "").lower() == "production" or bool(os.getenv("K_SERVICE"))
+    default_backend = "bigquery" if is_prod else "in_memory"
+    backend = (os.getenv("KNOWLEDGE_BACKEND") or default_backend).lower().strip()
     if backend in ("vertex_ai_search", "vertex_search", "discoveryengine", "discovery_engine"):
         return VertexAISearchKnowledgeStore()
     if backend == "bigquery":

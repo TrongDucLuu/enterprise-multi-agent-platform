@@ -169,6 +169,48 @@ def get_dlq_schema() -> list[Any]:
     ]
 
 
+def get_facts_schema() -> list[Any]:
+    """Returns the canonical BigQuery SchemaField list for enterprise L1 facts."""
+    from google.cloud import bigquery
+    return [
+        bigquery.SchemaField("fact_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("domain", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("key", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("value", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("value_type", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("unit", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("source_document", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("date_updated", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("updated_by", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("status", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("notes", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("clearance_level", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("allowed_roles", "STRING", mode="REPEATED"),
+    ]
+
+
+def get_obligations_schema() -> list[Any]:
+    """Returns the canonical BigQuery SchemaField list for enterprise L3 contract obligations."""
+    from google.cloud import bigquery
+    return [
+        bigquery.SchemaField("obligation_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("source_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("source_title", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("authority", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("article", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("description", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("severity", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("applies_to", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("date_added", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("date_effective", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("date_expires", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("status", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("source_document_path", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("clearance_level", "INTEGER", mode="NULLABLE"),
+        bigquery.SchemaField("allowed_roles", "STRING", mode="REPEATED"),
+    ]
+
+
 def persist_dead_letter_queue(
     dead_letter_queue: list[dict[str, Any]],
     project_id: Optional[str] = None,

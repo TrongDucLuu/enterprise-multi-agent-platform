@@ -319,6 +319,210 @@ EOF
   depends_on = [google_bigquery_dataset.kb_dataset]
 }
 
+resource "google_bigquery_table" "l1_facts" {
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.kb_dataset.dataset_id
+  table_id            = "l1_facts"
+  friendly_name       = "Enterprise L1 Facts Store"
+  description         = "Deterministic enterprise facts with clearance levels and RBAC role restrictions"
+  deletion_protection = var.environment == "production" ? true : false
+
+  clustering = ["domain", "key"]
+
+  schema = <<EOF
+[
+  {
+    "name": "fact_id",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Unique fact identifier (e.g. FACT-ERP-001)"
+  },
+  {
+    "name": "domain",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Domain or system name (e.g. ERP, HRM, CRM)"
+  },
+  {
+    "name": "key",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Deterministic fact key (e.g. erp.po.sla_hours)"
+  },
+  {
+    "name": "value",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Fact string or serialized value"
+  },
+  {
+    "name": "value_type",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Data type of value (int, float, string, bool)"
+  },
+  {
+    "name": "unit",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Measurement unit if applicable"
+  },
+  {
+    "name": "source_document",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Source reference document path"
+  },
+  {
+    "name": "date_updated",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Last updated date in YYYY-MM-DD"
+  },
+  {
+    "name": "updated_by",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Author or pipeline that updated this fact"
+  },
+  {
+    "name": "status",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Lifecycle status (active, deprecated, superseded)"
+  },
+  {
+    "name": "notes",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Operational notes or business context"
+  },
+  {
+    "name": "clearance_level",
+    "type": "INTEGER",
+    "mode": "NULLABLE",
+    "description": "Numeric clearance level required (0=PUBLIC, 1=INTERNAL, 2=CONFIDENTIAL, 3=RESTRICTED)"
+  },
+  {
+    "name": "allowed_roles",
+    "type": "STRING",
+    "mode": "REPEATED",
+    "description": "Authorized SSO roles allowed to query this fact"
+  }
+]
+EOF
+
+  depends_on = [google_bigquery_dataset.kb_dataset]
+}
+
+resource "google_bigquery_table" "l3_obligations" {
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.kb_dataset.dataset_id
+  table_id            = "l3_obligations"
+  friendly_name       = "Enterprise L3 Contract Obligations"
+  description         = "SLA and legal contract obligations with RBAC and MAC controls"
+  deletion_protection = var.environment == "production" ? true : false
+
+  clustering = ["source_id", "severity"]
+
+  schema = <<EOF
+[
+  {
+    "name": "obligation_id",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Unique obligation identifier (e.g. OBL-SAP-001)"
+  },
+  {
+    "name": "source_id",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Source contract ID"
+  },
+  {
+    "name": "source_title",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Source contract title"
+  },
+  {
+    "name": "authority",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Governing authority or signing party"
+  },
+  {
+    "name": "article",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Contract section or clause number"
+  },
+  {
+    "name": "description",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Obligation description or legal requirement"
+  },
+  {
+    "name": "severity",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Severity level (critical, high, medium, low)"
+  },
+  {
+    "name": "applies_to",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Target party (vendor, customer, both)"
+  },
+  {
+    "name": "date_added",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Date obligation added in YYYY-MM-DD"
+  },
+  {
+    "name": "date_effective",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Effective start date in YYYY-MM-DD"
+  },
+  {
+    "name": "date_expires",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Expiration date in YYYY-MM-DD"
+  },
+  {
+    "name": "status",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Lifecycle status (active, superseded, expired)"
+  },
+  {
+    "name": "source_document_path",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Cloud Storage path to full signed contract PDF"
+  },
+  {
+    "name": "clearance_level",
+    "type": "INTEGER",
+    "mode": "NULLABLE",
+    "description": "Numeric clearance level required (0=PUBLIC, 1=INTERNAL, 2=CONFIDENTIAL, 3=RESTRICTED)"
+  },
+  {
+    "name": "allowed_roles",
+    "type": "STRING",
+    "mode": "REPEATED",
+    "description": "Authorized SSO roles allowed to inspect this obligation"
+  }
+]
+EOF
+
+  depends_on = [google_bigquery_dataset.kb_dataset]
+}
+
 # Scope BigQuery read-only access strictly to the KB dataset (Least Privilege)
 resource "google_bigquery_dataset_iam_member" "kb_dataset_viewer" {
   project    = var.project_id

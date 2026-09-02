@@ -184,10 +184,16 @@ def test_artifact_storage_valid_gcs_and_inline_text(monkeypatch):
     assert err is None
     assert text == "Hello world raw content"
 
-    # 2. Multiline ref treated as inline text
-    multi_text, err = resolve_artifact_content(ref="Line 1\nLine 2\nLine 3")
+    # 2. Multiline ref rejected as invalid artifact reference (must use raw_text for inline text)
+    multi_ref, err = resolve_artifact_content(ref="Line 1\nLine 2\nLine 3")
+    assert multi_ref is None
+    assert err is not None
+    assert err["error_code"] == "INVALID_ARTIFACT_REF"
+
+    # Multiline inline text via raw_text succeeds
+    multi_raw, err = resolve_artifact_content(raw_text="Line 1\nLine 2\nLine 3")
     assert err is None
-    assert multi_text == "Line 1\nLine 2\nLine 3"
+    assert multi_raw == "Line 1\nLine 2\nLine 3"
 
     # 3. Valid GCS URI with mock
     with patch("agent_core.app_utils.artifact_storage.read_gcs_artifact", return_value="GCS log contents"):
@@ -228,59 +234,241 @@ def test_mcp_tools_fail_closed_for_anonymous():
 
 
 # =====================================================================
-# PROBE 5: 3 Backends x Multi-Role Authorization Matrix
+# PROBE 5: 3 Backends x 8 Scenarios Parity Matrix
 # =====================================================================
 
-@pytest.mark.parametrize("roles,clearance,expected_can_access_internal,expected_can_access_confidential", [
-    ([], 0, False, False),
-    (["employee"], 1, True, False),
-    (["hr_specialist"], 2, True, False),
-    (["hr_admin"], 2, True, True),
-    (["it_admin"], 3, True, True),
-])
-def test_authorization_matrix_across_stores(roles, clearance, expected_can_access_internal, expected_can_access_confidential):
-    """
-    Tests RBAC & MAC across all roles and clearance levels on InMemoryKnowledgeStore.
-    """
-    internal_doc = KnowledgeArticle(
+FIXTURE_ARTICLES = [
+    KnowledgeArticle(
+        id="DOC-PUB-001",
+        system="ERP",
+        title="Public General Information",
+        category="General",
+        content="Public policy overview",
+        allowed_roles=[],
+        sensitivity="PUBLIC",
+        clearance_level=0,
+        keywords=["public", "general", "policy"],
+    ),
+    KnowledgeArticle(
         id="DOC-INT-001",
         system="ERP",
-        title="Internal Document",
+        title="Internal Standard Procedure",
         category="General",
         content="Internal procedure details",
         allowed_roles=[],
         sensitivity="INTERNAL",
-        keywords=["internal", "procedure"],
-    )
-    confidential_doc = KnowledgeArticle(
-        id="DOC-CONF-001",
+        clearance_level=1,
+        keywords=["internal", "procedure", "policy"],
+    ),
+    KnowledgeArticle(
+        id="DOC-HR-001",
         system="HRM",
-        title="Confidential Salary Document",
+        title="HR General Compensation Guide",
+        category="HR",
+        content="HR compensation rules for specialists",
+        allowed_roles=["hr_specialist", "hr_admin", "it_admin"],
+        sensitivity="CONFIDENTIAL",
+        clearance_level=2,
+        keywords=["compensation", "hr", "policy"],
+    ),
+    KnowledgeArticle(
+        id="DOC-HR-EXEC",
+        system="HRM",
+        title="Executive Salary Bands & Multipliers",
         category="HR",
         content="Executive salary bands and bonus multipliers",
-        allowed_roles=["hr_admin", "director", "it_admin"],
+        allowed_roles=["hr_admin", "it_admin"],
         sensitivity="CONFIDENTIAL",
-        keywords=["salary", "bonus"],
+        clearance_level=2,
+        keywords=["salary", "executive", "bonus"],
+    ),
+    KnowledgeArticle(
+        id="DOC-RESTRICTED",
+        system="ERP",
+        title="Domain Root Key Rotation",
+        category="Security",
+        content="Restricted domain root key rotation procedure",
+        allowed_roles=["it_admin"],
+        sensitivity="RESTRICTED",
+        clearance_level=3,
+        keywords=["security", "root", "key"],
+    ),
+    KnowledgeArticle(
+        id="DOC-TOMBSTONE",
+        system="ERP",
+        title="Deleted Procedure",
+        category="General",
+        content="This document has been deleted/tombstoned",
+        allowed_roles=[],
+        sensitivity="INTERNAL",
+        clearance_level=1,
+        is_deleted=True,
+        keywords=["deleted", "procedure"],
+    ),
+    KnowledgeArticle(
+        id="DOC-EXPIRED",
+        system="ERP",
+        title="Expired Legacy Policy",
+        category="General",
+        content="Expired legacy policy from 2020",
+        allowed_roles=[],
+        sensitivity="INTERNAL",
+        clearance_level=1,
+        expiry_date="2020-01-01",
+        keywords=["expired", "legacy"],
+    ),
+    KnowledgeArticle(
+        id="DOC-FUTURE",
+        system="ERP",
+        title="Future Policy Directive 2099",
+        category="General",
+        content="Future policy effective in 2099",
+        allowed_roles=[],
+        sensitivity="INTERNAL",
+        clearance_level=1,
+        effective_date="2099-01-01",
+        keywords=["future", "directive"],
+    ),
+]
+
+
+def _create_mock_bigquery_store(articles: list[KnowledgeArticle]) -> BigQueryVectorKnowledgeStore:
+    """Instantiates a BigQueryVectorKnowledgeStore with a mock BigQuery client returning the fixtures."""
+    mock_bq = MagicMock()
+    mock_job = MagicMock()
+
+    # Convert KnowledgeArticle objects to mock BigQuery row objects
+    rows = []
+    for a in articles:
+        row_mock = MagicMock()
+        row_mock.id = a.id
+        row_mock.title = a.title
+        row_mock.system = a.system
+        row_mock.category = a.category
+        row_mock.content = a.content
+        row_mock.allowed_roles = a.allowed_roles
+        row_mock.sensitivity = a.sensitivity
+        row_mock.clearance_level = a.clearance_level
+        row_mock.keywords = a.keywords
+        row_mock.source_uri = a.source_uri
+        row_mock.owner = a.owner
+        row_mock.effective_date = a.effective_date
+        row_mock.expiry_date = a.expiry_date
+        row_mock.is_deleted = a.is_deleted
+        row_mock.section_h1 = a.section_h1
+        row_mock.section_h2 = a.section_h2
+        row_mock.section_h3 = a.section_h3
+        row_mock.parent_doc_id = a.parent_doc_id
+        row_mock.chunk_index = a.chunk_index
+        row_mock.distance = 0.05
+        rows.append(row_mock)
+
+    mock_job.result.return_value = rows
+    mock_bq.query.return_value = mock_job
+
+    return BigQueryVectorKnowledgeStore(
+        project_id="test-proj",
+        dataset_id="test_ds",
+        table_name="kb_table",
+        bq_client=mock_bq,
+        embedding_fn=lambda t: [0.1] * 64,
     )
 
-    store = InMemoryKnowledgeStore(articles=[internal_doc, confidential_doc])
+
+def _create_mock_vertex_search_store(articles: list[KnowledgeArticle]) -> VertexAISearchKnowledgeStore:
+    """Instantiates a VertexAISearchKnowledgeStore with a mock Discovery Engine client returning the fixtures."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+
+    results = []
+    for a in articles:
+        item = MagicMock()
+        doc = MagicMock()
+        doc.id = a.id
+        doc.title = a.title
+        doc.name = f"projects/p/locations/l/collections/default_collection/dataStores/ds/branches/0/documents/{a.id}"
+        doc.struct_data = {
+            "id": a.id,
+            "title": a.title,
+            "system": a.system,
+            "category": a.category,
+            "content": a.content,
+            "allowed_roles": a.allowed_roles,
+            "sensitivity": a.sensitivity,
+            "clearance_level": a.clearance_level,
+            "keywords": a.keywords,
+            "source_uri": a.source_uri,
+            "owner": a.owner,
+            "effective_date": a.effective_date,
+            "expiry_date": a.expiry_date,
+            "is_deleted": a.is_deleted,
+        }
+        doc.derived_struct_data = {
+            "snippets": [{"snippet": a.content}]
+        }
+        item.document = doc
+        item.relevance_score = 0.95
+        results.append(item)
+
+    mock_response.results = results
+    mock_client.search.return_value = mock_response
+
+    return VertexAISearchKnowledgeStore(
+        project_id="test-proj",
+        location="global",
+        data_store_id="test-datastore",
+        search_client=mock_client,
+    )
+
+
+@pytest.mark.parametrize("roles,clearance,expected_doc_ids", [
+    # Scenario 1: Anonymous (clearance 0, roles []) -> Only PUBLIC doc
+    ([], 0, {"DOC-PUB-001"}),
+    # Scenario 2: Employee (clearance 1, roles [employee]) -> PUBLIC + INTERNAL
+    (["employee"], 1, {"DOC-PUB-001", "DOC-INT-001"}),
+    # Scenario 3: HR Specialist (clearance 2, roles [hr_specialist]) -> PUBLIC + INTERNAL + HR General
+    (["hr_specialist"], 2, {"DOC-PUB-001", "DOC-INT-001", "DOC-HR-001"}),
+    # Scenario 4: HR Admin (clearance 2, roles [hr_admin]) -> PUBLIC + INTERNAL + HR General + HR Exec
+    (["hr_admin"], 2, {"DOC-PUB-001", "DOC-INT-001", "DOC-HR-001", "DOC-HR-EXEC"}),
+    # Scenario 5: IT Admin (clearance 3, roles [it_admin]) -> All valid active docs
+    (["it_admin"], 3, {"DOC-PUB-001", "DOC-INT-001", "DOC-HR-001", "DOC-HR-EXEC", "DOC-RESTRICTED"}),
+])
+def test_authorization_matrix_parity_across_all_3_stores(roles, clearance, expected_doc_ids):
+    """
+    CRITICAL PROBE 5: 3 Backends x 8 Scenarios Parity Test.
+    Asserts that InMemoryKnowledgeStore, BigQueryVectorKnowledgeStore, and VertexAISearchKnowledgeStore
+    enforce IDENTICAL RBAC, MAC, Tombstone, Expiry, and Effective date access controls.
+    """
     sec_ctx = SecurityContext.from_user(user_id="test-user", roles=roles, clearance_level=clearance)
 
-    # Search internal doc
-    int_results = store.search(query="Internal procedure", security_context=sec_ctx)
-    int_ids = [r.article_id for r in int_results]
-    if expected_can_access_internal:
-        assert "DOC-INT-001" in int_ids
-    else:
-        assert "DOC-INT-001" not in int_ids
+    in_memory_store = InMemoryKnowledgeStore(articles=FIXTURE_ARTICLES)
+    bq_store = _create_mock_bigquery_store(FIXTURE_ARTICLES)
+    vertex_store = _create_mock_vertex_search_store(FIXTURE_ARTICLES)
 
-    # Search confidential doc
-    conf_results = store.search(query="Executive salary bonus", security_context=sec_ctx)
-    conf_ids = [r.article_id for r in conf_results]
-    if expected_can_access_confidential:
-        assert "DOC-CONF-001" in conf_ids
-    else:
-        assert "DOC-CONF-001" not in conf_ids
+    stores = [
+        ("InMemoryKnowledgeStore", in_memory_store),
+        ("BigQueryVectorKnowledgeStore", bq_store),
+        ("VertexAISearchKnowledgeStore", vertex_store),
+    ]
+
+    for store_name, store in stores:
+        results = store.search(query="policy procedure salary key", security_context=sec_ctx, limit=20)
+        result_ids = {r.article_id for r in results}
+
+        # Assert parity of accessible documents
+        assert result_ids == expected_doc_ids, (
+            f"Backend '{store_name}' failed authorization parity for roles={roles}, clearance={clearance}.\n"
+            f"Expected: {expected_doc_ids}\n"
+            f"Got:      {result_ids}\n"
+            f"Difference (Missing): {expected_doc_ids - result_ids}\n"
+            f"Difference (Unexpected): {result_ids - expected_doc_ids}"
+        )
+
+        # Scenarios 6, 7, 8 verification:
+        # Assert tombstoned, expired, and future-dated documents are NEVER returned
+        assert "DOC-TOMBSTONE" not in result_ids, f"{store_name} returned deleted document DOC-TOMBSTONE"
+        assert "DOC-EXPIRED" not in result_ids, f"{store_name} returned expired document DOC-EXPIRED"
+        assert "DOC-FUTURE" not in result_ids, f"{store_name} returned not-yet-effective document DOC-FUTURE"
 
 
 # =====================================================================
