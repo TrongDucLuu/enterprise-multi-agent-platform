@@ -27,3 +27,65 @@ statuses:
 initial_tier: L1_SelfService
 default_category: General
 default_priority: Medium
+status_transitions:
+  Open:
+    owner:
+      - Closed
+    privileged:
+      - In_Progress
+      - Escalated
+      - Resolved
+      - Closed
+  In_Progress:
+    owner: []
+    privileged:
+      - Escalated
+      - Resolved
+      - Closed
+      - Open
+  Escalated:
+    owner: []
+    privileged:
+      - Resolved
+      - Closed
+      - In_Progress
+  Resolved:
+    owner: []
+    privileged:
+      - Closed
+      - Open
+  Closed:
+    owner: []
+    privileged:
+      - Open
+tier_routing:
+  requires_privileged: true
+  tier_roles:
+    L1_SelfService:
+      - employee
+      - support_agent
+      - it_admin
+      - sys_admin
+      - security_auditor
+      - admin
+      - lead
+    L2_Enterprise_RAG:
+      - support_agent
+      - it_admin
+      - sys_admin
+      - security_auditor
+      - admin
+      - lead
+    L3_Deep_Diagnostics:
+      - it_admin
+      - sys_admin
+      - security_auditor
+      - admin
+      - lead
+    Human_Ops:
+      - support_agent
+      - it_admin
+      - sys_admin
+      - security_auditor
+      - admin
+      - lead

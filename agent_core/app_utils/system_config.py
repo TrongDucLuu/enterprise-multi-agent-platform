@@ -321,23 +321,28 @@ def reload_system_config(config_path: Optional[str] = None) -> dict[str, Any]:
     global _USER_ROLE_MAPPINGS_CACHE, _COMPILED_KEYWORD_PATTERNS
     _USER_ROLE_MAPPINGS_CACHE = None
     _COMPILED_KEYWORD_PATTERNS = None
+    try:
+        from agent_core.tools.case_tool import clear_case_schema_cache
+        clear_case_schema_cache()
+    except Exception:
+        pass
     return load_system_config(config_path=config_path, force_reload=True)
 
 
-def get_configured_systems() -> list[str]:
+def get_configured_systems(config_path: Optional[str] = None) -> list[str]:
     """Returns sorted list of configured enterprise system identifiers (uppercase)."""
-    cfg = load_system_config()
+    cfg = load_system_config(config_path=config_path)
     return sorted(list(cfg["systems"].keys()))
 
 
-def get_valid_system_filters() -> set[str]:
+def get_valid_system_filters(config_path: Optional[str] = None) -> set[str]:
     """Returns the set of valid system filter parameters, including 'ALL'."""
-    return set(get_configured_systems()) | RESERVED_SYSTEM_NAMES
+    return set(get_configured_systems(config_path=config_path)) | RESERVED_SYSTEM_NAMES
 
 
-def get_system_required_roles(system: str) -> list[str]:
+def get_system_required_roles(system: str, config_path: Optional[str] = None) -> list[str]:
     """Returns the merged list of roles required to access the specified system."""
-    cfg = load_system_config()
+    cfg = load_system_config(config_path=config_path)
     sys_upper = system.strip().upper() if system else ""
     sys_info = cfg["systems"].get(sys_upper)
     if sys_info:
@@ -345,30 +350,30 @@ def get_system_required_roles(system: str) -> list[str]:
     return []
 
 
-def get_all_system_roles_map() -> dict[str, list[str]]:
+def get_all_system_roles_map(config_path: Optional[str] = None) -> dict[str, list[str]]:
     """Returns mapping from each configured system to its required roles."""
-    cfg = load_system_config()
+    cfg = load_system_config(config_path=config_path)
     return {sys_name: info["roles"] for sys_name, info in cfg["systems"].items()}
 
 
-def get_shared_admin_roles() -> list[str]:
+def get_shared_admin_roles(config_path: Optional[str] = None) -> list[str]:
     """Returns the list of shared admin / IT support roles."""
-    cfg = load_system_config()
+    cfg = load_system_config(config_path=config_path)
     return cfg.get("shared_admin_roles", [])
 
 
-def get_system_metadata(system: str) -> Optional[dict[str, Any]]:
+def get_system_metadata(system: str, config_path: Optional[str] = None) -> Optional[dict[str, Any]]:
     """Returns full metadata dictionary for a given system."""
-    cfg = load_system_config()
+    cfg = load_system_config(config_path=config_path)
     return cfg["systems"].get(system.strip().upper())
 
 
-def get_system_instructions_prompt() -> str:
+def get_system_instructions_prompt(config_path: Optional[str] = None) -> str:
     """
     Generates dynamic bullet points describing configured enterprise systems,
     vendors, and common issues for inclusion in LLM agent instructions.
     """
-    cfg = load_system_config()
+    cfg = load_system_config(config_path=config_path)
     lines = []
     for sys_name in sorted(cfg["systems"].keys()):
         info = cfg["systems"][sys_name]

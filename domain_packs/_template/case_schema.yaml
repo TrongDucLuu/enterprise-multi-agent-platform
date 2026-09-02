@@ -18,3 +18,49 @@ tiers:
   - "L2"
   - "Specialist"
 default_initial_tier: "L1"
+status_transitions:
+  Open:
+    owner:
+      - Closed
+    privileged:
+      - In_Progress
+      - Pending
+      - Resolved
+      - Closed
+  In_Progress:
+    owner: []
+    privileged:
+      - Pending
+      - Resolved
+      - Closed
+      - Open
+  Pending:
+    owner: []
+    privileged:
+      - In_Progress
+      - Resolved
+      - Closed
+  Resolved:
+    owner: []
+    privileged:
+      - Closed
+      - Open
+  Closed:
+    owner: []
+    privileged:
+      - Open
+tier_routing:
+  requires_privileged: true
+  tier_roles:
+    L1:
+      - employee
+      - support_agent
+      - it_admin
+      - admin
+    L2:
+      - support_agent
+      - it_admin
+      - admin
+    Specialist:
+      - it_admin
+      - admin
