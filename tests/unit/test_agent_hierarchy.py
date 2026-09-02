@@ -2,9 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from agent_core.agent import (
     root_orchestrator,
-    l1_selfservice_agent,
-    l2_enterprise_rag_agent,
-    l3_deep_diagnostics_agent,
+    created_agents,
     save_session_to_memory_callback,
     fast_model,
     high_reasoning_model,
@@ -22,6 +20,9 @@ def test_multi_agent_structure_3_tiers():
 def test_models_assigned_appropriately():
     from agent_core.app_utils.env import get_model_names_for_environment
     fast_m, reasoning_m = get_model_names_for_environment()
+    l1_selfservice_agent = created_agents["l1_selfservice_agent"]
+    l2_enterprise_rag_agent = created_agents["l2_enterprise_rag_agent"]
+    l3_deep_diagnostics_agent = created_agents["l3_deep_diagnostics_agent"]
     # L1 and L2 use fast model
     assert l1_selfservice_agent.model.model == fast_m
     assert l2_enterprise_rag_agent.model.model == fast_m

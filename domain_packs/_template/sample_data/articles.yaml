@@ -1,0 +1,19 @@
+- id: CORE-KB-001
+  system: CORE
+  title: Hướng dẫn sử dụng hệ thống mẫu
+  category: General
+  content: Đây là tài liệu mẫu cho hệ thống Core trong Domain Pack mẫu.
+  keywords:
+  - template
+  - core
+  - sample
+  section_hierarchy:
+    h1: Tài liệu mẫu
+    h2: Hướng dẫn
+    h3: Core
+  source_uri: docs/sample_manual.md
+  owner: template-admin@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  clearance_level: 0
+  is_deleted: false

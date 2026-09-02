@@ -534,7 +534,7 @@ def test_indirect_prompt_injection_poisoned_document_isolated_as_passive_data():
     and marked as passive untrusted data without leaking command execution boundaries.
     """
     from agent_core.tools.enterprise_rag_mcp.knowledge_store import KnowledgeArticle
-    from agent_core.agent import l2_enterprise_rag_agent, l1_selfservice_agent, l3_deep_diagnostics_agent, root_orchestrator
+    from agent_core.agent import created_agents, root_orchestrator
 
     emp_user = SSOUser(
         user_id="emp-01",
@@ -566,6 +566,10 @@ def test_indirect_prompt_injection_poisoned_document_isolated_as_passive_data():
     snippet = results[0].snippet
     assert snippet.startswith('<retrieved_document id="ERP-KB-POISONED" system="ERP"')
     assert snippet.endswith("</retrieved_document>")
+
+    l1_selfservice_agent = created_agents["l1_selfservice_agent"]
+    l2_enterprise_rag_agent = created_agents["l2_enterprise_rag_agent"]
+    l3_deep_diagnostics_agent = created_agents["l3_deep_diagnostics_agent"]
 
     # Assert system prompt of all agents explicitly mandates passive data isolation
     assert "retrieved_document" in l2_enterprise_rag_agent.instruction

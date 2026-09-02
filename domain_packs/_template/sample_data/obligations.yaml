@@ -1,0 +1,12 @@
+- obligation_id: OBL-CORE-001
+  source_id: CONTRACT-SAMPLE-2024
+  source_title: Sample SLA Agreement
+  authority: VP of IT
+  article: Section 1.0
+  description: Uptime cam kết tối thiểu 99.9%.
+  severity: critical
+  applies_to: vendor
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  status: active
+  source_document_path: docs/sample_sla.pdf

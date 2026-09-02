@@ -8,7 +8,7 @@ from agent_core.tools.obligations_store import (
     InMemoryObligationsStore,
     BigQueryObligationsStore,
     get_obligations_store,
-    INITIAL_OBLIGATIONS,
+    load_sample_obligations,
 )
 from agent_core.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStoreUnavailableError
 from agent_core.tools.compliance_tool import (

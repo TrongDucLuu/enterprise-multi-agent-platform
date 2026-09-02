@@ -1,0 +1,11 @@
+- fact_id: FACT-CORE-001
+  domain: CORE
+  key: core.sample.sla_hours
+  value: '4'
+  value_type: int
+  unit: hours
+  source_document: docs/sample_manual.md
+  date_updated: '2025-01-01'
+  updated_by: human
+  status: active
+  notes: SLA mẫu cho hệ thống core

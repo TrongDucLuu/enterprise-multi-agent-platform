@@ -115,3 +115,35 @@ def test_case_schema_enforcement_and_validation(auth_sso_user):
     route_res = route_case_to_tier(case_id=case_id, target_tier="L2_Enterprise_RAG", reason="Escalating to network specialist")
     assert route_res["status"] == "success"
     assert route_res["case"]["assigned_tier"] == "L2_Enterprise_RAG"
+
+
+def test_no_module_level_pydantic_knowledge_or_obligations_instantiation():
+    """
+    AST check: Scans agent_core/ to ensure no module-level statements instantiate
+    domain-specific Pydantic models (KnowledgeArticle, Fact, Obligation).
+    All sample data must be lazy-loaded from active domain pack YAMLs.
+    """
+    agent_core_dir = Path(__file__).resolve().parent.parent.parent / "agent_core"
+    forbidden_classes = {"KnowledgeArticle", "Fact", "Obligation"}
+
+    violations = []
+    for py_file in agent_core_dir.rglob("*.py"):
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        for stmt in tree.body:
+            # Check top-level assignments
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+                for node in ast.walk(stmt):
+                    if isinstance(node, ast.Call):
+                        func_name = None
+                        if isinstance(node.func, ast.Name):
+                            func_name = node.func.id
+                        elif isinstance(node.func, ast.Attribute):
+                            func_name = node.func.attr
+                        if func_name in forbidden_classes:
+                            violations.append(f"{py_file.name}:{stmt.lineno} instantiates {func_name} at module level")
+
+    assert not violations, (
+        f"Found forbidden top-level domain model instantiations in agent_core:\n"
+        + "\n".join(violations)
+    )
+

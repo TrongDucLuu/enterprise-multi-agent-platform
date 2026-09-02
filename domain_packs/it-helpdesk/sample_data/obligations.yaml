@@ -1,0 +1,253 @@
+- obligation_id: OBL-SAP-001
+  source_id: CONTRACT-SAP-ENTERPRISE-2024
+  source_title: SAP Enterprise Support Agreement
+  authority: VP of IT
+  article: Section 3.1
+  description: Cam kết Uptime hệ thống tối thiểu 99.95% mỗi tháng theo lịch 24/7.
+  severity: critical
+  applies_to: vendor
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/contracts/sap-enterprise-sla-2024.pdf
+  clearance_level: 1
+  allowed_roles: []
+- obligation_id: OBL-SAP-002
+  source_id: CONTRACT-SAP-ENTERPRISE-2024
+  source_title: SAP Enterprise Support Agreement
+  authority: VP of IT
+  article: Section 4.1
+  description: Thời gian phản hồi sự cố khẩn cấp (P1) trong vòng tối đa 30 phút.
+  severity: high
+  applies_to: vendor
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/contracts/sap-enterprise-sla-2024.pdf
+  clearance_level: 1
+  allowed_roles: []
+- obligation_id: OBL-SAP-003
+  source_id: CONTRACT-SAP-ENTERPRISE-2024
+  source_title: SAP Enterprise Support Agreement
+  authority: VP of IT
+  article: Section 4.2
+  description: Thời gian khắc phục sự cố khẩn cấp (P1 MTTR) tối đa trong vòng 4 giờ.
+  severity: critical
+  applies_to: vendor
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/contracts/sap-enterprise-sla-2024.pdf
+  clearance_level: 1
+  allowed_roles: []
+- obligation_id: OBL-SAP-004
+  source_id: CONTRACT-SAP-ENTERPRISE-2024
+  source_title: SAP Enterprise Support Agreement
+  authority: Legal Counsel
+  article: Section 5.1
+  description: Khấu trừ 10% Service Credits vào phí dịch vụ tháng tiếp theo nếu Uptime
+    dưới 99.9%.
+  severity: high
+  applies_to: vendor
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/contracts/sap-enterprise-sla-2024.pdf
+  clearance_level: 1
+  allowed_roles: []
+- obligation_id: OBL-SAP-005
+  source_id: CONTRACT-SAP-ENTERPRISE-2024
+  source_title: SAP Enterprise Support Agreement
+  authority: CISO
+  article: Section 7.2
+  description: Nhà cung cấp có trách nhiệm thông báo vi phạm dữ liệu (Data Breach)
+    trong vòng 24 giờ kể từ khi phát hiện.
+  severity: critical
+  applies_to: vendor
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/contracts/sap-enterprise-sla-2024.pdf
+  clearance_level: 1
+  allowed_roles: []
+- obligation_id: OBL-SAP-006
+  source_id: CONTRACT-SAP-ENTERPRISE-2024
+  source_title: SAP Enterprise Support Agreement
+  authority: Legal Counsel
+  article: Section 8.1
+  description: Khách hàng có quyền thực hiện kiểm toán an toàn thông tin độc lập định
+    kỳ hàng năm.
+  severity: medium
+  applies_to: both
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/contracts/sap-enterprise-sla-2024.pdf
+  clearance_level: 1
+  allowed_roles: []
+- obligation_id: OBL-SAP-007
+  source_id: CONTRACT-SAP-ENTERPRISE-2024
+  source_title: SAP Enterprise Support Agreement
+  authority: Legal Counsel
+  article: Section 9.1
+  description: Tuân thủ thỏa thuận bảo mật thông tin vô điều kiện (Non-Disclosure
+    Agreement - NDA).
+  severity: high
+  applies_to: both
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/contracts/sap-enterprise-sla-2024.pdf
+  clearance_level: 1
+  allowed_roles: []
+- obligation_id: OBL-ORA-001
+  source_id: CONTRACT-ORACLE-CLOUD-2024
+  source_title: Oracle Cloud Infrastructure Agreement
+  authority: VP of IT
+  article: Schedule A
+  description: Cam kết tính sẵn sàng của cơ sở dữ liệu (Database Availability) tối
+    thiểu 99.9% mỗi tháng.
+  severity: high
+  applies_to: vendor
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/contracts/oracle-cloud-agreement.pdf
+  clearance_level: 1
+  allowed_roles: []
+- obligation_id: OBL-ORA-002
+  source_id: CONTRACT-ORACLE-CLOUD-2024
+  source_title: Oracle Cloud Infrastructure Agreement
+  authority: IT Operations
+  article: Schedule B.1
+  description: Thời gian phản hồi sự cố mức độ nghiêm trọng P2 trong vòng tối đa 2
+    giờ.
+  severity: medium
+  applies_to: vendor
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/contracts/oracle-cloud-agreement.pdf
+  clearance_level: 1
+  allowed_roles: []
+- obligation_id: OBL-ORA-003
+  source_id: CONTRACT-ORACLE-CLOUD-2024
+  source_title: Oracle Cloud Infrastructure Agreement
+  authority: IT Operations
+  article: Schedule B.2
+  description: Thời gian giải quyết sự cố P2 (Resolve Time) trong vòng tối đa 12 giờ.
+  severity: medium
+  applies_to: vendor
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/contracts/oracle-cloud-agreement.pdf
+  clearance_level: 1
+  allowed_roles: []
+- obligation_id: OBL-DPA-001
+  source_id: POLICY-DATA-PROTECTION-DPA-2024
+  source_title: Enterprise Data Protection Addendum
+  authority: DPO
+  article: Clause 6.1
+  description: Nghiêm cấm nhà cung cấp và nhà thầu phụ chuyển giao dữ liệu cá nhân
+    của khách hàng ra ngoài khu vực lưu trữ đã thỏa thuận khi chưa có văn bản chấp
+    thuận trước.
+  severity: critical
+  applies_to: vendor
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/policies/dpa-addendum-2024.pdf
+  clearance_level: 1
+  allowed_roles: []
+- obligation_id: OBL-DPA-002
+  source_id: POLICY-DATA-PROTECTION-DPA-2024
+  source_title: Enterprise Data Protection Addendum
+  authority: DPO
+  article: Clause 11.3
+  description: Nhà cung cấp phải tiêu hủy an toàn hoặc hoàn trả toàn bộ dữ liệu định
+    danh (PII) trong vòng 30 ngày kể từ khi chấm dứt hợp đồng.
+  severity: high
+  applies_to: vendor
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/policies/dpa-addendum-2024.pdf
+  clearance_level: 1
+  allowed_roles: []
+- obligation_id: OBL-SEC-001
+  source_id: POLICY-INTERNAL-IT-SECURITY-2024
+  source_title: IT Information Security Policy
+  authority: CISO
+  article: SecPolicy 2.1
+  description: Mọi tài khoản quản trị viên truy cập hệ thống doanh nghiệp cốt lõi
+    bắt buộc phải kích hoạt xác thực đa yếu tố chống lừa đảo (FIDO2/Hardware MFA).
+  severity: critical
+  applies_to: customer
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/policies/it-security-policy-2024.pdf
+  clearance_level: 1
+  allowed_roles: []
+- obligation_id: OBL-SEC-002
+  source_id: POLICY-INTERNAL-IT-SECURITY-2024
+  source_title: IT Information Security Policy
+  authority: IT Security
+  article: SecPolicy 4.3
+  description: Quản lý bộ phận phải tái xét duyệt (Recertification) quyền truy cập
+    đặc quyền của nhân viên định kỳ mỗi 90 ngày.
+  severity: high
+  applies_to: customer
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/policies/it-security-policy-2024.pdf
+  clearance_level: 1
+  allowed_roles: []
+- obligation_id: OBL-SF-001
+  source_id: CONTRACT-SALESFORCE-CRM-2024
+  source_title: Salesforce Master Subscription Agreement
+  authority: VP of IT
+  article: Section 2.4
+  description: Đảm bảo Uptime hệ thống CRM đạt tối thiểu 99.9% không bao gồm thời
+    gian bảo trì định kỳ có thông báo trước 48h.
+  severity: high
+  applies_to: vendor
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/contracts/salesforce-msa-2024.pdf
+  clearance_level: 1
+  allowed_roles: []
+- obligation_id: OBL-WD-001
+  source_id: CONTRACT-WORKDAY-HRM-2024
+  source_title: Workday Subscription Agreement
+  authority: Head of HR
+  article: Exhibit C
+  description: Khắc phục sự cố tắc nghẽn đồng bộ bảng lương trong vòng 2 giờ trước
+    hạn chót khóa lương ngày 25 hàng tháng.
+  severity: critical
+  applies_to: vendor
+  date_added: '2024-01-01'
+  date_effective: '2024-01-01'
+  date_expires: null
+  status: active
+  source_document_path: docs/contracts/workday-agreement-2024.pdf
+  clearance_level: 1
+  allowed_roles: []

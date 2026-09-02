@@ -68,10 +68,45 @@ def test_builder_it_helpdesk_parity():
     assert "get_obligation" in l3_tool_names
 
 
-def test_builder_template_pack():
+def test_builder_reads_template_agents_yaml():
     """Verifies that _template domain pack builds successfully without code changes."""
     root_agent, agents_dict = build_agent_system("_template")
     assert root_agent.name == "root_orchestrator"
     assert len(root_agent.sub_agents) == 1
     assert agents_dict["specialist_agent"].name == "specialist_agent"
     assert "lookup_fact" in [getattr(t, "__name__", str(t)) for t in agents_dict["specialist_agent"].tools]
+
+
+def test_subprocess_clean_boot_with_template_pack():
+    """Verify clean FastAPI boot in subprocess with DOMAIN_PACK=_template in production mode."""
+    import os
+    import sys
+    import subprocess
+
+    env = os.environ.copy()
+    env["DOMAIN_PACK"] = "_template"
+    env["ENVIRONMENT"] = "production"
+    env["ALLOWED_DOMAINS"] = "company.com"
+
+    cmd = [sys.executable, "-c", "from agent_core.fast_api_app import app; print(app.title)"]
+    res = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    assert res.returncode == 0, f"Template pack boot failed:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
+    assert "FastAPI" in res.stdout
+
+
+def test_subprocess_clean_boot_with_it_helpdesk_pack():
+    """Verify clean FastAPI boot in subprocess with DOMAIN_PACK=it-helpdesk in production mode."""
+    import os
+    import sys
+    import subprocess
+
+    env = os.environ.copy()
+    env["DOMAIN_PACK"] = "it-helpdesk"
+    env["ENVIRONMENT"] = "production"
+    env["ALLOWED_DOMAINS"] = "company.com"
+
+    cmd = [sys.executable, "-c", "from agent_core.fast_api_app import app; print(app.title)"]
+    res = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    assert res.returncode == 0, f"IT-Helpdesk pack boot failed:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
+    assert "FastAPI" in res.stdout
+

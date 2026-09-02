@@ -33,7 +33,7 @@ def get_default_config_path() -> str:
     env_path = os.getenv("SYSTEMS_CONFIG_PATH")
     if env_path:
         return env_path
-    
+
     # Resolve relative to project root (2 levels up from app_utils)
     base_dir = Path(__file__).resolve().parent.parent.parent
 
@@ -43,13 +43,22 @@ def get_default_config_path() -> str:
     if pack_systems.is_file():
         return str(pack_systems)
 
+    # Fail-closed in production: do not allow unvetted dev fallbacks
+    try:
+        from agent_core.app_utils.env import is_production_mode
+    except ImportError:
+        def is_production_mode() -> bool:
+            return os.getenv("ENVIRONMENT", "").lower() == "production" or bool(os.getenv("K_SERVICE"))
+
+    if is_production_mode():
+        raise FileNotFoundError(
+            f"Production systems config not found at '{pack_systems}'. "
+            f"SYSTEMS_CONFIG_PATH or active pack domain_packs/{pack_name}/systems.yaml is required in production."
+        )
+
     config_systems = base_dir / "config" / "systems.yaml"
     if config_systems.is_file():
         return str(config_systems)
-
-    example_systems = base_dir / "config" / "systems.example.yaml"
-    if example_systems.is_file():
-        return str(example_systems)
 
     return str(pack_systems)
 

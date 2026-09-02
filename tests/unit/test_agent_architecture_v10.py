@@ -3,9 +3,7 @@ import tempfile
 import pytest
 from agent_core.agent import (
     root_orchestrator,
-    l1_selfservice_agent,
-    l2_enterprise_rag_agent,
-    l3_deep_diagnostics_agent,
+    created_agents,
 )
 from agent_core.tools.log_analyzer import analyze_system_logs_for_rca
 from agent_core.tools.compliance_tool import review_it_contract_sla
@@ -16,7 +14,7 @@ from agent_core.tools.ticketing_tool import list_user_tickets, get_ticket_detail
 
 def test_agent_descriptions_populated():
     """Verify all 4 agents have meaningful non-empty descriptions (P0.2)."""
-    agents = [root_orchestrator, l1_selfservice_agent, l2_enterprise_rag_agent, l3_deep_diagnostics_agent]
+    agents = [root_orchestrator] + list(created_agents.values())
     for agent in agents:
         assert agent.description is not None, f"Agent {agent.name} missing description"
         assert len(agent.description.strip()) > 20, f"Agent {agent.name} description too short"
@@ -24,9 +22,8 @@ def test_agent_descriptions_populated():
 
 def test_disallow_transfer_to_peers_configured():
     """Verify sub-agents have disallow_transfer_to_peers=True (P0.2)."""
-    assert l1_selfservice_agent.disallow_transfer_to_peers is True
-    assert l2_enterprise_rag_agent.disallow_transfer_to_peers is True
-    assert l3_deep_diagnostics_agent.disallow_transfer_to_peers is True
+    for agent in root_orchestrator.sub_agents:
+        assert agent.disallow_transfer_to_peers is True, f"{agent.name} disallow_transfer_to_peers is not True"
 
 
 def test_root_orchestrator_tools_and_memory_clean():
@@ -50,7 +47,7 @@ def test_root_orchestrator_tools_and_memory_clean():
 
 def test_no_agent_has_load_memory_tool():
     """Verify LoadMemoryTool is not in any agent toolset (P2.6)."""
-    all_agents = [root_orchestrator, l1_selfservice_agent, l2_enterprise_rag_agent, l3_deep_diagnostics_agent]
+    all_agents = [root_orchestrator] + list(created_agents.values())
     for agent in all_agents:
         for tool in agent.tools:
             assert not isinstance(tool, load_memory_tool.LoadMemoryTool), f"LoadMemoryTool found in {agent.name}"

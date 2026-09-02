@@ -25,10 +25,5 @@ logger = logging.getLogger("agent_core")
 root_orchestrator, created_agents = build_agent_system()
 root_agent = root_orchestrator
 
-# Export individual sub-agents for backwards compatibility
-l1_selfservice_agent = created_agents.get("l1_selfservice_agent")
-l2_enterprise_rag_agent = created_agents.get("l2_enterprise_rag_agent")
-l3_deep_diagnostics_agent = created_agents.get("l3_deep_diagnostics_agent")
-
 # ADK Application Root
 app = App(root_agent=root_orchestrator, name="agent_core")
