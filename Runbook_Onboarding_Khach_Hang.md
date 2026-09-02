@@ -181,7 +181,7 @@ Hệ thống hỗ trợ lựa chọn 1 trong 2 cơ chế RAG thông qua biến m
 
 ### Bước 5: Viết và Đăng Ký Công Cụ Mở Rộng (Tùy Chọn)
 Nếu khách hàng có các API hoặc cơ sở dữ liệu nội bộ đặc thù:
-1. Tạo module plugin mới tại `agent_core/plugins/<plugin_name>.py`.
+1. Tạo module công cụ mới tại `agent_core/tools/<tool_name>.py`.
 2. Sử dụng decorator `@register_tool("<tên_công_cụ>")` để đăng ký vào Tool Registry:
    ```python
    from agent_core.tools.registry import register_tool
