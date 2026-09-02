@@ -301,13 +301,13 @@ class BigQueryObligationsStore(BaseObligationsStore):
     def __init__(
         self,
         project_id: Optional[str] = None,
-        dataset_id: str = "it_helpdesk_kb",
-        table_name: str = "obligations",
+        dataset_id: Optional[str] = None,
+        table_name: Optional[str] = None,
         timeout_seconds: float = 10.0,
     ):
         self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "test-project")
-        self.dataset_id = dataset_id
-        self.table_name = table_name
+        self.dataset_id = dataset_id or os.getenv("BIGQUERY_DATASET", "it_helpdesk_kb")
+        self.table_name = table_name or os.getenv("OBLIGATIONS_TABLE_NAME", "l3_obligations")
         self.timeout_seconds = timeout_seconds
         self._client = None
 

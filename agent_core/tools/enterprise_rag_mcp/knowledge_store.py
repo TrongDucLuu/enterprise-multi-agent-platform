@@ -2099,11 +2099,11 @@ class BigQueryFactsStore(BaseFactsStore):
         self,
         project_id: Optional[str] = None,
         dataset_id: Optional[str] = None,
-        table_name: str = "facts",
+        table_name: Optional[str] = None,
     ):
         self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "test-project")
         self.dataset_id = dataset_id or os.getenv("BIGQUERY_DATASET", "it_helpdesk_kb")
-        self.table_name = table_name
+        self.table_name = table_name or os.getenv("FACTS_TABLE_NAME", "l1_facts")
         self.bq_client = None
 
         if os.getenv("KNOWLEDGE_BACKEND", "").lower() == "bigquery" or os.getenv("FACTS_BACKEND", "").lower() == "bigquery":

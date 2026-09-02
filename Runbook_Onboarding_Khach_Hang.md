@@ -172,10 +172,10 @@ Hệ thống hỗ trợ lựa chọn 1 trong 2 cơ chế RAG thông qua biến m
 #### Nạp Dữ Liệu Tri Thức Cứng (L1 Facts) & Cam Kết Hợp Đồng (L3 Obligations)
 
 1. **Bảng Tra Cứu Sự Thật Xác Định (L1 Facts):**
-   - Soạn thảo danh sách Fact cứng vào bảng `enterprise_facts` trong BigQuery (IP, Port, ngưỡng SLA cứng, đầu mối liên hệ) để công cụ `lookup_fact` tra cứu không qua LLM.
+   - Soạn thảo danh sách Fact cứng vào bảng `l1_facts` trong BigQuery (IP, Port, ngưỡng SLA cứng, đầu mối liên hệ) để công cụ `lookup_fact` tra cứu không qua LLM.
 
 2. **Sổ Đăng Ký Cam Kết Hợp Đồng & Pháp Lý (L3 Obligations):**
-   - Nạp các điều khoản hợp đồng/SLA có giá trị pháp lý vào bảng `contract_obligations` trong BigQuery để công cụ `get_obligation` tra cứu có phân quyền RBAC.
+   - Nạp các điều khoản hợp đồng/SLA có giá trị pháp lý vào bảng `l3_obligations` trong BigQuery để công cụ `get_obligation` tra cứu có phân quyền RBAC.
 
 ---
 
@@ -217,7 +217,7 @@ pytest tests/unit/test_agent_builder.py -v
    project_id             = "customer-gcp-project-id"
    region                 = "asia-southeast1"
    domain_pack_id         = "customer_domain_name"
-   allowed_sso_domains    = "customer.com,subsidiary.customer.com"
+   allowed_domains        = "customer.com,subsidiary.customer.com"
    knowledge_backend      = "bigquery" # hoặc "vertex_ai_search"
    redis_enabled          = true
    redis_memory_size_gb   = 1
@@ -256,11 +256,11 @@ pytest tests/unit/test_agent_builder.py -v
 | **Domain Pack Metadata** | `pack.yaml` có `min_core_version: "2.0.0"`, `entry_agent` trỏ đúng agent gốc | ✅ Bắt buộc |
 | **Tool Registry Integrity** | 100% tool trong `agents.yaml` đã được đăng ký bằng `@register_tool` | ✅ Bắt buộc |
 | **Prompt Injection Guard** | `INDIRECT_PROMPT_INJECTION_DEFENSE_INSTRUCTION` được tự động tiêm | ✅ Bắt buộc |
-| **SSO Domain Shielding** | `ALLOWED_SSO_DOMAINS` đã được điền chính xác domain email công ty khách hàng | ✅ Bắt buộc |
+| **SSO Domain Shielding** | `ALLOWED_DOMAINS` đã được điền chính xác domain email công ty khách hàng | ✅ Bắt buộc |
 | **Cloud Identity Groups** | Service Account được gán quyền `Groups Reader` trong Google Workspace Admin | ✅ Nếu bật tra cứu nhóm |
 | **Artifact Storage Bucket**| `ALLOWED_ARTIFACT_BUCKET` trỏ đúng GCS bucket và SA có quyền `objectViewer` | ✅ Bắt buộc |
 | **Knowledge Store Backend** | Bảng BigQuery hoặc Vertex AI Search Datastore đã nạp dữ liệu và cấu hình đúng | ✅ Bắt buộc |
-| **Facts & Obligations** | Các bảng `enterprise_facts` và `contract_obligations` đã sẵn sàng | ✅ Bắt buộc |
+| **Facts & Obligations** | Các bảng `l1_facts` và `l3_obligations` đã sẵn sàng | ✅ Bắt buộc |
 | **Telemetry Privacy** | `TELEMETRY_ANONYMIZE_USERS=true`, `TELEMETRY_INCLUDE_QUERY=false` | ✅ Bắt buộc |
 | **Production Healthz** | `GET /healthz` trả về `core_version="2.0.0"` và đúng `pack_id` | ✅ Bắt buộc |
 
