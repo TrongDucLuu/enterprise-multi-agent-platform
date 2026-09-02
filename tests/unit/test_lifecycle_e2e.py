@@ -26,7 +26,7 @@ def default_lifecycle_sso_user():
     current_sso_user.reset(token)
 
 
-def test_e2e_document_lifecycle_v1_to_v2_to_deleted():
+def test_document_full_lifecycle_e2e_mutations(admin_sec_ctx):
     """
     P0.2 E2E Document Lifecycle:
     Stage (a): Ingest Doc v1 (3 chunks) -> search returns v1.
@@ -34,7 +34,7 @@ def test_e2e_document_lifecycle_v1_to_v2_to_deleted():
     Stage (c): Delete document (tombstone) -> search returns empty.
     Stage (d): User without RBAC permission gets empty results across all stages.
     """
-    admin_ctx = SecurityContext.admin()
+    admin_ctx = admin_sec_ctx
 
     # --- STAGE (a): Ingest v1 (3 chunks) ---
     v1_chunks = [
@@ -137,12 +137,12 @@ def test_e2e_document_lifecycle_v1_to_v2_to_deleted():
     assert len([r for r in res_c_all if r.source_uri == target_source_uri]) == 0
 
 
-def test_mutation_cleanup_sql_failure_leads_to_stale_chunk_leakage():
+def test_mutation_cleanup_sql_failure_leads_to_stale_chunk_leakage(admin_sec_ctx):
     """
     MUTATION TEST:
     If cleanup_sql is omitted/disabled during document update, obsolete chunks from v1 leak into search results.
     """
-    admin_ctx = SecurityContext.admin()
+    admin_ctx = admin_sec_ctx
     v1_chunks = [
         KnowledgeArticle(
             id=f"DOC_c{i}",
@@ -175,12 +175,12 @@ def test_mutation_cleanup_sql_failure_leads_to_stale_chunk_leakage():
     assert len(leaked_results) > 0  # Demonstrates bug/mutation would be caught
 
 
-def test_mutation_tombstone_prefilter_disabled_leads_to_compliance_breach():
+def test_mutation_tombstone_prefilter_disabled_leads_to_compliance_breach(admin_sec_ctx):
     """
     MUTATION TEST:
     If 'NOT is_deleted' filter is removed, deleted/revoked SOPs leak into retrieval.
     """
-    admin_ctx = SecurityContext.admin()
+    admin_ctx = admin_sec_ctx
     revoked_sop = KnowledgeArticle(
         id="REVOKED_SOP",
         system="ERP",

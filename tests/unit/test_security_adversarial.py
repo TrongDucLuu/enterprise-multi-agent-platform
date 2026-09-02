@@ -698,7 +698,7 @@ def test_fastmcp_get_system_manual_delimiter_escaping():
 
     # Mock store to return this article
     class MockStore:
-        def get_article_by_id(self, article_id):
+        def get_article_by_id(self, article_id, security_context=None):
             if article_id == "MANUAL-TEST-001":
                 return custom_article
             return None
@@ -913,6 +913,63 @@ def test_public_faq_returned_regardless_of_clearance():
 
     assert "FAQ-PUB-WIFI" in article_ids
     assert "ERP-INT-CONFIG" not in article_ids
+
+
+def test_security_context_has_no_admin_factory():
+    """Verify that SecurityContext does not expose any backdoor admin() factory method."""
+    assert not hasattr(SecurityContext, "admin"), "SecurityContext must not have an admin() factory method."
+
+
+def test_no_security_context_admin_references_in_agent_core():
+    """AST / static audit: verify that no production module under agent_core/ calls or imports SecurityContext.admin."""
+    import ast
+    import os
+
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    agent_core_dir = os.path.join(project_root, "agent_core")
+
+    violations = []
+    for root, _, files in os.walk(agent_core_dir):
+        for f in files:
+            if f.endswith(".py"):
+                filepath = os.path.join(root, f)
+                with open(filepath, "r", encoding="utf-8") as file_handle:
+                    content = file_handle.read()
+                if "SecurityContext.admin" in content:
+                    violations.append(f"{filepath} contains literal 'SecurityContext.admin'")
+                
+                # Also check AST for calls to .admin() on SecurityContext
+                try:
+                    tree = ast.parse(content, filename=filepath)
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.Attribute) and node.attr == "admin":
+                            if isinstance(node.value, ast.Name) and node.value.id == "SecurityContext":
+                                violations.append(f"{filepath}:{node.lineno} calls SecurityContext.admin")
+                except SyntaxError:
+                    pass
+
+    assert not violations, f"Found SecurityContext.admin backdoor violations in agent_core:\n" + "\n".join(violations)
+
+
+def test_is_allow_local_dev_sso_strict_fail_closed(monkeypatch):
+    """Verify is_allow_local_dev_sso is strictly fail-closed by default and in production."""
+    from agent_core.app_utils.sso_auth import is_allow_local_dev_sso
+
+    # Default without env var should be False
+    monkeypatch.delenv("ALLOW_LOCAL_DEV_SSO", raising=False)
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    assert is_allow_local_dev_sso() is False
+
+    # Production mode always returns False even if ALLOW_LOCAL_DEV_SSO=true
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("ALLOW_LOCAL_DEV_SSO", "true")
+    assert is_allow_local_dev_sso() is False
+
+    # Explicitly enabled in non-production
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("ALLOW_LOCAL_DEV_SSO", "true")
+    assert is_allow_local_dev_sso() is True
 
 
 

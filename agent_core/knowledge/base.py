@@ -43,7 +43,3 @@ class SecurityContext:
     def anonymous(cls) -> "SecurityContext":
         return cls(user_id="anonymous", roles=[], clearance_level=0, authenticated=False)
 
-    @classmethod
-    def admin(cls, user_id: str = "system-admin") -> "SecurityContext":
-        return cls(user_id=user_id, roles=["admin", "it_admin", "support_agent"], clearance_level=3, authenticated=True)
-

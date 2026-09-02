@@ -63,3 +63,23 @@ def mock_vertex_embeddings_for_tests(monkeypatch):
         )
     except (ImportError, AttributeError):
         pass
+
+
+@pytest.fixture
+def admin_sec_ctx():
+    from agent_core.knowledge.base import SecurityContext
+    return SecurityContext.from_user(
+        user_id="test-admin",
+        roles=["admin", "it_admin", "support_agent"],
+        clearance_level=3,
+    )
+
+
+@pytest.fixture
+def employee_sec_ctx():
+    from agent_core.knowledge.base import SecurityContext
+    return SecurityContext.from_user(
+        user_id="test-employee",
+        roles=["employee"],
+        clearance_level=1,
+    )
