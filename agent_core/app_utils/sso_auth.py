@@ -2,6 +2,8 @@ import contextvars
 import datetime
 import logging
 import os
+import threading
+import time
 from typing import Optional
 import jwt
 import requests
@@ -14,30 +16,28 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-import time
 from agent_core.app_utils.env import is_production_mode
 
 logger = logging.getLogger(__name__)
 security_scheme = HTTPBearer(auto_error=False)
 
+ALLOW_LOCAL_DEV_SSO: Optional[bool] = None
+
 def is_allow_local_dev_sso() -> bool:
     """
     Evaluates whether local dev mock SSO tokens are allowed.
-    Strict Fail-Closed Default: In production, local dev SSO is ALWAYS False.
+    Strict Fail-Closed Default: In production or by default, local dev SSO is strictly False.
+    Must be explicitly enabled via ALLOW_LOCAL_DEV_SSO=true in non-production environments.
     """
     if is_production_mode():
         return False
-    import sys
-    mod = sys.modules.get("agent_core.app_utils.sso_auth")
-    if mod is not None and hasattr(mod, "ALLOW_LOCAL_DEV_SSO"):
-        val = getattr(mod, "ALLOW_LOCAL_DEV_SSO")
-        if isinstance(val, bool):
-            return val
-    return os.getenv("ALLOW_LOCAL_DEV_SSO", "true").lower() in ("true", "1", "yes")
+    global ALLOW_LOCAL_DEV_SSO
+    if ALLOW_LOCAL_DEV_SSO is not None:
+        return bool(ALLOW_LOCAL_DEV_SSO)
+    return os.getenv("ALLOW_LOCAL_DEV_SSO", "false").lower() in ("true", "1", "yes")
 
 # Dynamic property aliases for backward compatibility
 IS_PRODUCTION = is_production_mode()
-ALLOW_LOCAL_DEV_SSO = is_allow_local_dev_sso()
 
 SSO_CLIENT_ID = os.getenv("SSO_CLIENT_ID", "it-helpdesk-agent-client-id")
 SSO_ISSUER = os.getenv("SSO_ISSUER", "https://accounts.google.com")
@@ -57,14 +57,31 @@ DEV_JWT_SECRET = os.getenv("SSO_JWT_SECRET", "dev-only-secret-key-change-in-prod
 _SHARED_SESSION = requests.Session()
 _SHARED_GOOGLE_REQUEST_ADAPTER = google_requests.Request(session=_SHARED_SESSION)
 
+# Cloud Identity Singleton Client & Cache
+_CLOUD_IDENTITY_SERVICE = None
+_CLOUD_IDENTITY_LOCK = threading.Lock()
+
+def _get_cloud_identity_service():
+    global _CLOUD_IDENTITY_SERVICE
+    if _CLOUD_IDENTITY_SERVICE is None:
+        with _CLOUD_IDENTITY_LOCK:
+            if _CLOUD_IDENTITY_SERVICE is None:
+                from googleapiclient import discovery
+                import google.auth
+                credentials, project = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-identity.groups.readonly"])
+                _CLOUD_IDENTITY_SERVICE = discovery.build("cloudidentity", "v1", credentials=credentials, cache_discovery=False)
+    return _CLOUD_IDENTITY_SERVICE
+
 _WORKSPACE_GROUPS_CACHE: dict[str, tuple[float, list[str]]] = {}
-_WORKSPACE_GROUPS_CACHE_TTL = 300.0  # 5 minutes
+_WORKSPACE_GROUPS_CACHE_TTL = 300.0  # 5 minutes for valid group memberships
+_WORKSPACE_GROUPS_ERROR_CACHE_TTL = 60.0  # 1 minute negative caching for errors/empty lookups
 
 
 def fetch_google_workspace_groups(user_email: str) -> list[str]:
     """
     Fetches transitive group memberships for a Google Workspace user via Cloud Identity API.
     Enabled when ENABLE_CLOUD_IDENTITY_GROUP_LOOKUP=true or GOOGLE_WORKSPACE_GROUPS_ENABLED=true.
+    Uses singleton discovery client and caches both hits (5m) and errors (1m) to avoid latency penalties.
     Gracefully falls back to empty list on network or permission errors.
     """
     if not user_email or "@" not in user_email:
@@ -77,17 +94,16 @@ def fetch_google_workspace_groups(user_email: str) -> list[str]:
     now = time.time()
     if user_email in _WORKSPACE_GROUPS_CACHE:
         cached_time, cached_groups = _WORKSPACE_GROUPS_CACHE[user_email]
-        if now - cached_time < _WORKSPACE_GROUPS_CACHE_TTL:
+        ttl = _WORKSPACE_GROUPS_CACHE_TTL if cached_groups else _WORKSPACE_GROUPS_ERROR_CACHE_TTL
+        if now - cached_time < ttl:
             return cached_groups
 
     try:
-        from googleapiclient import discovery
-        import google.auth
-        credentials, project = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-identity.groups.readonly"])
-        service = discovery.build("cloudidentity", "v1", credentials=credentials, cache_discovery=False)
+        service = _get_cloud_identity_service()
+        clean_email = user_email.replace("\\", "\\\\").replace("'", "\\'")
         request = service.groups().memberships().searchTransitiveGroups(
             parent="groups/-",
-            query=f"member_key_id == '{user_email}'",
+            query=f"member_key_id == '{clean_email}'",
         )
         response = request.execute()
         memberships = response.get("memberships", [])
@@ -101,6 +117,7 @@ def fetch_google_workspace_groups(user_email: str) -> list[str]:
         return groups
     except Exception as exc:
         logger.warning("Cloud Identity / Google Workspace group lookup failed for %s: %s", user_email, exc)
+        _WORKSPACE_GROUPS_CACHE[user_email] = (now, [])
         return []
 
 

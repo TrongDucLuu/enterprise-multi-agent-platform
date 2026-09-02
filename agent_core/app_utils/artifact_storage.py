@@ -3,6 +3,15 @@ import re
 import logging
 from typing import Optional, Tuple
 
+try:
+    from agent_core.app_utils.env import is_production_mode
+except ImportError:
+    try:
+        from app_utils.env import is_production_mode
+    except ImportError:
+        def is_production_mode() -> bool:
+            return os.getenv("ENVIRONMENT", "").lower() == "production" or bool(os.getenv("K_SERVICE"))
+
 logger = logging.getLogger("enterprise_artifact_storage")
 
 MAX_ARTIFACT_BYTES = int(os.getenv("MAX_ARTIFACT_BYTES", str(5 * 1024 * 1024)))  # 5 MB
@@ -67,7 +76,7 @@ def resolve_artifact_content(
 
         bucket_name, _ = match.groups()
         allowed_bucket = os.getenv("ALLOWED_ARTIFACT_BUCKET", "").strip()
-        is_prod = os.getenv("ENVIRONMENT", "development").lower() == "production" or bool(os.getenv("K_SERVICE"))
+        is_prod = is_production_mode()
 
         if is_prod:
             if not allowed_bucket:
