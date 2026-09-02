@@ -101,10 +101,29 @@ except Exception:
     PACK_VERSION = "1.0.0"
 
 
-@app.on_event("startup")
-async def on_startup():
-    """Startup lifespan hook performing self-checks."""
-    check_cloud_identity_startup_access()
+import contextlib
+from typing import AsyncGenerator
+
+# ADK provides its own lifespan context manager inside get_fast_api_app which Starlette uses exclusively.
+# We wrap ADK's lifespan to guarantee our startup self-checks run reliably on server startup.
+_adk_lifespan = app.router.lifespan_context
+
+@contextlib.asynccontextmanager
+async def _wrapped_lifespan(app_instance: FastAPI) -> AsyncGenerator[None, None]:
+    # 1. Startup phase: run self-checks
+    try:
+        check_cloud_identity_startup_access()
+    except Exception as e:
+        logger.warning(f"Startup self-check encountered unexpected error: {e}")
+
+    # 2. Yield control to ADK's internal lifespan
+    if _adk_lifespan:
+        async with _adk_lifespan(app_instance) as maybe_state:
+            yield maybe_state
+    else:
+        yield
+
+app.router.lifespan_context = _wrapped_lifespan
 
 
 # 1. System Health & Readiness Endpoints (Used by Cloud Run startup/liveness probes & Load Balancer)

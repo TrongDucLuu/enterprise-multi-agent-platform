@@ -640,3 +640,48 @@ def test_cloud_identity_cache_bounded_eviction(monkeypatch):
     assert len(sso_auth._WORKSPACE_GROUPS_CACHE) == 3
     assert "user1@example.com" not in sso_auth._WORKSPACE_GROUPS_CACHE
     assert "user4@example.com" in sso_auth._WORKSPACE_GROUPS_CACHE
+
+
+def test_cloud_identity_startup_probe_timeout(monkeypatch, caplog):
+    """Asserts that check_cloud_identity_startup_access handles timeouts gracefully."""
+    import time
+    from agent_core.app_utils import sso_auth
+
+    monkeypatch.setenv("ENABLE_CLOUD_IDENTITY_GROUP_LOOKUP", "true")
+
+    mock_service = MagicMock()
+    mock_request = MagicMock()
+
+    def slow_execute(*args, **kwargs):
+        time.sleep(0.5)
+        return {}
+
+    mock_request.execute.side_effect = slow_execute
+    mock_service.groups().memberships().searchTransitiveGroups.return_value = mock_request
+    monkeypatch.setattr(sso_auth, "_get_cloud_identity_service", lambda: mock_service)
+
+    with caplog.at_level(logging.WARNING):
+        result = sso_auth.check_cloud_identity_startup_access(timeout=0.05)
+        assert result is False
+        assert any("timed out" in r.message for r in caplog.records)
+
+
+def test_fastapi_lifespan_invokes_startup_self_check(monkeypatch):
+    """Asserts that booting the FastAPI app with Starlette lifespan executes check_cloud_identity_startup_access."""
+    from starlette.testclient import TestClient
+    from agent_core import fast_api_app
+
+    called = []
+
+    def mock_startup_check():
+        called.append(True)
+        return True
+
+    monkeypatch.setattr(fast_api_app, "check_cloud_identity_startup_access", mock_startup_check)
+
+    # TestClient as a context manager triggers the lifespan lifecycle (startup and shutdown)
+    with TestClient(fast_api_app.app) as client:
+        response = client.get("/healthz")
+        assert response.status_code == 200
+
+    assert len(called) >= 1, "Expected check_cloud_identity_startup_access to be invoked during app lifespan startup!"

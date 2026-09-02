@@ -90,13 +90,15 @@ def _store_workspace_groups_cache(email: str, timestamp: float, groups: list[str
     _WORKSPACE_GROUPS_CACHE[email] = (timestamp, groups)
 
 
-def check_cloud_identity_startup_access() -> bool:
+def check_cloud_identity_startup_access(timeout: float = 5.0) -> bool:
     """
     Performs a single startup self-check if ENABLE_CLOUD_IDENTITY_GROUP_LOOKUP is enabled.
     Logs a high-visibility ERROR once if Cloud Identity API returns 403 Forbidden, alerting DevOps
     that the Service Account requires Google Workspace Admin Console role assignment ('Groups Reader')
     or Domain-Wide Delegation.
     """
+    import concurrent.futures
+
     enabled = os.getenv("ENABLE_CLOUD_IDENTITY_GROUP_LOOKUP", os.getenv("GOOGLE_WORKSPACE_GROUPS_ENABLED", "false")).lower() in ("true", "1", "yes")
     if not enabled:
         return True
@@ -108,9 +110,14 @@ def check_cloud_identity_startup_access() -> bool:
             parent="groups/-",
             query="member_key_id == 'healthcheck-probe@domain.invalid'",
         )
-        request.execute()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(request.execute)
+            future.result(timeout=timeout)
         logger.info("Cloud Identity API startup probe succeeded.")
         return True
+    except concurrent.futures.TimeoutError:
+        logger.warning("Cloud Identity startup probe timed out after %.1fs; continuing startup.", timeout)
+        return False
     except Exception as exc:
         err_str = str(exc)
         if "403" in err_str or "PermissionDenied" in err_str or "forbidden" in err_str.lower():
