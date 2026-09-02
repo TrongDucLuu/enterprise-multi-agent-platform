@@ -1,0 +1,99 @@
+# ==============================================================================
+# Enterprise Autonomous Agent Platform — Terraform Customer Onboarding Config
+# Copy this file to `terraform.tfvars` and customize for each customer GCP Project.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. BẮT BUỘC (MANDATORY CONFIGURATION — Zero-Trust & Identity Variables)
+# ------------------------------------------------------------------------------
+
+# GCP Project ID của khách hàng (Mô hình: 1 Khách hàng = 1 GCP Project riêng biệt)
+project_id = "customer-enterprise-prod"
+
+# Google Workspace / Cloud Identity OAuth 2.0 Client ID (Lấy từ GCP APIs & Services > Credentials)
+sso_client_id = "123456789012-abcdefghijklmnopqrstuvwxyz.apps.googleusercontent.com"
+
+# Danh sách domain email của khách hàng được phép đăng nhập (Ngăn chặn hoàn toàn truy cập ngoài tổ chức)
+allowed_domains = "customer.com,subsidiary.customer.com"
+
+
+# ------------------------------------------------------------------------------
+# 2. KHUYẾN NGHỊ VẬN HÀNH (RECOMMENDED OPERATIONAL DEFAULTS)
+# ------------------------------------------------------------------------------
+
+# Tên domain pack tương ứng trong thư mục `domain_packs/` (mặc định: "it-helpdesk")
+domain_pack = "it-helpdesk"
+
+# Môi trường triển khai: "development", "staging", "production"
+environment = "production"
+
+# Vùng triển khai tài nguyên GCP
+region = "asia-southeast1"
+
+# Backend kho tri thức: "bigquery" (Khuyến nghị cho Enterprise) hoặc "vertex_ai_search"
+knowledge_backend = "bigquery"
+
+# Tên dataset BigQuery lưu trữ tài liệu, vectors, L1 facts, và L3 obligations
+bigquery_kb_dataset = "it_helpdesk_kb"
+
+# GCS Bucket cho ADK Artifact Service lưu trữ session/state (Cần quyền roles/storage.objectUser)
+ai_assets_bucket = "customer-enterprise-prod-ai-assets"
+
+# GCS Bucket chỉ đọc chứa tài liệu hợp đồng/log L3 (Cấp quyền tối thiểu roles/storage.objectViewer)
+allowed_artifact_bucket = "customer-enterprise-prod-allowed-artifacts"
+
+
+# ------------------------------------------------------------------------------
+# 3. BẢO MẬT & QUẢN TRỊ NGƯỜI DÙNG (SECURITY & WORKSPACE RBAC)
+# ------------------------------------------------------------------------------
+
+# Bật tra cứu nhóm Google Workspace / Cloud Identity Directory (Cần cấp quyền Groups Reader cho Service Account)
+enable_cloud_identity_group_lookup = true
+
+# Tên claim trong JWT chứa danh sách security groups (nếu IdP hỗ trợ nhúng groups vào ID Token)
+sso_groups_claim = "groups"
+
+# Cho phép truy cập HTTP công khai không qua IAM Cloud Run (Authentication được bảo vệ bởi middleware SSO)
+# Lưu ý: Nếu đặt true trong production, khuyến nghị bật enable_cloud_armor = true
+allow_unauthenticated = false
+
+# Bật Google Cloud Armor WAF & Global HTTPS Load Balancer trước Cloud Run (Khuyến nghị cho Production)
+enable_cloud_armor = false
+
+# Bật ẩn danh danh tính người dùng (SHA-256) trong log Telemetry để tuân thủ GDPR/ISO-27001
+telemetry_anonymize_users = true
+
+# Không ghi nội dung query thô vào telemetry log để tránh lộ dữ liệu nhạy cảm
+telemetry_include_query = false
+
+
+# ------------------------------------------------------------------------------
+# 4. QUẢN LÝ TÀI NGUYÊN & SCALE CHI PHÍ (AUTOSCALING & COMPUTE SIZING)
+# ------------------------------------------------------------------------------
+
+# Số instance tối thiểu (0 = cho phép scale to zero để tối ưu chi phí khi rảnh rỗi; >= 1 để triệt tiêu cold start)
+min_instance_count = 1
+
+# Số instance tối đa cho Cloud Run (Công thức: ceil(Peak_CCU / 8) * 1.5)
+max_instance_count = 10
+
+# Số concurrent requests tối đa trên mỗi container (Khuyến nghị 4-8 cho tải LLM)
+max_instance_request_concurrency = 8
+
+# Bật Google Cloud Memorystore Redis cho Distributed Rate Limiting & Semantic Caching
+redis_enabled = true
+redis_memory_size_gb = 1
+
+# Giới hạn số lượt gọi mô hình suy luận chuyên sâu L3 Gemini Pro mỗi người dùng / phút
+l3_rate_limit_per_minute = 10
+
+
+# ------------------------------------------------------------------------------
+# 5. CẤU HÌNH MÔ HÌNH GEMINI (GA PRODUCTION SLA)
+# ------------------------------------------------------------------------------
+
+# Mô hình phân tích phản hồi nhanh cho Triage, L1, L2 (Cam kết Vertex AI 99.9% SLA)
+fast_model_name = "gemini-2.5-flash"
+
+# Mô hình suy luận chuyên sâu cho L3 Root Cause & SLA Compliance (Cam kết Vertex AI 99.9% SLA)
+reasoning_model_name = "gemini-2.5-pro"

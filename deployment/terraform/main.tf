@@ -644,6 +644,10 @@ resource "google_cloud_run_v2_service" "default" {
         value = "True"
       }
       env {
+        name  = "DOMAIN_PACK"
+        value = var.domain_pack
+      }
+      env {
         name  = "AI_ASSETS_BUCKET"
         value = var.ai_assets_bucket
       }
@@ -858,6 +862,13 @@ check "production_knowledge_backend" {
   assert {
     condition = !(var.environment == "production" && var.knowledge_backend == "in_memory")
     error_message = "CRITICAL CONFIGURATION ERROR: Production environment cannot use 'in_memory' knowledge backend. In-memory knowledge base loses all vector search, dynamic updates, and document governance capabilities. Set knowledge_backend = 'bigquery'."
+  }
+}
+
+check "production_allowed_domains" {
+  assert {
+    condition = !(var.environment == "production" && trimspace(var.allowed_domains) == "")
+    error_message = "CRITICAL SECURITY CONFIGURATION ERROR: Production environment requires non-empty 'allowed_domains' to enforce SSO email domain shielding. Set allowed_domains (e.g. 'company.com,subsidiary.com')."
   }
 }
 

@@ -18,7 +18,17 @@ variable "service_name" {
 variable "environment" {
   description = "Deployment environment (production, staging, development)"
   type        = string
-  default     = "production"
+  default     = "development"
+  validation {
+    condition     = contains(["development", "staging", "production"], var.environment)
+    error_message = "environment must be one of: 'development', 'staging', 'production'."
+  }
+}
+
+variable "domain_pack" {
+  description = "Active domain pack name located in domain_packs/ directory (e.g., 'it-helpdesk', '_template')"
+  type        = string
+  default     = "it-helpdesk"
 }
 
 variable "secrets" {
@@ -43,7 +53,6 @@ variable "allowed_artifact_bucket" {
 variable "sso_client_id" {
   description = "The SSO / OIDC Client ID for enterprise authentication (Google Workspace OAuth Client ID)"
   type        = string
-  default     = "it-helpdesk-agent-client-id"
 }
 
 variable "sso_issuer" {
@@ -55,7 +64,6 @@ variable "sso_issuer" {
 variable "allowed_domains" {
   description = "Comma-separated list of enterprise domains permitted to access (e.g. 'company.com,subsidiary.com')"
   type        = string
-  default     = ""
 }
 
 variable "enable_cloud_identity_group_lookup" {
@@ -73,7 +81,7 @@ variable "sso_groups_claim" {
 variable "knowledge_backend" {
   description = "Knowledge base backend ('in_memory', 'bigquery', 'vertex_ai_search')"
   type        = string
-  default     = "in_memory"
+  default     = "bigquery"
   validation {
     condition     = contains(["in_memory", "bigquery", "vertex_ai_search"], var.knowledge_backend)
     error_message = "knowledge_backend must be one of: 'in_memory', 'bigquery', 'vertex_ai_search'."
@@ -111,9 +119,9 @@ variable "max_instance_count" {
 }
 
 variable "min_instance_count" {
-  description = "Minimum number of Cloud Run container instances (recommend >= 1 in production to eliminate cold starts)"
+  description = "Minimum number of Cloud Run container instances (0 allows scaling to zero to minimize idle costs; >= 1 in production to eliminate cold starts)"
   type        = number
-  default     = 1
+  default     = 0
 }
 
 variable "max_instance_request_concurrency" {
@@ -143,7 +151,7 @@ variable "l3_rate_limit_per_minute" {
 variable "allow_unauthenticated" {
   description = "Whether to allow unauthenticated public HTTP access at Cloud Run layer (SSO auth is enforced at application middleware)"
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "use_firestore_tickets" {
