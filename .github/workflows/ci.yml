@@ -18,6 +18,13 @@ jobs:
             allow_local_dev_sso: "true"
           - name: "production"
             allow_local_dev_sso: "false"
+        domain_pack: ["it-helpdesk"]
+        include:
+          - python-version: "3.12"
+            environment:
+              name: "development"
+              allow_local_dev_sso: "true"
+            domain_pack: "_template"
 
     steps:
       - name: Checkout Code
@@ -40,6 +47,7 @@ jobs:
         env:
           ENVIRONMENT: ${{ matrix.environment.name }}
           ALLOW_LOCAL_DEV_SSO: ${{ matrix.environment.allow_local_dev_sso }}
+          DOMAIN_PACK: ${{ matrix.domain_pack }}
           ALLOWED_DOMAINS: "company.com"
           USE_VERTEX_EMBEDDING: "true"
           KNOWLEDGE_BACKEND: "in_memory"
@@ -47,7 +55,7 @@ jobs:
           RATE_LIMIT_ENABLED: "true"
           ALLOWED_ARTIFACT_BUCKET: "company-artifacts-dev"
         run: |
-          uv run pytest tests/ -v --cov=agent_core --cov-report=term-missing
+          uv run pytest tests/ -v -m "not boot" --cov=agent_core --cov-report=term-missing
 
       - name: Verify Enterprise Document Compilers
         run: |
@@ -55,6 +63,36 @@ jobs:
           uv run python generate_devops_runbook.py
           test -f PRODUCT_SRS_DOCUMENT.docx
           test -f DEVOPS_RUNBOOK.docx
+
+  boot-tests:
+    name: Subprocess Boot Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install Project & Dev Dependencies
+        run: |
+          uv sync --dev
+
+      - name: Run Clean Boot Subprocess Tests
+        env:
+          ENVIRONMENT: "development"
+          ALLOW_LOCAL_DEV_SSO: "true"
+          ALLOWED_DOMAINS: "company.com"
+          USE_VERTEX_EMBEDDING: "true"
+          KNOWLEDGE_BACKEND: "in_memory"
+        run: |
+          uv run pytest tests/ -m "boot" -v
 
   terraform-validate:
     name: Validate Infrastructure as Code (Terraform)

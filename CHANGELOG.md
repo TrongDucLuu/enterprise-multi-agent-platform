@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-09-03
+
+### Added
+- **A2A Protocol & Agent Registry Integration (Work Order 5)**:
+  - Mounted A2A Starlette sub-app at `/a2a` with strict inheritance of parent `SSOAuthenticationMiddleware` and `RateLimitMiddleware`, ensuring zero-trust protection on `.well-known/agent-card.json` and RPC endpoints.
+  - Dynamic `AgentCard` generator reflecting domain pack metadata, multi-tier skills, and tool capabilities.
+  - Cloud Run functional type flag (`functional-type = "agent"`) and Terraform declarations for Agent Registry & Agent Gateway.
+
+### Changed
+- **Production Infrastructure & Cost Clarifications**:
+  - Clarified BigQuery storage and query pricing in documentation, removing obsolete idle \$0 claim.
+  - Documented rationale for maintaining `min_instance_count >= 1` on Cloud Run in production: eliminates ~1.5s cold-start latency of ADK multi-tier agent initialization and BigQuery client pre-warming, guaranteeing sub-second enterprise SLA for first-token responses.
+- **Security & Authorization Hardening**:
+  - Enforced `require_admin` role check on `/api/cache/stats` and `/api/cache/query` to prevent unauthorized cache inspection and content enumeration.
+  - Standardized InMemory knowledge store similarity scoring with `normalize_similarity()` (4 decimal places) matching BigQuery and Vertex AI Search formats.
+- **CI/CD Optimization**:
+  - Added `_template` domain pack test job to CI matrix on Python 3.12 (development).
+  - Isolated subprocess boot tests (`-m "boot"`) into a dedicated standalone job, reducing matrix iteration time to under 25 seconds.
+
 ## [2.1.0] - 2026-09-02
 
 ### Added

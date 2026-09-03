@@ -172,9 +172,9 @@ async def get_sso_user_profile(user: SSOUser = Depends(get_current_user)):
         "user": user.model_dump()
     }
 
-# 3. Semantic Cache Inspection & Fast Lookup Endpoints
+# 3. Semantic Cache Inspection & Fast Lookup Endpoints (Requires Admin)
 @app.get("/api/cache/stats", tags=["Optimization"])
-async def get_semantic_cache_stats(user: SSOUser = Depends(get_current_user)):
+async def get_semantic_cache_stats(user: SSOUser = Depends(require_admin)):
     """Returns real-time statistics of the semantic cache."""
     cache = get_semantic_cache()
     return {
@@ -186,7 +186,7 @@ async def get_semantic_cache_stats(user: SSOUser = Depends(get_current_user)):
 async def query_semantic_cache(
     q: str = Query(..., description="User question to check in cache"),
     threshold: float = Query(0.92, description="Similarity threshold (0.85 to 1.0)"),
-    user: SSOUser = Depends(get_current_user)
+    user: SSOUser = Depends(require_admin)
 ):
     """Performs instant sub-50ms semantic cache lookup with user isolation."""
     if threshold < 0.85:

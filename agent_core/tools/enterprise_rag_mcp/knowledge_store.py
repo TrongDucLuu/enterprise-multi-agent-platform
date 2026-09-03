@@ -325,7 +325,8 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
                 system=article.system,
                 title=article.title,
             )
-            relevance = min(1.0, score / 6.0)
+            raw_dist = 2.0 * (1.0 - min(1.0, score / 6.0))
+            relevance = normalize_similarity(raw_dist, metric="COSINE")
             sec_hier = article.section_hierarchy
             context_path = sec_hier.format_path() if sec_hier else f"{article.system} > {article.category} > {article.title}"
             search_results.append(SearchResult(
@@ -335,7 +336,7 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
                 system=article.system,
                 title=article.title,
                 snippet=snippet,
-                relevance_score=round(relevance, 2),
+                relevance_score=relevance,
                 section_h1=article.section_h1,
                 section_h2=article.section_h2,
                 section_h3=article.section_h3,

@@ -78,7 +78,7 @@ Hệ thống được thiết kế theo mô hình **Độc Lập Hạ Tầng (In
 
 - **Redis Multi-Tenant Vector Semantic Cache**: Cắt giảm $\approx 100\%$ chi phí token và độ trễ xuống $\sim 20\text{ms}$ cho các câu hỏi phổ biến với cơ chế candidate-set cosine matching.
 - **Dual-Engine Enterprise Knowledge Store**: Chuyển đổi linh hoạt qua biến môi trường `KNOWLEDGE_BACKEND`:
-  - `bigquery` (Mặc định Data Warehouse): Serverless Vector Search với IVF Index, SQL pre-filtering, 100% Zero-Data Egress, chi phí duy trì **0 USD/tháng** khi rảnh rỗi.
+  - `bigquery` (Mặc định Data Warehouse): Serverless Vector Search với IVF Index, SQL pre-filtering, 100% Zero-Data Egress, mô hình on-demand thanh toán theo dung lượng quét thực tế ($6.25/TiB scanned), lưu trữ active (~$0.02/GB/tháng). Trong môi trường production, hạ tầng nền bao gồm Cloud Run (`min_instance_count >= 1` để triệt tiêu cold-start cho ADK agent) và Memorystore Redis HA.
   - `vertex_ai_search` (Managed Enterprise Grounding): Tích hợp trực tiếp Google Cloud Vertex AI Search Discovery Engine, hỗ trợ OCR tài liệu đa định dạng, extractive segments và trích dẫn chuẩn xác.
   - `in_memory`: Dành cho môi trường phát triển local và CI/CD siêu tốc.
 - **L1 Facts Registry & L3 Obligations**: Tra cứu thông số kỹ thuật và cam kết pháp lý với tốc độ và độ chính xác xác định tuyệt đối (Deterministic Point-Lookup), loại bỏ hoàn toàn hiện tượng ảo giác (hallucination).
@@ -94,16 +94,26 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 ```
 
-### Chạy Kiểm Thử Toàn Diện (361 Test Cases trên 3 CI Suites)
+### Vòng Lặp Phát Triển Nhanh (Fast Dev Loop < 25s)
+Trong quá trình code và lặp nhanh hàng ngày, chạy bộ test bỏ qua subprocess boot test:
+```bash
+uv run pytest tests/ -m "not boot" -q
+```
+Chạy kiểm tra probe active domain pack:
+```bash
+DOMAIN_PACK=_template uv run pytest tests/ -q -k "probe_active_pack"
+```
+
+### Chạy Kiểm Thử Toàn Diện (3 Cấu Hình CI Chuẩn)
 ```bash
 # Suite 1: Môi trường Development với Local SSO
-ENVIRONMENT=development ALLOW_LOCAL_DEV_SSO=true .venv/bin/pytest tests/ -q
+ENVIRONMENT=development ALLOW_LOCAL_DEV_SSO=true uv run pytest tests/ -q
 
 # Suite 2: Môi trường Production không cho phép Local SSO
-ENVIRONMENT=production ALLOW_LOCAL_DEV_SSO=false .venv/bin/pytest tests/ -q
+ENVIRONMENT=production ALLOW_LOCAL_DEV_SSO=false uv run pytest tests/ -q
 
 # Suite 3: Cô lập Domain Pack Template
-DOMAIN_PACK=_template ENVIRONMENT=development .venv/bin/pytest tests/ -q
+DOMAIN_PACK=_template ENVIRONMENT=development uv run pytest tests/ -q
 ```
 
 ### Khởi Chạy API Server

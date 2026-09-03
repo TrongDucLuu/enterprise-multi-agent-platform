@@ -277,13 +277,13 @@ def test_cache_query_threshold_validation(monkeypatch):
     monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
     from agent_core.app_utils.sso_auth import create_dev_mock_token
     client = TestClient(main_app)
-    user = SSOUser(
-        user_id="test_user",
-        email="test@example.com",
-        roles=["employee"],
+    admin_user = SSOUser(
+        user_id="test_admin",
+        email="admin@example.com",
+        roles=["it_admin"],
         is_authenticated=True,
     )
-    token = create_dev_mock_token(user)
+    token = create_dev_mock_token(admin_user)
     headers = {"Authorization": f"Bearer {token}"}
 
     # Threshold < 0.85 should be rejected
@@ -297,4 +297,49 @@ def test_cache_query_threshold_validation(monkeypatch):
 
     resp_valid2 = client.get("/api/cache/query", params={"q": "wifi password", "threshold": 0.92}, headers=headers)
     assert resp_valid2.status_code == 200
+
+
+def test_cache_endpoints_rbac_protection(monkeypatch):
+    """Validates that /api/cache/stats and /api/cache/query require admin privileges (403 for employee)."""
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("ALLOW_LOCAL_DEV_SSO", "true")
+    monkeypatch.setattr("agent_core.app_utils.sso_auth.ALLOW_LOCAL_DEV_SSO", True)
+    from agent_core.app_utils.sso_auth import create_dev_mock_token
+    client = TestClient(main_app)
+    
+    # Non-admin employee
+    employee_user = SSOUser(
+        user_id="emp1",
+        email="emp@example.com",
+        roles=["employee"],
+        is_authenticated=True,
+    )
+    emp_token = create_dev_mock_token(employee_user)
+    emp_headers = {"Authorization": f"Bearer {emp_token}"}
+
+    # 1. Employee calling /api/cache/stats -> 403 Forbidden
+    resp_stats = client.get("/api/cache/stats", headers=emp_headers)
+    assert resp_stats.status_code == 403
+
+    # 2. Employee calling /api/cache/query -> 403 Forbidden
+    resp_query = client.get("/api/cache/query", params={"q": "wifi password"}, headers=emp_headers)
+    assert resp_query.status_code == 403
+
+    # 3. Admin user calling /api/cache/stats -> 200 OK
+    admin_user = SSOUser(
+        user_id="adm1",
+        email="adm@example.com",
+        roles=["it_admin"],
+        is_authenticated=True,
+    )
+    adm_token = create_dev_mock_token(admin_user)
+    adm_headers = {"Authorization": f"Bearer {adm_token}"}
+
+    resp_admin_stats = client.get("/api/cache/stats", headers=adm_headers)
+    assert resp_admin_stats.status_code == 200
+    assert resp_admin_stats.json().get("status") == "success"
+
+    resp_admin_query = client.get("/api/cache/query", params={"q": "wifi password"}, headers=adm_headers)
+    assert resp_admin_query.status_code == 200
+
 
