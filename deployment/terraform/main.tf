@@ -620,6 +620,14 @@ resource "google_cloud_run_v2_service" "default" {
   location = var.region
   ingress  = var.enable_load_balancer ? "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER" : "INGRESS_TRAFFIC_ALL"
 
+  labels = merge(
+    {
+      "environment" = var.environment
+      "domain_pack" = var.domain_pack
+    },
+    var.enable_a2a_endpoint ? { "functional-type" = "agent" } : {}
+  )
+
   template {
     service_account                  = google_service_account.agent_sa.email
     timeout                          = "300s"
@@ -821,6 +829,10 @@ resource "google_cloud_run_v2_service" "default" {
         name  = "MONTHLY_TOKEN_BUDGET"
         value = tostring(var.monthly_token_budget)
       }
+      env {
+        name  = "ENABLE_A2A_ENDPOINT"
+        value = tostring(var.enable_a2a_endpoint)
+      }
 
       resources {
         limits = {
@@ -923,5 +935,14 @@ check "production_model_sla" {
   }
 }
 
+# 11. Google Cloud Agent Registry & Agent Gateway APIs (Optional Multi-Agent Enterprise Mesh)
+resource "google_project_service" "agent_registry_apis" {
+  for_each = var.enable_agent_registry ? toset([
+    "agentregistry.googleapis.com",
+    "agentgateway.googleapis.com"
+  ]) : toset([])
 
-
+  project            = var.project_id
+  service            = each.key
+  disable_on_destroy = false
+}

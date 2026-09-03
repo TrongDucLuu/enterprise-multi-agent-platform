@@ -288,5 +288,14 @@ variable "bigquery_max_slots" {
   default     = 100
 }
 
+variable "enable_a2a_endpoint" {
+  description = "Enable the A2A (Agent-to-Agent) protocol endpoint mounted at /a2a and sets functional-type='agent' label on Cloud Run"
+  type        = bool
+  default     = false
+}
 
-
+variable "enable_agent_registry" {
+  description = "Enable Google Cloud Agent Registry and Agent Gateway integration for centralized multi-agent discovery and governance"
+  type        = bool
+  default     = false
+}

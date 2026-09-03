@@ -135,3 +135,34 @@ def test_terraform_tfvars_example_exists_and_complete():
     assert "domain_pack" in content
     assert "ai_assets_bucket" in content
     assert "allowed_artifact_bucket" in content
+    assert "enable_a2a_endpoint" in content
+    assert "enable_agent_registry" in content
+
+
+def test_terraform_a2a_and_agent_registry_config():
+    """Asserts that A2A and Agent Registry variables are fail-closed (default false) and properly wired in main.tf."""
+    tf_dir = _get_terraform_dir()
+    var_file = tf_dir / "variables.tf"
+    var_content = var_file.read_text(encoding="utf-8")
+
+    # Both enable_a2a_endpoint and enable_agent_registry must default to false
+    a2a_match = re.search(r'variable\s+"enable_a2a_endpoint"\s+\{([^}]+)\}', var_content, re.DOTALL)
+    assert a2a_match, "enable_a2a_endpoint variable not found"
+    assert 'default     = false' in a2a_match.group(1) or 'default = false' in a2a_match.group(1)
+
+    reg_match = re.search(r'variable\s+"enable_agent_registry"\s+\{([^}]+)\}', var_content, re.DOTALL)
+    assert reg_match, "enable_agent_registry variable not found"
+    assert 'default     = false' in reg_match.group(1) or 'default = false' in reg_match.group(1)
+
+    main_file = tf_dir / "main.tf"
+    main_content = main_file.read_text(encoding="utf-8")
+
+    # Cloud Run label functional-type
+    assert 'var.enable_a2a_endpoint ? { "functional-type" = "agent" } : {}' in main_content
+    # Cloud Run ENABLE_A2A_ENDPOINT env var
+    assert 'name  = "ENABLE_A2A_ENDPOINT"' in main_content
+    # Agent Registry and Gateway APIs gated by enable_agent_registry
+    assert 'resource "google_project_service" "agent_registry_apis"' in main_content
+    assert '"agentregistry.googleapis.com"' in main_content
+    assert '"agentgateway.googleapis.com"' in main_content
+

@@ -242,6 +242,81 @@ if is_allow_local_dev_sso():
             "user": user.model_dump()
         }
 
+
+def is_enable_a2a_endpoint() -> bool:
+    """Returns True if the Agent-to-Agent (A2A) protocol endpoint is enabled."""
+    return os.getenv("ENABLE_A2A_ENDPOINT", "false").lower() in ("true", "1", "yes")
+
+
+def setup_a2a_endpoint(app_instance: FastAPI):
+    """
+    Initializes and mounts the A2A (Agent-to-Agent) protocol endpoint at /a2a.
+    Dynamically generates the AgentCard from the active domain pack and ADK agent hierarchy.
+    Enforces parent middleware authentication (SSOAuthenticationMiddleware, RateLimitMiddleware).
+    """
+    if not is_enable_a2a_endpoint():
+        return None
+
+    try:
+        import asyncio
+        import concurrent.futures
+        from google.adk.a2a.utils.agent_to_a2a import to_a2a
+        from google.adk.a2a.utils.agent_card_builder import AgentCardBuilder
+        from agent_core.agent_builder import build_agent_system, load_domain_pack
+
+        root_agent, created_agents = build_agent_system()
+        pack_info = load_domain_pack()
+        pack_meta = pack_info.get("pack_meta", {})
+
+        async def _init_card():
+            card = await AgentCardBuilder(
+                agent=root_agent,
+                rpc_url="/a2a/",
+            ).build()
+            if pack_meta.get("name"):
+                card.name = str(pack_meta.get("name")).lower().replace(" ", "_").replace("-", "_")
+            if pack_meta.get("description"):
+                card.description = str(pack_meta.get("description"))
+            return card
+
+        try:
+            loop = asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                agent_card = pool.submit(lambda: asyncio.run(_init_card())).result()
+        except RuntimeError:
+            agent_card = asyncio.run(_init_card())
+
+        a2a_sub_app = to_a2a(
+            agent=root_agent,
+            agent_card=agent_card,
+        )
+
+        async def _init_routes():
+            async with a2a_sub_app.router.lifespan_context(a2a_sub_app):
+                pass
+
+        try:
+            loop = asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                pool.submit(lambda: asyncio.run(_init_routes())).result()
+        except RuntimeError:
+            asyncio.run(_init_routes())
+
+        app_instance.mount("/a2a", a2a_sub_app)
+        logger.info(
+            "A2A Protocol endpoint successfully initialized and mounted at /a2a for domain pack '%s'",
+            pack_meta.get("id", "unknown")
+        )
+        return a2a_sub_app
+    except Exception as e:
+        logger.error("Failed to initialize A2A endpoint: %s", e, exc_info=True)
+        return None
+
+
+# Initialize A2A endpoint if enabled via feature flag
+setup_a2a_endpoint(app)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)

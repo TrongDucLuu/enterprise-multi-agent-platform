@@ -249,6 +249,42 @@ pytest tests/unit/test_agent_builder.py -v
 
 ---
 
+### Bước 8: Đăng Ký Vào Gemini Enterprise Agent Registry & Agent Gateway (Tùy Chọn Multi-Agent Mesh)
+
+Khi doanh nghiệp triển khai kiến trúc Multi-Agent phân tán hoặc muốn tích hợp Agent vào mạng lưới Gemini Enterprise:
+
+1. **Kích Hoạt A2A & Agent Registry Trên Terraform (`terraform.tfvars`):**
+   ```hcl
+   enable_a2a_endpoint   = true
+   enable_agent_registry = true
+   ```
+   Sau khi `terraform apply`, Cloud Run service sẽ tự động được gán nhãn `functional-type = "agent"` và kích hoạt các API `agentregistry.googleapis.com`, `agentgateway.googleapis.com`.
+
+2. **Quy Tắc Ghép Nối (Pairing Rules):**
+   - **Mỗi GCP Project / Region chỉ có tối đa 1 Agent Gateway và 1 Agent Registry** đóng vai trò Central Hub điều phối.
+   - Các Agent độc lập (như `it-helpdesk`, `hr-assistant`, `crm-agent`) xuất bản Agent Card theo chuẩn A2A và kết nối vào Gateway chung của tổ chức.
+
+3. **Kiểm Tra Điểm Cuối A2A (A2A Health & Security Check):**
+   ```bash
+   # 1. Kiểm tra xác thực (bắt buộc trả về 401 khi không có Bearer token):
+   curl -i https://<cloud-run-url>/a2a/.well-known/agent-card.json
+   # -> HTTP/1.1 401 Unauthorized
+
+   # 2. Kiểm tra Agent Card với Bearer Token hợp lệ:
+   curl -s -H "Authorization: Bearer <sso-token>" https://<cloud-run-url>/a2a/.well-known/agent-card.json | jq .
+   # -> JSON Agent Card chuẩn khai báo danh sách skills, name, description theo domain pack
+   ```
+
+4. **Đăng Ký Agent Trên Gemini Enterprise Admin Console:**
+   - Truy cập **Google Cloud Console** > **Vertex AI / Gemini Enterprise** > **Agent Registry**.
+   - Nhấn **Register Agent** > Nhập tên định danh (ví dụ: `it-helpdesk-agent`).
+   - Nhập URL máy chủ A2A: `https://<cloud-run-url>/a2a`.
+   - Chọn **Agent Gateway** đích cùng vùng (`asia-southeast1` hoặc `us-central1`).
+   - Cấp quyền IAM: Gán vai trò `roles/agentregistry.viewer` hoặc `roles/agentregistry.agentCaller` cho các hệ thống hoặc Agent tiêu thụ khác.
+
+
+---
+
 ## 3. Bảng Kiểm Tra Sẵn Sàng Vận Hành (Go-Live Checklist)
 
 | Tiêu chuẩn | Mô tả kiểm tra | Đạt chuẩn |

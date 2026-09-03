@@ -105,3 +105,14 @@ fast_model_name = "gemini-2.5-flash"
 
 # Mô hình suy luận chuyên sâu cho L3 Root Cause & SLA Compliance (Cam kết Vertex AI 99.9% SLA)
 reasoning_model_name = "gemini-2.5-pro"
+
+
+# ------------------------------------------------------------------------------
+# 6. TÍCH HỢP A2A PROTOCOL & AGENT REGISTRY (MULTI-AGENT GOVERNANCE)
+# ------------------------------------------------------------------------------
+
+# Bật endpoint giao thức A2A tại /a2a và gắn nhãn functional-type = "agent" trên Cloud Run
+enable_a2a_endpoint = false
+
+# Bật Google Cloud Agent Registry & Agent Gateway APIs (agentregistry.googleapis.com, agentgateway.googleapis.com)
+enable_agent_registry = false
