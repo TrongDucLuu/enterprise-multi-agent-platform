@@ -3,6 +3,9 @@ import time
 from unittest.mock import MagicMock
 import pytest
 
+# Pins it-helpdesk pack because lifecycle e2e tests mutate and assert IT Helpdesk sample documents
+pytestmark = pytest.mark.usefixtures("pinned_it_helpdesk_pack")
+
 from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
     InMemoryKnowledgeStore,
     BigQueryVectorKnowledgeStore,

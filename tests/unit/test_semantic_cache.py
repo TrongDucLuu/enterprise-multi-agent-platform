@@ -813,6 +813,150 @@ def test_runtime_semantic_cache_callback_propagates_clearance_and_blocks_public(
     assert kwargs.get("user_id") == "compliance_vp"
 
 
+def test_record_and_get_max_source_clearance_lifecycle():
+    """Unit test direct lifecycle of max source clearance contextvar helpers."""
+    from agent_core.app_utils.semantic_cache import (
+        record_source_clearance,
+        get_max_source_clearance,
+        reset_max_source_clearance,
+    )
+    reset_max_source_clearance()
+    assert get_max_source_clearance() is None
+
+    record_source_clearance(1)
+    assert get_max_source_clearance() == 1
+
+    record_source_clearance(3)
+    assert get_max_source_clearance() == 3
+
+    # Lower value should not decrease the max clearance
+    record_source_clearance(2)
+    assert get_max_source_clearance() == 3
+
+    # Invalid / None should be safely ignored
+    record_source_clearance(None)
+    assert get_max_source_clearance() == 3
+
+    reset_max_source_clearance()
+    assert get_max_source_clearance() is None
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_max_source_clearance_elevation():
+    """Verify that retrieving a high clearance source elevates cache clearance and disables is_public."""
+    from unittest.mock import MagicMock, patch
+    from google.adk.models import LlmResponse
+    from google.genai import types
+    from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
+    from agent_core.app_utils.semantic_cache import record_source_clearance
+    from agent_core.runtime import semantic_cache_after_model_callback
+
+    dev_user = SSOUser(
+        user_id="user_clearance_1",
+        email="user@company.com",
+        display_name="Standard Employee",
+        roles=["employee"],
+    )
+    current_sso_user.set(dev_user)
+
+    # Simulate RAG retrieval recording clearance_level=2
+    record_source_clearance(2)
+
+    mock_cache = MagicMock()
+    with patch("agent_core.runtime.get_semantic_cache", return_value=mock_cache):
+        llm_resp = LlmResponse(
+            content=types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Nội dung hướng dẫn xử lý mạng bảo mật cấp cao.")]
+            )
+        )
+
+        mock_inv_ctx = MagicMock()
+        mock_inv_ctx.agent.name = "l1_selfservice_agent"
+        mock_event = MagicMock()
+        mock_event.author = "user"
+        mock_event.content.parts = [types.Part.from_text(text="Hướng dẫn wifi")]
+        mock_inv_ctx._get_events.return_value = [mock_event]
+        mock_inv_ctx.session.events = [mock_event]
+
+        mock_cb_ctx = MagicMock()
+        mock_cb_ctx._invocation_context = mock_inv_ctx
+
+        await semantic_cache_after_model_callback(mock_cb_ctx, llm_resp)
+
+    assert mock_cache.set.called
+    kwargs = mock_cache.set.call_args.kwargs
+    # Elevated to 2 due to source clearance
+    assert kwargs.get("clearance_level") == 2
+    # Public caching strictly prohibited when sensitive source was touched
+    assert kwargs.get("is_public") is False
+    assert kwargs.get("user_id") == "user_clearance_1"
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_reset_max_source_clearance_per_turn():
+    """Verify before_callback and after_callback clean up max source clearance."""
+    from unittest.mock import MagicMock, patch
+    from google.adk.models import LlmRequest, LlmResponse
+    from google.genai import types
+    from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
+    from agent_core.app_utils.semantic_cache import (
+        record_source_clearance,
+        get_max_source_clearance,
+    )
+    from agent_core.runtime import (
+        semantic_cache_before_model_callback,
+        semantic_cache_after_model_callback,
+    )
+
+    dev_user = SSOUser(
+        user_id="test_user",
+        email="test@company.com",
+        display_name="Tester",
+        roles=["employee"],
+    )
+    current_sso_user.set(dev_user)
+
+    # 1. Leak a dirty clearance from previous operation
+    record_source_clearance(3)
+    assert get_max_source_clearance() == 3
+
+    # 2. Before model callback should reset it
+    mock_cb_ctx = MagicMock()
+    mock_inv_ctx = MagicMock()
+    mock_inv_ctx.agent.name = "l1_selfservice_agent"
+    mock_cb_ctx._invocation_context = mock_inv_ctx
+
+    llm_req = LlmRequest(contents=[types.Content(role="user", parts=[types.Part.from_text(text="xin chào")])])
+    await semantic_cache_before_model_callback(mock_cb_ctx, llm_req)
+    assert get_max_source_clearance() is None
+
+    # 3. Simulate RAG tool call during model step
+    record_source_clearance(1)
+    assert get_max_source_clearance() == 1
+
+    # 4. After model callback should consume and reset
+    mock_cache = MagicMock()
+    with patch("agent_core.runtime.get_semantic_cache", return_value=mock_cache):
+        llm_resp = LlmResponse(
+            content=types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Chào bạn! Tôi có thể giúp gì cho bạn?")]
+            )
+        )
+        mock_event = MagicMock()
+        mock_event.author = "user"
+        mock_event.content.parts = [types.Part.from_text(text="xin chào")]
+        mock_inv_ctx._get_events.return_value = [mock_event]
+        mock_inv_ctx.session.events = [mock_event]
+
+        await semantic_cache_after_model_callback(mock_cb_ctx, llm_resp)
+
+    assert get_max_source_clearance() is None
+
+
+
+
 
 
 

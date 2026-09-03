@@ -6,6 +6,7 @@ from agent_core.app_utils.sso_auth import require_role
 from agent_core.tools.obligations_store import get_obligations_store
 from agent_core.tools.enterprise_rag_mcp.knowledge_store import KnowledgeStoreUnavailableError
 from agent_core.tools.registry import register_tool
+from agent_core.app_utils.semantic_cache import record_source_clearance
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,10 @@ def get_obligation(obligation_id: str) -> dict:
                 "obligation_id": clean_id,
                 "message": f"Nghĩa vụ pháp lý '{clean_id}' không tồn tại trong cơ sở L3 Obligations Registry.",
             }
+
+        if hasattr(ob, "clearance_level"):
+            record_source_clearance(getattr(ob, "clearance_level", 0))
+
         return {
             "status": "success",
             "obligation_id": ob.obligation_id,
@@ -124,9 +129,8 @@ def list_contract_obligations(
         }
 
 
-@register_tool("review_it_contract_sla")
 @register_tool("review_contract_sla")
-def review_it_contract_sla(
+def review_contract_sla(
     contract_text: Optional[str] = None,
     vendor_name: str = "IT Vendor",
     focus_area: str = "ALL",
@@ -257,4 +261,9 @@ def review_it_contract_sla(
             "hoặc đàm phán hợp đồng bắt buộc phải được Bộ phận Pháp chế (Legal/Compliance) xác minh và phê duyệt."
         ),
     }
+
+
+# Backwards compatibility alias for python code imports
+review_it_contract_sla = review_contract_sla
+
 

@@ -1,5 +1,9 @@
 import pytest
 from unittest.mock import MagicMock, patch
+
+# Pins it-helpdesk pack because adversarial security tests assert boundaries against IT Helpdesk sample data
+pytestmark = pytest.mark.usefixtures("pinned_it_helpdesk_pack")
+
 from agent_core.tools.ticketing_tool import (
     create_helpdesk_ticket,
     get_ticket_details,

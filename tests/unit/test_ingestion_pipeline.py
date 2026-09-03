@@ -10,6 +10,9 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
 
+# Pins it-helpdesk pack because tests validate ingestion constants, chunking rules, and sample docs of it-helpdesk
+pytestmark = pytest.mark.usefixtures("pinned_it_helpdesk_pack")
+
 from scripts.ingest_knowledge_base import (
     DocumentParser,
     chunk_text,

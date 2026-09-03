@@ -5,6 +5,9 @@ import logging
 import pytest
 from unittest.mock import MagicMock, patch
 
+# Pins it-helpdesk pack because probe tests assert IT Helpdesk systems and fail-closed RAG lookups
+pytestmark = pytest.mark.usefixtures("pinned_it_helpdesk_pack")
+
 from agent_core.knowledge.base import SecurityContext
 from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 from agent_core.app_utils.artifact_storage import resolve_artifact_content

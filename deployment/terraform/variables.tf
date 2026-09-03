@@ -150,12 +150,6 @@ variable "redis_memory_size_gb" {
   default     = 1
 }
 
-variable "l3_rate_limit_per_minute" {
-  description = "Rate limit threshold for expensive L3 Gemini Pro reasoning calls per user per minute"
-  type        = number
-  default     = 10
-}
-
 variable "allow_unauthenticated" {
   description = "Whether to allow unauthenticated public HTTP access at Cloud Run layer (SSO auth is enforced at application middleware)"
   type        = bool
@@ -178,6 +172,30 @@ variable "rate_limit_per_minute" {
   description = "Rate limit threshold per client per minute"
   type        = number
   default     = 60
+}
+
+variable "rate_limit_per_day" {
+  description = "Rate limit threshold per client per day (24-hour sliding window)"
+  type        = number
+  default     = 1000
+}
+
+variable "l3_rate_limit_per_minute" {
+  description = "Rate limit threshold for expensive L3 Gemini Pro reasoning calls per user per minute"
+  type        = number
+  default     = 10
+}
+
+variable "l3_rate_limit_per_day" {
+  description = "Rate limit threshold for expensive L3 Gemini Pro reasoning calls per user per day (24-hour sliding window)"
+  type        = number
+  default     = 100
+}
+
+variable "monthly_token_budget" {
+  description = "Deployment-wide monthly token budget. When exceeded, the system enters Degrade Mode (L3 disabled, L1/L2 active). Set to 0 for unlimited."
+  type        = number
+  default     = 0
 }
 
 variable "agent_engine_resource_name" {

@@ -75,6 +75,34 @@ class SemanticCacheEntry:
         )
 
 
+from contextvars import ContextVar
+
+_max_source_clearance: ContextVar[Optional[int]] = ContextVar("_max_source_clearance", default=None)
+
+
+def record_source_clearance(clearance: Optional[int]) -> None:
+    """Records the maximum clearance level encountered from retrieved source documents/facts in the current turn."""
+    if clearance is None:
+        return
+    try:
+        val = int(clearance)
+    except (ValueError, TypeError):
+        return
+    current = _max_source_clearance.get()
+    if current is None or val > current:
+        _max_source_clearance.set(val)
+
+
+def get_max_source_clearance() -> Optional[int]:
+    """Retrieves the maximum source clearance level recorded in the current turn."""
+    return _max_source_clearance.get()
+
+
+def reset_max_source_clearance() -> None:
+    """Resets the maximum source clearance level for a new turn."""
+    _max_source_clearance.set(None)
+
+
 def resolve_caller_clearance(user_id: Optional[str] = None, clearance_level: Optional[int] = None) -> int:
     """
     Resolves caller clearance level (0=Public, 1=Internal, 2=Confidential, 3=Restricted):

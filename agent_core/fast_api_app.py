@@ -9,6 +9,7 @@ from agent_core.app_utils.env import init_environment, is_production_mode
 from agent_core.app_utils.sso_auth import (
     SSOUser,
     get_current_user,
+    require_admin,
     create_dev_mock_token,
     SSOAuthenticationMiddleware,
     is_allow_local_dev_sso,
@@ -184,22 +185,31 @@ async def get_semantic_cache_stats(user: SSOUser = Depends(get_current_user)):
 @app.get("/api/cache/query", tags=["Optimization"])
 async def query_semantic_cache(
     q: str = Query(..., description="User question to check in cache"),
-    threshold: float = Query(0.92, description="Similarity threshold (0.0 to 1.0)"),
+    threshold: float = Query(0.92, description="Similarity threshold (0.85 to 1.0)"),
     user: SSOUser = Depends(get_current_user)
 ):
     """Performs instant sub-50ms semantic cache lookup with user isolation."""
+    if threshold < 0.85:
+        from fastapi import HTTPException, status
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Similarity threshold must be >= 0.85 to prevent unauthorized content enumeration."
+        )
     cache = get_semantic_cache()
     match = cache.get(q, user_id=user.user_id, similarity_threshold=threshold)
     if match:
         return {"status": "hit", "result": match}
     return {"status": "miss", "message": "No semantically similar query found in cache."}
 
-# 4. Product Analytics & Telemetry Aggregation Endpoint
+# 4. Product Analytics & Telemetry Aggregation Endpoint (Requires Admin)
+@app.get("/api/analytics/instance-summary", tags=["Product Telemetry & Analytics"])
 @app.get("/api/analytics/summary", tags=["Product Telemetry & Analytics"])
-async def get_analytics_summary(user: SSOUser = Depends(get_current_user)):
-    """Returns aggregated product metrics: Cache Hit Rate, Tier Distribution, and Query Latency."""
+async def get_analytics_summary(user: SSOUser = Depends(require_admin)):
+    """Returns aggregated single-instance product metrics: Cache Hit Rate, Tier Distribution, and Query Latency."""
     from agent_core.app_utils.telemetry import ProductMetricsCollector
-    return ProductMetricsCollector.get_summary_stats()
+    stats = ProductMetricsCollector.get_summary_stats()
+    stats["scope"] = "single_instance"
+    return stats
 
 # 5. Development-Only Mock Token Minting Route (Omitted in Production)
 if is_allow_local_dev_sso():

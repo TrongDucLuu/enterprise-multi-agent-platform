@@ -112,6 +112,42 @@ except ImportError:
             return os.getenv("ENVIRONMENT", "").lower() == "production" or bool(os.getenv("K_SERVICE"))
 
 
+def normalize_similarity(distance: float, metric: str = "COSINE") -> float:
+    """
+    Normalizes raw vector distance into a bounded similarity score in [0.0, 1.0].
+    
+    For COSINE distance (which ranges in [0.0, 2.0]):
+        similarity = max(0.0, min(1.0, 1.0 - (distance / 2.0)))
+    For EUCLIDEAN distance:
+        similarity = max(0.0, min(1.0, 1.0 / (1.0 + distance)))
+    For DOT_PRODUCT / other:
+        similarity = max(0.0, min(1.0, (distance + 1.0) / 2.0))
+        
+    Rounds to 4 decimal places. Logs raw_distance and normalized_score at DEBUG level.
+    """
+    try:
+        dist_f = float(distance)
+    except (ValueError, TypeError):
+        dist_f = 2.0
+
+    metric_upper = str(metric).upper().strip() if metric else "COSINE"
+    if metric_upper == "COSINE":
+        score = max(0.0, min(1.0, 1.0 - (dist_f / 2.0)))
+    elif metric_upper == "EUCLIDEAN":
+        score = max(0.0, min(1.0, 1.0 / (1.0 + dist_f)))
+    elif metric_upper == "DOT_PRODUCT":
+        score = max(0.0, min(1.0, (dist_f + 1.0) / 2.0))
+    else:
+        score = max(0.0, min(1.0, 1.0 - (dist_f / 2.0)))
+
+    score = round(score, 4)
+    logger.debug(
+        "Vector distance normalized: raw_distance=%s, metric=%s, normalized_score=%s",
+        dist_f, metric_upper, score
+    )
+    return score
+
+
 class KnowledgeStoreUnavailableError(Exception):
     """Raised when the primary enterprise knowledge store backend (e.g. BigQuery) fails or is unreachable."""
     pass
@@ -482,6 +518,17 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
         # Resolve effective security context: Fail-closed (default to anonymous, never fabricate roles)
         sec_ctx = resolve_security_context(security_context=security_context)
 
+        # 2. Get retrieval configuration (fraction_lists_to_search, hybrid_search_enabled, retrieve_k, final_k, adaptive_retrieval_rounds)
+        retrieval_cfg = get_retrieval_config()
+        fraction_lists_to_search = retrieval_cfg.get("fraction_lists_to_search", 0.05)
+        hybrid_enabled = retrieval_cfg.get("hybrid_search_enabled", True)
+        reranker_enabled = retrieval_cfg.get("reranker_enabled", False) or os.getenv("USE_VERTEX_RERANKER", "false").lower() in ("true", "1", "yes")
+
+        cfg_retrieve_k = retrieval_cfg.get("retrieve_k", 20)
+        cfg_final_k = retrieval_cfg.get("final_k", 3)
+        target_final_k = limit if limit is not None and limit > 0 else cfg_final_k
+        max_rounds = int(retrieval_cfg.get("adaptive_retrieval_rounds", 2))
+
         try:
             query_vec = self._generate_embedding(query)
             full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
@@ -489,218 +536,231 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             from google.cloud import bigquery
             today_iso = datetime.date.today().isoformat()
 
-            query_params = [
-                bigquery.ArrayQueryParameter("query_vector", "FLOAT64", query_vec),
-                bigquery.ScalarQueryParameter("limit", "INT64", max(limit * 2, 10)),  # Over-retrieve for post-filtering
-                bigquery.ScalarQueryParameter("today", "DATE", today_iso),
-                bigquery.ScalarQueryParameter("user_clearance", "INT64", sec_ctx.clearance_level),
-            ]
-
-            # 1. Construct Pre-Filter Subquery for VECTOR_SEARCH (Tombstone + Dates + System RBAC + Scalar Clearance)
+            # Base scalar pre-filters (tombstone + dates + scalar clearance level)
             base_filters = (
                 "(is_deleted IS NOT TRUE) "
                 "AND (expiry_date IS NULL OR expiry_date >= @today) "
                 "AND (effective_date IS NULL OR effective_date <= @today) "
                 "AND (clearance_level IS NULL OR clearance_level <= @user_clearance)"
             )
-            if clean_system != "ALL":
-                base_table_expr = f"(SELECT * FROM {full_table} WHERE system = @system_param AND {base_filters})"
-                query_params.append(bigquery.ScalarQueryParameter("system_param", "STRING", clean_system))
-            elif allowed_systems is not None:
-                clean_allowed = [s.upper() for s in allowed_systems if s.upper() in valid_systems and s.upper() != "ALL"]
-                if not clean_allowed:
-                    return []
-                base_table_expr = f"(SELECT * FROM {full_table} WHERE system IN UNNEST(@allowed_systems_param) AND {base_filters})"
-                query_params.append(bigquery.ArrayQueryParameter("allowed_systems_param", "STRING", clean_allowed))
-            else:
-                base_table_expr = f"(SELECT * FROM {full_table} WHERE {base_filters})"
-
-            # 2. Get retrieval configuration (fraction_lists_to_search & hybrid_search_enabled)
-            retrieval_cfg = get_retrieval_config()
-            fraction_lists_to_search = retrieval_cfg.get("fraction_lists_to_search", 0.05)
-            hybrid_enabled = retrieval_cfg.get("hybrid_search_enabled", True)
 
             index_active = self._is_vector_index_active()
             options_clause = f", options => '{{\"fraction_lists_to_search\": {fraction_lists_to_search}}}'" if index_active else ""
 
-            if hybrid_enabled:
-                query_params.append(bigquery.ScalarQueryParameter("query_text", "STRING", query.strip()))
-                sql = f"""
-                SELECT 
-                    base.id, 
-                    base.parent_doc_id,
-                    base.chunk_index,
-                    base.system, 
-                    base.title, 
-                    base.content, 
-                    base.section_h1,
-                    base.section_h2,
-                    base.section_h3,
-                    base.allowed_roles,
-                    base.sensitivity,
-                    base.clearance_level,
-                    base.source_uri,
-                    base.category,
-                    base.keywords,
-                    base.owner,
-                    base.effective_date,
-                    base.expiry_date,
-                    base.is_deleted,
-                    distance
-                FROM VECTOR_SEARCH(
-                    {base_table_expr},
-                    'embedding',
-                    query_value => @query_vector,
-                    lexical_search_columns => ['title', 'content', 'keywords'],
-                    lexical_search_query_value => @query_text,
-                    top_k => @limit,
-                    distance_type => 'COSINE'{options_clause}
-                )
-                ORDER BY distance ASC
-                """
-            else:
-                # 3. Pure Vector Search SQL with BigQuery VECTOR_SEARCH Pre-Filtering & Stored Fields
-                sql = f"""
-                SELECT 
-                    base.id, 
-                    base.parent_doc_id,
-                    base.chunk_index,
-                    base.system, 
-                    base.title, 
-                    base.content, 
-                    base.section_h1,
-                    base.section_h2,
-                    base.section_h3,
-                    base.allowed_roles,
-                    base.sensitivity,
-                    base.clearance_level,
-                    base.source_uri,
-                    base.category,
-                    base.keywords,
-                    base.owner,
-                    base.effective_date,
-                    base.expiry_date,
-                    base.is_deleted,
-                    distance
-                FROM VECTOR_SEARCH(
-                    {base_table_expr},
-                    'embedding',
-                    query_value => @query_vector,
-                    top_k => @limit,
-                    distance_type => 'COSINE'{options_clause}
-                )
-                ORDER BY distance ASC
-                """
+            authorized_candidates: list[SearchResult] = []
+            seen_ids: set[str] = set()
+            current_retrieve_k = max(cfg_retrieve_k, target_final_k * 2, 10)
 
-            bq_timeout = float(os.getenv("BIGQUERY_QUERY_TIMEOUT_SECONDS", "3.0"))
-            job_timeout_ms = int(bq_timeout * 1000)
-            job_config = bigquery.QueryJobConfig(
-                query_parameters=query_params,
-                job_timeout_ms=job_timeout_ms,
-            )
-            query_job = self.bq_client.query(sql, job_config=job_config)
-            try:
-                rows = query_job.result(timeout=bq_timeout)
-            except Exception as query_err:
+            for round_idx in range(1, max_rounds + 1):
+                query_params = [
+                    bigquery.ArrayQueryParameter("query_vector", "FLOAT64", query_vec),
+                    bigquery.ScalarQueryParameter("limit", "INT64", current_retrieve_k),
+                    bigquery.ScalarQueryParameter("today", "DATE", today_iso),
+                    bigquery.ScalarQueryParameter("user_clearance", "INT64", sec_ctx.clearance_level),
+                ]
+
+                # 1. Construct Pre-Filter Subquery for VECTOR_SEARCH (Tombstone + Dates + System RBAC + Scalar Clearance)
+                if clean_system != "ALL":
+                    base_table_expr = f"(SELECT * FROM {full_table} WHERE system = @system_param AND {base_filters})"
+                    query_params.append(bigquery.ScalarQueryParameter("system_param", "STRING", clean_system))
+                elif allowed_systems is not None:
+                    clean_allowed = [s.upper() for s in allowed_systems if s.upper() in valid_systems and s.upper() != "ALL"]
+                    if not clean_allowed:
+                        return []
+                    base_table_expr = f"(SELECT * FROM {full_table} WHERE system IN UNNEST(@allowed_systems_param) AND {base_filters})"
+                    query_params.append(bigquery.ArrayQueryParameter("allowed_systems_param", "STRING", clean_allowed))
+                else:
+                    base_table_expr = f"(SELECT * FROM {full_table} WHERE {base_filters})"
+
+                if hybrid_enabled:
+                    query_params.append(bigquery.ScalarQueryParameter("query_text", "STRING", query.strip()))
+                    sql = f"""
+                    SELECT 
+                        base.id, 
+                        base.parent_doc_id,
+                        base.chunk_index,
+                        base.system, 
+                        base.title, 
+                        base.content, 
+                        base.section_h1,
+                        base.section_h2,
+                        base.section_h3,
+                        base.allowed_roles,
+                        base.sensitivity,
+                        base.clearance_level,
+                        base.source_uri,
+                        base.category,
+                        base.keywords,
+                        base.owner,
+                        base.effective_date,
+                        base.expiry_date,
+                        base.is_deleted,
+                        distance
+                    FROM VECTOR_SEARCH(
+                        {base_table_expr},
+                        'embedding',
+                        query_value => @query_vector,
+                        lexical_search_columns => ['title', 'content', 'keywords'],
+                        lexical_search_query_value => @query_text,
+                        top_k => @limit,
+                        distance_type => 'COSINE'{options_clause}
+                    )
+                    """
+                else:
+                    # Pure Vector Search SQL with BigQuery VECTOR_SEARCH Pre-Filtering & Stored Fields
+                    sql = f"""
+                    SELECT 
+                        base.id, 
+                        base.parent_doc_id,
+                        base.chunk_index,
+                        base.system, 
+                        base.title, 
+                        base.content, 
+                        base.section_h1,
+                        base.section_h2,
+                        base.section_h3,
+                        base.allowed_roles,
+                        base.sensitivity,
+                        base.clearance_level,
+                        base.source_uri,
+                        base.category,
+                        base.keywords,
+                        base.owner,
+                        base.effective_date,
+                        base.expiry_date,
+                        base.is_deleted,
+                        distance
+                    FROM VECTOR_SEARCH(
+                        {base_table_expr},
+                        'embedding',
+                        query_value => @query_vector,
+                        top_k => @limit,
+                        distance_type => 'COSINE'{options_clause}
+                    )
+                    ORDER BY distance ASC
+                    """
+
+                bq_timeout = float(os.getenv("BIGQUERY_QUERY_TIMEOUT_SECONDS", "3.0"))
+                job_timeout_ms = int(bq_timeout * 1000)
+                job_config = bigquery.QueryJobConfig(
+                    query_parameters=query_params,
+                    job_timeout_ms=job_timeout_ms,
+                )
+                query_job = self.bq_client.query(sql, job_config=job_config)
                 try:
-                    query_job.cancel()
-                except Exception as cancel_err:
-                    logger.debug("Failed to cancel BigQuery query job: %s", cancel_err)
-                raise query_err
+                    rows = list(query_job.result(timeout=bq_timeout))
+                except Exception as query_err:
+                    try:
+                        query_job.cancel()
+                    except Exception as cancel_err:
+                        logger.debug("Failed to cancel BigQuery query job: %s", cancel_err)
+                    raise query_err
 
-            # Telemetry: Record and log BigQuery query resource consumption
-            try:
-                bytes_billed = getattr(query_job, "total_bytes_billed", None)
-                bytes_processed = getattr(query_job, "total_bytes_processed", None)
-                cache_hit = getattr(query_job, "cache_hit", None)
-                slot_ms = getattr(query_job, "slot_millis", None)
-                logger.info(
-                    "BigQuery Vector Search Telemetry: bytes_billed=%s, bytes_processed=%s, cache_hit=%s, slot_ms=%s, job_id=%s",
-                    bytes_billed, bytes_processed, cache_hit, slot_ms, getattr(query_job, "job_id", None)
-                )
-            except Exception as telem_err:
-                logger.debug("Error recording BigQuery telemetry: %s", telem_err)
+                # Telemetry: Record and log BigQuery query resource consumption
+                try:
+                    bytes_billed = getattr(query_job, "total_bytes_billed", None)
+                    bytes_processed = getattr(query_job, "total_bytes_processed", None)
+                    cache_hit = getattr(query_job, "cache_hit", None)
+                    slot_ms = getattr(query_job, "slot_millis", None)
+                    logger.info(
+                        "BigQuery Vector Search Telemetry (round %d/%d, retrieve_k=%d): bytes_billed=%s, bytes_processed=%s, cache_hit=%s, slot_ms=%s, job_id=%s",
+                        round_idx, max_rounds, current_retrieve_k, bytes_billed, bytes_processed, cache_hit, slot_ms, getattr(query_job, "job_id", None)
+                    )
+                except Exception as telem_err:
+                    logger.debug("Error recording BigQuery telemetry: %s", telem_err)
 
-            results = []
-            for row in rows:
-                content_raw = getattr(row, "content", "")
-                content_str = str(content_raw) if content_raw is not None else ""
-                
-                dist_val = getattr(row, "distance", 0.0)
-                dist_float = float(dist_val) if isinstance(dist_val, (int, float)) else 0.0
-                relevance = round(max(0.0, min(1.0, 1.0 - dist_float)), 2)
+                for row in rows:
+                    art_id = _extract_str(getattr(row, "id", "")) or ""
+                    if not art_id or art_id in seen_ids:
+                        continue
 
-                sec_h1 = _extract_str(getattr(row, "section_h1", None))
-                sec_h2 = _extract_str(getattr(row, "section_h2", None))
-                sec_h3 = _extract_str(getattr(row, "section_h3", None))
-                
-                raw_hier = getattr(row, "section_hierarchy", None)
-                if raw_hier and not any([sec_h1, sec_h2, sec_h3]):
-                    hier_dict = dict(raw_hier) if hasattr(raw_hier, "items") else (raw_hier if isinstance(raw_hier, dict) else {})
-                    sec_h1 = _extract_str(hier_dict.get("h1"))
-                    sec_h2 = _extract_str(hier_dict.get("h2"))
-                    sec_h3 = _extract_str(hier_dict.get("h3"))
+                    content_raw = getattr(row, "content", "")
+                    content_str = str(content_raw) if content_raw is not None else ""
+                    
+                    dist_val = getattr(row, "distance", 0.0)
+                    relevance = normalize_similarity(dist_val, metric="COSINE")
 
-                sec_hier = None
-                if any([sec_h1, sec_h2, sec_h3]):
-                    sec_hier = SectionHierarchy(h1=sec_h1, h2=sec_h2, h3=sec_h3)
+                    sec_h1 = _extract_str(getattr(row, "section_h1", None))
+                    sec_h2 = _extract_str(getattr(row, "section_h2", None))
+                    sec_h3 = _extract_str(getattr(row, "section_h3", None))
+                    
+                    raw_hier = getattr(row, "section_hierarchy", None)
+                    if raw_hier and not any([sec_h1, sec_h2, sec_h3]):
+                        hier_dict = dict(raw_hier) if hasattr(raw_hier, "items") else (raw_hier if isinstance(raw_hier, dict) else {})
+                        sec_h1 = _extract_str(hier_dict.get("h1"))
+                        sec_h2 = _extract_str(hier_dict.get("h2"))
+                        sec_h3 = _extract_str(hier_dict.get("h3"))
 
-                art_id = _extract_str(getattr(row, "id", "")) or ""
-                art_sys = _extract_str(getattr(row, "system", "")) or ""
-                art_title = _extract_str(getattr(row, "title", "")) or ""
-                category = _extract_str(getattr(row, "category", None))
-                
-                context_path = sec_hier.format_path() if sec_hier else f"{art_sys} > {category or 'General'} > {art_title}"
-                
-                is_truncated = len(content_str) > 1200
-                raw_snippet = content_str[:1200].strip() + "..." if is_truncated else content_str.strip()
-                snippet = wrap_retrieved_document(
-                    content=raw_snippet,
-                    doc_id=art_id,
-                    system=art_sys,
-                    title=art_title,
-                )
+                    sec_hier = None
+                    if any([sec_h1, sec_h2, sec_h3]):
+                        sec_hier = SectionHierarchy(h1=sec_h1, h2=sec_h2, h3=sec_h3)
 
-                candidate = SearchResult(
-                    article_id=art_id,
-                    parent_doc_id=_extract_str(getattr(row, "parent_doc_id", None)),
-                    chunk_index=getattr(row, "chunk_index", None) if isinstance(getattr(row, "chunk_index", None), int) else None,
-                    system=art_sys,
-                    title=art_title,
-                    snippet=snippet,
-                    relevance_score=relevance,
-                    section_h1=sec_h1,
-                    section_h2=sec_h2,
-                    section_h3=sec_h3,
-                    section_hierarchy=sec_hier,
-                    context_path=context_path,
-                    allowed_roles=_extract_list(getattr(row, "allowed_roles", None)),
-                    sensitivity=_extract_str(getattr(row, "sensitivity", None)),
-                    clearance_level=getattr(row, "clearance_level", None),
-                    source_uri=_extract_str(getattr(row, "source_uri", None)),
-                    category=category,
-                    keywords=_extract_list(getattr(row, "keywords", None)),
-                    owner=_extract_str(getattr(row, "owner", None)),
-                    effective_date=_extract_str(getattr(row, "effective_date", None)),
-                    expiry_date=_extract_str(getattr(row, "expiry_date", None)),
-                    is_deleted=_extract_bool(getattr(row, "is_deleted", False)),
-                    is_truncated=is_truncated,
-                )
+                    art_sys = _extract_str(getattr(row, "system", "")) or ""
+                    art_title = _extract_str(getattr(row, "title", "")) or ""
+                    category = _extract_str(getattr(row, "category", None))
+                    
+                    context_path = sec_hier.format_path() if sec_hier else f"{art_sys} > {category or 'General'} > {art_title}"
+                    
+                    is_truncated = len(content_str) > 1200
+                    raw_snippet = content_str[:1200].strip() + "..." if is_truncated else content_str.strip()
+                    snippet = wrap_retrieved_document(
+                        content=raw_snippet,
+                        doc_id=art_id,
+                        system=art_sys,
+                        title=art_title,
+                    )
 
-                if not authorize_document(candidate, sec_ctx):
-                    continue
+                    candidate = SearchResult(
+                        article_id=art_id,
+                        parent_doc_id=_extract_str(getattr(row, "parent_doc_id", None)),
+                        chunk_index=getattr(row, "chunk_index", None) if isinstance(getattr(row, "chunk_index", None), int) else None,
+                        system=art_sys,
+                        title=art_title,
+                        snippet=snippet,
+                        relevance_score=relevance,
+                        section_h1=sec_h1,
+                        section_h2=sec_h2,
+                        section_h3=sec_h3,
+                        section_hierarchy=sec_hier,
+                        context_path=context_path,
+                        allowed_roles=_extract_list(getattr(row, "allowed_roles", None)),
+                        sensitivity=_extract_str(getattr(row, "sensitivity", None)),
+                        clearance_level=getattr(row, "clearance_level", None),
+                        source_uri=_extract_str(getattr(row, "source_uri", None)),
+                        category=category,
+                        keywords=_extract_list(getattr(row, "keywords", None)),
+                        owner=_extract_str(getattr(row, "owner", None)),
+                        effective_date=_extract_str(getattr(row, "effective_date", None)),
+                        expiry_date=_extract_str(getattr(row, "expiry_date", None)),
+                        is_deleted=_extract_bool(getattr(row, "is_deleted", False)),
+                        is_truncated=is_truncated,
+                    )
 
-                results.append(candidate)
+                    # Authorize candidate BEFORE adding to candidate pool for reranking
+                    if not authorize_document(candidate, sec_ctx):
+                        continue
 
-            if retrieval_cfg.get("reranker_enabled", False) or os.getenv("USE_VERTEX_RERANKER", "false").lower() in ("true", "1", "yes"):
-                results = rerank_search_results(
+                    seen_ids.add(art_id)
+                    authorized_candidates.append(candidate)
+
+                # Check if we have enough authorized candidates or exhausted rounds / database rows
+                if len(authorized_candidates) >= target_final_k or round_idx >= max_rounds or len(rows) < current_retrieve_k:
+                    break
+
+                # Adaptively increase retrieve limit for subsequent round
+                current_retrieve_k = max(current_retrieve_k * 2, target_final_k * 4)
+
+            # Rerank strictly AFTER authorization: Unauthorized docs are NEVER sent to the reranker
+            if reranker_enabled:
+                authorized_candidates = rerank_search_results(
                     query=query,
-                    candidates=results,
-                    top_n=limit,
+                    candidates=authorized_candidates,
+                    top_n=target_final_k,
                     project_id=self.project_id,
                     ranking_model=retrieval_cfg.get("reranker_model", "semantic-ranker-512@latest"),
+                    use_reranker=True,
                 )
-            return results[:limit]
+            return authorized_candidates[:target_final_k]
         except Exception as e:
             logger.error("BigQuery vector search failed (%s). Raising KnowledgeStoreUnavailableError.", e)
             raise KnowledgeStoreUnavailableError(f"Truy vấn BigQuery Vector Search thất bại hoặc quá thời gian chờ: {e}") from e
@@ -1037,8 +1097,16 @@ class VertexAISearchKnowledgeStore(BaseKnowledgeStore):
 
         # Apply reranker if enabled
         retrieval_cfg = get_retrieval_config()
-        if retrieval_cfg.get("reranker_enabled", False) and search_results:
-            search_results = rerank_search_results(query, search_results)
+        reranker_enabled = retrieval_cfg.get("reranker_enabled", False) or os.getenv("USE_VERTEX_RERANKER", "false").lower() in ("true", "1", "yes")
+        if reranker_enabled and search_results:
+            search_results = rerank_search_results(
+                query=query,
+                candidates=search_results,
+                top_n=limit,
+                project_id=self.project_id,
+                ranking_model=retrieval_cfg.get("reranker_model", "semantic-ranker-512@latest"),
+                use_reranker=True,
+            )
 
         return search_results[:limit]
 

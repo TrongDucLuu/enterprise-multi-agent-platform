@@ -2,6 +2,9 @@ import pytest
 from unittest.mock import MagicMock, patch
 from pydantic import ValidationError
 
+# Pins it-helpdesk pack because tests assert sample IT Helpdesk SLA obligations (SAP Enterprise, etc.)
+pytestmark = pytest.mark.usefixtures("pinned_it_helpdesk_pack")
+
 from agent_core.tools.enterprise_rag_mcp.rag_models import Obligation
 from agent_core.tools.obligations_store import (
     BaseObligationsStore,

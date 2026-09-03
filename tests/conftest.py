@@ -182,6 +182,17 @@ class FakeFirestoreClient:
 
 
 @pytest.fixture(autouse=True)
+def reset_contextvars_and_cache():
+    """Autouse fixture resetting ContextVars between tests to avoid cross-test context pollution."""
+    from agent_core.app_utils.semantic_cache import reset_max_source_clearance
+    from agent_core.app_utils.sso_auth import current_sso_user
+    reset_max_source_clearance()
+    yield
+    reset_max_source_clearance()
+    current_sso_user.set(None)
+
+
+@pytest.fixture(autouse=True)
 def fake_firestore():
     """
     Autouse fixture providing an in-memory FakeFirestoreClient
@@ -215,22 +226,25 @@ def employee_sec_ctx():
     )
 
 
-@pytest.fixture(autouse=True)
-def hermetic_domain_pack_isolation(monkeypatch):
+@pytest.fixture
+def pinned_it_helpdesk_pack(monkeypatch):
     """
-    Ensures that in-process unit tests run with DOMAIN_PACK='it-helpdesk' by default,
-    preventing global runner environment variables (e.g. DOMAIN_PACK=_template) from
-    leaking into tests specifically asserting IT Helpdesk systems and knowledge base.
+    Explicit opt-in fixture ensuring that tests specifically asserting IT Helpdesk
+    domain systems (CRM, ERP, HRM) and sample knowledge run with DOMAIN_PACK='it-helpdesk'.
     """
     monkeypatch.setenv("DOMAIN_PACK", "it-helpdesk")
     monkeypatch.setenv("KNOWLEDGE_BACKEND", "in_memory")
     from agent_core.app_utils.system_config import reload_system_config
+    from agent_core.tools.obligations_store import reset_obligations_store
     try:
         reload_system_config()
+        reset_obligations_store()
     except Exception:
         pass
     yield
     try:
         reload_system_config()
+        reset_obligations_store()
     except Exception:
         pass
+

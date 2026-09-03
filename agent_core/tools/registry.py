@@ -30,21 +30,38 @@ def list_registered_tools() -> list[str]:
     return sorted(list(TOOL_REGISTRY.keys()))
 
 
-def resolve_tools(names: list[str]) -> list[object]:
+def get_active_tool_aliases() -> dict[str, str]:
+    """Retrieves tool aliases from the active domain pack configuration."""
+    try:
+        from agent_core.agent_builder import load_domain_pack
+        pack_info = load_domain_pack()
+        return pack_info.get("pack_meta", {}).get("tool_aliases", {}) or {}
+    except Exception:
+        return {}
+
+
+def resolve_tools(names: list[str], tool_aliases: Optional[dict[str, str]] = None) -> list[object]:
     """
     Resolves a list of tool names to their registered callable functions or built-in tool instances.
+    If tool_aliases is provided (or loaded from domain pack), resolves aliases to canonical tool names first.
     Raises ValueError if any tool is unknown (fail-closed).
     """
+    if tool_aliases is None:
+        tool_aliases = get_active_tool_aliases()
+
     resolved = []
     missing = []
     for n in names:
-        if n in ("builtin:preload_memory", "preload_memory"):
+        target_name = tool_aliases.get(n, n)
+        if target_name in ("builtin:preload_memory", "preload_memory"):
             try:
                 from google.adk.tools import preload_memory_tool
                 resolved.append(preload_memory_tool.PreloadMemoryTool())
             except Exception as e:
                 logger.error("Failed to instantiate PreloadMemoryTool: %s", e)
                 raise
+        elif target_name in TOOL_REGISTRY:
+            resolved.append(TOOL_REGISTRY[target_name])
         elif n in TOOL_REGISTRY:
             resolved.append(TOOL_REGISTRY[n])
         else:

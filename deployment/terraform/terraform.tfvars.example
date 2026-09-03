@@ -84,8 +84,16 @@ max_instance_request_concurrency = 8
 redis_enabled = true
 redis_memory_size_gb = 1
 
-# Giới hạn số lượt gọi mô hình suy luận chuyên sâu L3 Gemini Pro mỗi người dùng / phút
+# Giới hạn số lượt gọi API toàn hệ thống cho mỗi người dùng (Phút & Ngày - Sliding Window)
+rate_limit_per_minute = 60
+rate_limit_per_day = 1000
+
+# Giới hạn số lượt gọi mô hình suy luận chuyên sâu L3 Gemini Pro mỗi người dùng (Phút & Ngày - Sliding Window)
 l3_rate_limit_per_minute = 10
+l3_rate_limit_per_day = 100
+
+# Ngân sách Token hàng tháng cho toàn bộ deployment (0 = không giới hạn; > 0 = Degrade Mode khi vượt ngưỡng)
+monthly_token_budget = 10000000
 
 
 # ------------------------------------------------------------------------------

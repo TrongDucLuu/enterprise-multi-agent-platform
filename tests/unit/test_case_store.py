@@ -15,7 +15,8 @@ from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 
 
 @pytest.fixture(autouse=True)
-def clean_case_store(fake_firestore):
+def clean_case_store(fake_firestore, pinned_it_helpdesk_pack):
+    """Pins it-helpdesk pack because this suite tests the IT Helpdesk case schema (tiers, roles, transitions)."""
     _CASES_DB.clear()
     _CASES_CACHE_TIMES.clear()
     clear_case_schema_cache()

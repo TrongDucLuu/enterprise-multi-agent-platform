@@ -272,5 +272,11 @@ def get_obligations_store() -> BaseObligationsStore:
         _GLOBAL_OBLIGATIONS_STORE = BigQueryObligationsStore(project_id=project_id, dataset_id=dataset_id)
     else:
         _GLOBAL_OBLIGATIONS_STORE = InMemoryObligationsStore()
-
     return _GLOBAL_OBLIGATIONS_STORE
+
+
+def reset_obligations_store() -> None:
+    """Resets global obligations store singleton (used in test fixtures/pack reloading)."""
+    global _GLOBAL_OBLIGATIONS_STORE
+    _GLOBAL_OBLIGATIONS_STORE = None
+

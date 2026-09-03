@@ -329,7 +329,7 @@ def test_swagger_openapi_disabled_in_production(monkeypatch):
         assert client.get("/redoc", headers=auth_headers).status_code == 404
 
 
-def test_verify_google_oidc_token_groups_claim_list(monkeypatch):
+def test_verify_google_oidc_token_groups_claim_list(monkeypatch, pinned_it_helpdesk_pack):
     monkeypatch.setenv("SSO_GROUPS_CLAIM", "custom_groups")
     mock_payload = {
         "sub": "google-uid-12345",
@@ -349,7 +349,7 @@ def test_verify_google_oidc_token_groups_claim_list(monkeypatch):
         assert "it_admin" in user.roles
 
 
-def test_verify_google_oidc_token_groups_claim_csv_string(monkeypatch):
+def test_verify_google_oidc_token_groups_claim_csv_string(monkeypatch, pinned_it_helpdesk_pack):
     monkeypatch.setenv("SSO_GROUPS_CLAIM", "groups")
     mock_payload = {
         "sub": "google-uid-12345",

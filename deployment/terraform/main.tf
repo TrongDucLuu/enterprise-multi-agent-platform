@@ -802,8 +802,24 @@ resource "google_cloud_run_v2_service" "default" {
         value = var.redis_enabled ? "true" : "false"
       }
       env {
+        name  = "RATE_LIMIT_PER_MINUTE"
+        value = tostring(var.rate_limit_per_minute)
+      }
+      env {
+        name  = "RATE_LIMIT_PER_DAY"
+        value = tostring(var.rate_limit_per_day)
+      }
+      env {
         name  = "L3_RATE_LIMIT_PER_MINUTE"
         value = tostring(var.l3_rate_limit_per_minute)
+      }
+      env {
+        name  = "L3_RATE_LIMIT_PER_DAY"
+        value = tostring(var.l3_rate_limit_per_day)
+      }
+      env {
+        name  = "MONTHLY_TOKEN_BUDGET"
+        value = tostring(var.monthly_token_budget)
       }
 
       resources {

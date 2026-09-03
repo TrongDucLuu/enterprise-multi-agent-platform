@@ -96,8 +96,11 @@ def test_analytics_summary_endpoint(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_telemetry_live_wiring_in_agent_callbacks():
-    """Verify that agent callbacks automatically record interaction metrics into telemetry."""
+async def test_telemetry_live_wiring_in_agent_callbacks(pinned_it_helpdesk_pack):
+    """
+    Simulate full end-to-end LLM request/response lifecycle:
+    Verify that before_model_callback and after_model_callback correctly record telemetry events.
+    """
     from google.adk.models import LlmRequest, LlmResponse
     from google.genai import types
     from unittest.mock import MagicMock

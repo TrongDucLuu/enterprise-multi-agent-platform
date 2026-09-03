@@ -6,8 +6,7 @@ from agent_core.tools.registry import register_tool
 
 
 @register_tool("analyze_log_rca")
-@register_tool("analyze_system_logs_for_rca")
-def analyze_system_logs_for_rca(
+def analyze_log_rca(
     raw_logs: Optional[str] = None,
     system_name: str = "Core System",
     incident_description: Optional[str] = None,
@@ -123,3 +122,8 @@ def analyze_system_logs_for_rca(
             "xác minh và phê duyệt trước khi áp dụng hành động can thiệp vào môi trường vận hành."
         ),
     }
+
+
+# Backwards compatibility alias for python code imports
+analyze_system_logs_for_rca = analyze_log_rca
+

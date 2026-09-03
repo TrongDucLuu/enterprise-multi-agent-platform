@@ -16,7 +16,12 @@ from agent_core.app_utils.env import (
     init_environment,
     get_model_names_for_environment,
 )
-from agent_core.app_utils.semantic_cache import get_semantic_cache, resolve_caller_clearance
+from agent_core.app_utils.semantic_cache import (
+    get_semantic_cache,
+    resolve_caller_clearance,
+    get_max_source_clearance,
+    reset_max_source_clearance,
+)
 from agent_core.app_utils.sso_auth import current_sso_user
 from agent_core.app_utils.telemetry import ProductMetricsCollector
 
@@ -71,6 +76,7 @@ async def semantic_cache_before_model_callback(
     """
     start_t = time.perf_counter()
     _turn_start_time.set(start_t)
+    reset_max_source_clearance()
 
     inv_ctx = getattr(callback_context, "_invocation_context", None)
     agent_name = inv_ctx.agent.name if inv_ctx and hasattr(inv_ctx, "agent") else ""
@@ -78,18 +84,31 @@ async def semantic_cache_before_model_callback(
     user = current_sso_user.get()
     user_id = user.user_id if user else None
 
-    # 1. Protect expensive L3 Pro model with per-user rate limiting (L3_RATE_LIMIT_PER_MINUTE)
+    # 1. Protect expensive L3 Pro model with per-user rate limiting and monthly token budget
     if agent_name == "l3_deep_diagnostics_agent":
-        from agent_core.app_utils.rate_limiter import check_l3_rate_limit_with_warning
-        allowed, rem, retry_after, is_soft_warning, warn_msg = check_l3_rate_limit_with_warning(user_id)
-        if not allowed:
-            l3_limit = os.getenv("L3_RATE_LIMIT_PER_MINUTE", "10")
+        from agent_core.app_utils.token_budget import is_budget_exceeded
+        if is_budget_exceeded():
             return LlmResponse(
                 content=types.Content(
                     role="model",
                     parts=[types.Part.from_text(
-                        text=f"⚠️ [L3 Rate Limit Exceeded] Hạn mức gọi mô hình phân tích sâu L3 ({REASONING_MODEL_NAME}) của bạn đã vượt quá giới hạn ({l3_limit} lượt/phút). Vui lòng thử lại sau {retry_after}s."
+                        text="⚠️ [Deployment Token Budget Exceeded] Hệ thống đã đạt hạn mức token hàng tháng (MONTHLY_TOKEN_BUDGET). "
+                             "Chế độ Degrade Mode đang kích hoạt: Tính năng phân tích sâu L3 tạm thời bị khóa. "
+                             "Vui lòng sử dụng L1 FAQ hoặc L2 tra cứu tri thức."
                     )]
+                ),
+                custom_metadata={"rate_limited": True, "tier": "L3", "degrade_mode": True}
+            )
+
+        from agent_core.app_utils.rate_limiter import check_l3_rate_limit_with_warning
+        allowed, rem, retry_after, is_soft_warning, warn_msg = check_l3_rate_limit_with_warning(user_id)
+        if not allowed:
+            l3_limit = os.getenv("L3_RATE_LIMIT_PER_MINUTE", "10")
+            msg = warn_msg or f"⚠️ [L3 Rate Limit Exceeded] Hạn mức gọi mô hình phân tích sâu L3 ({REASONING_MODEL_NAME}) của bạn đã vượt quá giới hạn ({l3_limit} lượt/phút). Vui lòng thử lại sau {retry_after}s."
+            return LlmResponse(
+                content=types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(text=msg)]
                 ),
                 custom_metadata={"rate_limited": True, "tier": "L3"}
             )
@@ -273,6 +292,22 @@ async def semantic_cache_after_model_callback(
         except Exception as e:
             logger.debug("Failed to record model interaction telemetry: %s", e)
 
+        # Record token usage for cluster-wide monthly budget tracking
+        try:
+            from agent_core.app_utils.token_budget import record_token_usage
+            usage = getattr(llm_response, "usage_metadata", None)
+            token_count = 0
+            if usage:
+                token_count = getattr(usage, "total_token_count", 0) or (getattr(usage, "prompt_token_count", 0) + getattr(usage, "candidates_token_count", 0))
+            if not token_count and llm_response.content and getattr(llm_response.content, "parts", None):
+                total_chars = sum(len(p.text) for p in llm_response.content.parts if hasattr(p, "text") and p.text)
+                total_chars += len(user_query or "")
+                token_count = max(1, total_chars // 4)
+            if token_count > 0:
+                record_token_usage(token_count)
+        except Exception as e:
+            logger.debug("Failed to record token usage: %s", e)
+
     # 2. Check if there is an active L3 soft warning to deliver to the user
     soft_warn = _current_l3_soft_warning.get()
     modified_response = None
@@ -330,7 +365,14 @@ async def semantic_cache_after_model_callback(
 
         # Classify if public FAQ or user-specific private query (only turn 1 can be public)
         is_safe_public = _is_safe_public_faq(user_query, agent_name, tools_called, is_first_turn=is_first_turn)
-        eff_clearance = 0 if is_safe_public else resolve_caller_clearance(user_id=user.user_id if user else None)
+        max_source = get_max_source_clearance()
+        user_clearance = resolve_caller_clearance(user_id=user.user_id if user else None)
+
+        if max_source is not None and max_source > 0:
+            is_safe_public = False
+            eff_clearance = max(max_source, user_clearance)
+        else:
+            eff_clearance = 0 if is_safe_public else user_clearance
 
         cache = get_semantic_cache()
         cache.set(
@@ -341,5 +383,6 @@ async def semantic_cache_after_model_callback(
             tier=agent_name,
             clearance_level=eff_clearance,
         )
+        reset_max_source_clearance()
 
     return modified_response

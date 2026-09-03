@@ -5,3 +5,20 @@ systems:
     description: "Core operational system for this domain"
     admin_roles:
       - "domain_admin"
+
+retrieval:
+  fraction_lists_to_search: 0.05
+  hybrid_search_enabled: true
+  reranker_enabled: false
+  retrieve_k: 20
+  final_k: 3
+  adaptive_retrieval_rounds: 2
+
+rate_limiting:
+  requests_per_minute: 60
+  requests_per_day: 1000
+  l3_requests_per_minute: 10
+  l3_requests_per_day: 100
+  monthly_token_budget: 0
+
+

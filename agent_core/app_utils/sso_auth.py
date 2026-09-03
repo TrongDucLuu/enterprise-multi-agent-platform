@@ -533,6 +533,33 @@ async def get_current_user(
     return verify_sso_token(token)
 
 
+async def require_admin(user: SSOUser = Depends(get_current_user)) -> SSOUser:
+    """
+    FastAPI dependency that enforces administrator privileges for sensitive endpoints (e.g. Analytics, System Config).
+    Validates user roles against active pack's systems.yaml shared_admin_roles and canonical admin roles.
+    Raises HTTP 403 Forbidden if the user lacks administrative privileges (Fail-Closed).
+    """
+    if not user or not getattr(user, "is_authenticated", False):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    from agent_core.app_utils.system_config import get_shared_admin_roles
+    configured_admin_roles = set(get_shared_admin_roles())
+    canonical_admin_roles = {"admin", "it_admin", "sys_admin", "system_admin", "superadmin"}
+    effective_admin_roles = configured_admin_roles.union(canonical_admin_roles)
+
+    user_roles = set(getattr(user, "roles", []) or [])
+    if not user_roles.intersection(effective_admin_roles):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privilege required to access this endpoint."
+        )
+    return user
+
+
 class SSOAuthenticationMiddleware(BaseHTTPMiddleware):
     """
     Global Authentication Middleware protecting ALL endpoints (ADK Agent endpoints, APIs, Sessions)

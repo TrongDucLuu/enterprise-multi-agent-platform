@@ -19,7 +19,7 @@ from agent_core.app_utils.system_config import (
 )
 
 
-def test_default_config_loads_erp_hrm_crm():
+def test_default_config_loads_erp_hrm_crm(pinned_it_helpdesk_pack):
     reload_system_config()
     systems = get_configured_systems()
     assert "ERP" in systems
@@ -171,7 +171,7 @@ def test_system_config_rejects_invalid_system_characters(monkeypatch):
         reload_system_config()
 
 
-def test_chunking_and_document_processing_config():
+def test_chunking_and_document_processing_config(pinned_it_helpdesk_pack):
     from agent_core.app_utils.system_config import (
         get_chunking_config,
         get_document_processing_config,

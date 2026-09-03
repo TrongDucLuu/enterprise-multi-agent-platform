@@ -47,3 +47,6 @@ ingest = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "boot: marks slow subprocess boot tests requiring fresh process isolation",
+]

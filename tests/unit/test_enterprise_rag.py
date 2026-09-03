@@ -10,12 +10,16 @@ from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 
 @pytest.fixture(autouse=True)
 def it_helpdesk_domain_pack(monkeypatch):
-    """Ensures IT Helpdesk domain pack is active for IT Helpdesk RAG tests."""
+    """Ensures IT Helpdesk domain pack and in-memory backend are active for IT Helpdesk RAG unit tests."""
     monkeypatch.setenv("DOMAIN_PACK", "it-helpdesk")
+    monkeypatch.setenv("KNOWLEDGE_BACKEND", "in_memory")
     from agent_core.app_utils.system_config import reload_system_config
+    from agent_core.tools.obligations_store import reset_obligations_store
     reload_system_config()
+    reset_obligations_store()
     yield
     reload_system_config()
+    reset_obligations_store()
 
 
 @pytest.fixture(autouse=True)

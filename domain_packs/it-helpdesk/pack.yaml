@@ -5,3 +5,11 @@ description: "Production-ready 3-tier IT helpdesk system supporting ERP, HRM, CR
 author: "TrongDucLuu"
 min_core_version: "2.0.0"
 entry_agent: root_triage_orchestrator
+tool_aliases:
+  create_helpdesk_ticket: create_case
+  get_ticket_details: get_case
+  update_ticket_status: update_case_status
+  route_ticket_to_tier: route_case_to_tier
+  list_user_tickets: list_user_cases
+  analyze_system_logs_for_rca: analyze_log_rca
+  review_it_contract_sla: review_contract_sla

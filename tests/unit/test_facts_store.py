@@ -2,6 +2,9 @@ import pytest
 from unittest.mock import MagicMock, patch
 from pydantic import ValidationError
 
+# Pins it-helpdesk pack because this suite asserts sample seeded facts (erp.po.sla_hours, vpn_gateway, etc.)
+pytestmark = pytest.mark.usefixtures("pinned_it_helpdesk_pack")
+
 from agent_core.tools.enterprise_rag_mcp.rag_models import Fact
 from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
     BaseFactsStore,

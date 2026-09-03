@@ -375,7 +375,6 @@ def create_case(
     }
 
 
-@register_tool("create_helpdesk_ticket")
 def create_helpdesk_ticket(
     user_id: str,
     title: str,
@@ -409,7 +408,6 @@ def get_case(case_id: str) -> dict:
     return {"status": "success", "ticket": case.model_dump(), "case": case.model_dump()}
 
 
-@register_tool("get_ticket_details")
 def get_ticket_details(ticket_id: str) -> dict:
     """Backwards compatibility wrapper for get_case."""
     return get_case(ticket_id)
@@ -553,7 +551,6 @@ def update_case_status(
     }
 
 
-@register_tool("update_ticket_status")
 def update_ticket_status(
     ticket_id: str,
     status: str,
@@ -720,7 +717,6 @@ def route_case_to_tier(
     return resp
 
 
-@register_tool("route_ticket_to_tier")
 def route_ticket_to_tier(
     ticket_id: str,
     target_tier: str,
@@ -786,7 +782,6 @@ def list_user_cases(user_id: str, limit: int = 50) -> dict:
     }
 
 
-@register_tool("list_user_tickets")
 def list_user_tickets(user_id: str, limit: int = 50) -> dict:
     """Backwards compatibility wrapper for list_user_cases."""
     return list_user_cases(user_id=user_id, limit=limit)

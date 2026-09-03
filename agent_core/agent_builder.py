@@ -194,7 +194,8 @@ def build_agent_system(
         selected_model = r_model if model_type == "reasoning" else f_model
 
         tool_names = spec.get("tools", [])
-        resolved_tools = resolve_tools(tool_names) if tool_names else []
+        tool_aliases = pack_meta.get("tool_aliases", {})
+        resolved_tools = resolve_tools(tool_names, tool_aliases=tool_aliases) if tool_names else []
 
         agent_obj = Agent(
             name=name,

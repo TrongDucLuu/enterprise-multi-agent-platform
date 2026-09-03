@@ -3,6 +3,7 @@ Parity tests verifying dynamic builder output matches production requirements.
 Tests tool resolution (including builtin:preload_memory), dynamic template interpolation,
 P1-05 return-to-root injection, prompt injection defense, and callback wiring.
 """
+import pytest
 from google.adk.tools import preload_memory_tool
 from agent_core.agent_builder import build_agent_system, load_domain_pack
 from agent_core.runtime import (
@@ -60,11 +61,11 @@ def test_builder_it_helpdesk_parity():
     l1_tool_names = [getattr(t, "__name__", str(t)) for t in l1_agent.tools]
     assert "lookup_fact" in l1_tool_names
     assert "search_enterprise_knowledge" in l1_tool_names
-    assert "create_helpdesk_ticket" in l1_tool_names
+    assert "create_case" in l1_tool_names
 
     l3_tool_names = [getattr(t, "__name__", str(t)) for t in l3_agent.tools]
-    assert "analyze_system_logs_for_rca" in l3_tool_names
-    assert "review_it_contract_sla" in l3_tool_names
+    assert "analyze_log_rca" in l3_tool_names
+    assert "review_contract_sla" in l3_tool_names
     assert "get_obligation" in l3_tool_names
 
 
@@ -77,6 +78,7 @@ def test_builder_reads_template_agents_yaml():
     assert "lookup_fact" in [getattr(t, "__name__", str(t)) for t in agents_dict["specialist_agent"].tools]
 
 
+@pytest.mark.boot
 def test_subprocess_clean_boot_with_template_pack():
     """Verify clean FastAPI boot in subprocess with DOMAIN_PACK=_template in production mode."""
     import os
@@ -94,6 +96,7 @@ def test_subprocess_clean_boot_with_template_pack():
     assert "FastAPI" in res.stdout
 
 
+@pytest.mark.boot
 def test_subprocess_clean_boot_with_it_helpdesk_pack():
     """Verify clean FastAPI boot in subprocess with DOMAIN_PACK=it-helpdesk in production mode."""
     import os

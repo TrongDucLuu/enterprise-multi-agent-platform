@@ -5,6 +5,10 @@ import sys
 import hashlib
 import pytest
 from unittest.mock import patch, MagicMock
+
+# Pins it-helpdesk pack because tests assert IT Helpdesk groups (it-admins, it-support) and systems (ERP, HRM, CRM)
+pytestmark = pytest.mark.usefixtures("pinned_it_helpdesk_pack")
+
 from agent_core.app_utils.system_config import (
     resolve_user_roles,
     get_user_role_mappings,

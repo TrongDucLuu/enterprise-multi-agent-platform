@@ -22,6 +22,12 @@ try:
 except ImportError:
     from knowledge.authorize import authorize_document
 
+try:
+    from agent_core.app_utils.semantic_cache import record_source_clearance
+except ImportError:
+    def record_source_clearance(clearance):
+        pass
+
 
 try:
     from agent_core.tools.registry import register_tool
@@ -283,6 +289,9 @@ def lookup_fact(key: str) -> dict:
                 "message": f"Fact '{clean_key}' bị từ chối truy cập do không đủ quyền hạn bảo mật.",
             }
 
+        if hasattr(fact, "clearance_level"):
+            record_source_clearance(getattr(fact, "clearance_level", 0))
+
         return {
             "status": "success",
             "fact_id": fact.fact_id,
@@ -314,7 +323,6 @@ def lookup_fact(key: str) -> dict:
         }
 
 
-@register_tool("mcp_get_obligation")
 @mcp.tool()
 def get_obligation(obligation_id: str) -> dict:
     """
@@ -364,6 +372,9 @@ def get_obligation(obligation_id: str) -> dict:
                 "obligation_id": clean_id,
                 "message": f"Nghĩa vụ pháp lý '{clean_id}' bị từ chối truy cập do không đủ quyền hạn bảo mật.",
             }
+
+        if hasattr(ob, "clearance_level"):
+            record_source_clearance(getattr(ob, "clearance_level", 0))
 
         return {
             "status": "success",
@@ -477,6 +488,9 @@ def search_enterprise_knowledge(
                 security_context=sec_ctx,
             )
             filtered = _filter_by_role(results, sec_ctx)[:FINAL_K]
+            for r in filtered:
+                if hasattr(r, "clearance_level"):
+                    record_source_clearance(getattr(r, "clearance_level", 0))
             return [r.model_dump() for r in filtered]
         except KnowledgeStoreUnavailableError as e:
             logger.error("Knowledge store unavailable during search: %s", e)
@@ -502,6 +516,9 @@ def search_enterprise_knowledge(
             security_context=sec_ctx,
         )
         filtered = _filter_by_role(results, sec_ctx)[:FINAL_K]
+        for r in filtered:
+            if hasattr(r, "clearance_level"):
+                record_source_clearance(getattr(r, "clearance_level", 0))
         return [r.model_dump() for r in filtered]
     except KnowledgeStoreUnavailableError as e:
         logger.error("Knowledge store unavailable during search ALL: %s", e)
@@ -577,6 +594,9 @@ def get_system_manual(article_id: str) -> dict:
             "article_id": article_id,
             "system": getattr(article, "system", "UNKNOWN"),
         }
+
+    if hasattr(article, "clearance_level"):
+        record_source_clearance(getattr(article, "clearance_level", 0))
 
     art_dict = article.model_dump()
     raw_content = art_dict.get("content", "")

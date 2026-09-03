@@ -16,7 +16,12 @@ class BaseRateLimiter(ABC):
     """Abstract base class for sliding window rate limiters."""
 
     @abstractmethod
-    def is_allowed(self, key: str, max_requests: Optional[int] = None) -> Tuple[bool, int, float]:
+    def is_allowed(
+        self,
+        key: str,
+        max_requests: Optional[int] = None,
+        window_seconds: Optional[float] = None
+    ) -> Tuple[bool, int, float]:
         """
         Evaluates whether a request for `key` is allowed.
         Returns: (allowed: bool, remaining_requests: int, reset_after_seconds: float)
@@ -30,23 +35,44 @@ class InMemoryRateLimiter(BaseRateLimiter):
     Protects against denial-of-wallet, bot abuse, and runaway LLM reasoning costs.
     """
 
-    def __init__(self, requests_per_minute: int = 60, burst_limit: Optional[int] = None):
-        self.requests_per_minute = int(os.getenv("RATE_LIMIT_PER_MINUTE", requests_per_minute))
+    def __init__(
+        self,
+        requests_per_minute: int = 60,
+        requests_per_day: Optional[int] = None,
+        window_seconds: float = 60.0,
+        burst_limit: Optional[int] = None
+    ):
+        if requests_per_minute != 60:
+            self.requests_per_minute = int(requests_per_minute)
+        else:
+            self.requests_per_minute = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+
+        if requests_per_day is not None:
+            self.requests_per_day = int(requests_per_day)
+        else:
+            self.requests_per_day = int(os.getenv("RATE_LIMIT_PER_DAY", str(self.requests_per_minute * 50)))
+
         self.burst_limit = burst_limit or (self.requests_per_minute * 2)
-        self._window_seconds = 60.0
+        self._window_seconds = float(window_seconds)
         self._history: dict[str, list[float]] = {}
         self._lock = threading.Lock()
         self._last_cleanup = time.time()
         self._op_count = 0
 
-    def is_allowed(self, key: str, max_requests: Optional[int] = None) -> Tuple[bool, int, float]:
+    def is_allowed(
+        self,
+        key: str,
+        max_requests: Optional[int] = None,
+        window_seconds: Optional[float] = None
+    ) -> Tuple[bool, int, float]:
         """
-        Evaluates whether a request for `key` is allowed.
+        Evaluates whether a request for `key` is allowed within sliding window.
         Returns: (allowed: bool, remaining_requests: int, reset_after_seconds: float)
         """
         limit = max_requests if max_requests is not None else self.requests_per_minute
+        effective_window = float(window_seconds) if window_seconds is not None else self._window_seconds
         now = time.time()
-        window_start = now - self._window_seconds
+        window_start = now - effective_window
 
         with self._lock:
             self._op_count += 1
@@ -60,7 +86,7 @@ class InMemoryRateLimiter(BaseRateLimiter):
 
             if len(valid_timestamps) >= limit:
                 oldest_in_window = valid_timestamps[0]
-                reset_after = max(0.0, (oldest_in_window + self._window_seconds) - now)
+                reset_after = max(0.0, (oldest_in_window + effective_window) - now)
                 self._history[key] = valid_timestamps
                 return False, 0, round(reset_after, 2)
 
@@ -94,6 +120,7 @@ class RedisRateLimiter(BaseRateLimiter):
     def __init__(
         self,
         requests_per_minute: int = 60,
+        requests_per_day: Optional[int] = None,
         redis_client=None,
         host: Optional[str] = None,
         port: Optional[int] = None,
@@ -102,9 +129,21 @@ class RedisRateLimiter(BaseRateLimiter):
         ssl: Optional[bool] = None,
         socket_timeout: float = 2.0,
     ):
-        self.requests_per_minute = int(os.getenv("RATE_LIMIT_PER_MINUTE", requests_per_minute))
+        if requests_per_minute != 60:
+            self.requests_per_minute = int(requests_per_minute)
+        else:
+            self.requests_per_minute = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+
+        if requests_per_day is not None:
+            self.requests_per_day = int(requests_per_day)
+        else:
+            self.requests_per_day = int(os.getenv("RATE_LIMIT_PER_DAY", str(self.requests_per_minute * 50)))
+
         self._window_seconds = 60.0
-        self._fallback_limiter = InMemoryRateLimiter(requests_per_minute=self.requests_per_minute)
+        self._fallback_limiter = InMemoryRateLimiter(
+            requests_per_minute=self.requests_per_minute,
+            requests_per_day=self.requests_per_day,
+        )
         self._redis = redis_client
         self._host = host or os.getenv("REDIS_HOST", "localhost")
         self._port = int(port or os.getenv("REDIS_PORT", "6379"))
@@ -167,22 +206,28 @@ class RedisRateLimiter(BaseRateLimiter):
             logger.error("Failed to connect to Redis Rate Limiter (%s:%s): %s. Operating in Fail-Open mode.", self._host, self._port, e)
             self._redis = None
 
-    def is_allowed(self, key: str, max_requests: Optional[int] = None) -> Tuple[bool, int, float]:
+    def is_allowed(
+        self,
+        key: str,
+        max_requests: Optional[int] = None,
+        window_seconds: Optional[float] = None
+    ) -> Tuple[bool, int, float]:
         """
         Evaluates sliding window rate limit via Redis Sorted Set.
         Fails open to in-memory fallback on any network/Redis failure.
         """
         limit = max_requests if max_requests is not None else self.requests_per_minute
+        effective_window = float(window_seconds) if window_seconds is not None else self._window_seconds
 
         if self._redis is None:
             # Try reconnect once
             self._init_redis()
             if self._redis is None:
-                return self._fallback_limiter.is_allowed(key, max_requests=limit)
+                return self._fallback_limiter.is_allowed(key, max_requests=limit, window_seconds=effective_window)
 
         now = time.time()
-        window_start = now - self._window_seconds
-        redis_key = f"ratelimit:zset:{key}"
+        window_start = now - effective_window
+        redis_key = f"ratelimit:zset:{key}:{int(effective_window)}"
 
         try:
             pipe = self._redis.pipeline()
@@ -193,13 +238,13 @@ class RedisRateLimiter(BaseRateLimiter):
             # 3. Fetch oldest timestamp in window to compute retry_after
             pipe.zrange(redis_key, 0, 0, withscores=True)
             # 4. Refresh TTL for the key
-            pipe.expire(redis_key, int(self._window_seconds * 2))
+            pipe.expire(redis_key, max(120, int(effective_window * 2)))
             
             _, count, oldest_entries, _ = pipe.execute()
 
             if count >= limit:
                 oldest_ts = oldest_entries[0][1] if oldest_entries else now
-                reset_after = max(0.0, (oldest_ts + self._window_seconds) - now)
+                reset_after = max(0.0, (oldest_ts + effective_window) - now)
                 return False, 0, round(reset_after, 2)
 
             # Record current request timestamp
@@ -207,7 +252,7 @@ class RedisRateLimiter(BaseRateLimiter):
             # Use millisecond precision timestamp as member name to ensure uniqueness
             member_id = f"{now:.6f}:{threading.get_ident()}"
             pipe2.zadd(redis_key, {member_id: now})
-            pipe2.expire(redis_key, int(self._window_seconds * 2))
+            pipe2.expire(redis_key, max(120, int(effective_window * 2)))
             pipe2.execute()
 
             remaining = limit - (count + 1)
@@ -215,7 +260,7 @@ class RedisRateLimiter(BaseRateLimiter):
 
         except Exception as e:
             logger.error("RedisRateLimiter error (%s) on key %s. Falling back to local in-memory (Fail-Open).", e, key)
-            return self._fallback_limiter.is_allowed(key, max_requests=limit)
+            return self._fallback_limiter.is_allowed(key, max_requests=limit, window_seconds=effective_window)
 
 
 # Singletons
@@ -232,10 +277,11 @@ def get_global_rate_limiter() -> BaseRateLimiter:
             if _global_rate_limiter is None:
                 backend = os.getenv("RATE_LIMIT_BACKEND", "memory").lower()
                 rpm = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+                rpd = int(os.getenv("RATE_LIMIT_PER_DAY", "1000"))
                 if backend == "redis" or (backend == "auto" and os.getenv("REDIS_HOST")):
                     _global_rate_limiter = RedisRateLimiter(requests_per_minute=rpm)
                 else:
-                    _global_rate_limiter = InMemoryRateLimiter(requests_per_minute=rpm)
+                    _global_rate_limiter = InMemoryRateLimiter(requests_per_minute=rpm, requests_per_day=rpd)
     return _global_rate_limiter
 
 
@@ -247,17 +293,18 @@ def get_l3_rate_limiter() -> BaseRateLimiter:
             if _l3_rate_limiter is None:
                 backend = os.getenv("RATE_LIMIT_BACKEND", "memory").lower()
                 l3_rpm = int(os.getenv("L3_RATE_LIMIT_PER_MINUTE", "10"))
+                l3_rpd = int(os.getenv("L3_RATE_LIMIT_PER_DAY", "100"))
                 if backend == "redis" or (backend == "auto" and os.getenv("REDIS_HOST")):
                     _l3_rate_limiter = RedisRateLimiter(requests_per_minute=l3_rpm)
                 else:
-                    _l3_rate_limiter = InMemoryRateLimiter(requests_per_minute=l3_rpm)
+                    _l3_rate_limiter = InMemoryRateLimiter(requests_per_minute=l3_rpm, requests_per_day=l3_rpd)
     return _l3_rate_limiter
 
 
 def check_l3_rate_limit(user_id: Optional[str] = None) -> Tuple[bool, int, float]:
     """
     Verifies if the current user/session is permitted to execute high-cost L3 reasoning.
-    Limits L3 reasoning calls to L3_RATE_LIMIT_PER_MINUTE (default: 10 req/min).
+    Limits L3 reasoning calls to L3_RATE_LIMIT_PER_MINUTE and L3_RATE_LIMIT_PER_DAY.
     Delegates directly to check_l3_rate_limit_with_warning to eliminate logic duplication.
     """
     allowed, remaining, reset_after, _, _ = check_l3_rate_limit_with_warning(user_id=user_id)
@@ -268,27 +315,48 @@ def check_l3_rate_limit_with_warning(
     user_id: Optional[str] = None
 ) -> Tuple[bool, int, float, bool, Optional[str]]:
     """
-    Evaluates L3 rate limit and checks for soft warning threshold (>= 80% quota consumed).
+    Evaluates L3 rate limit (per minute and per 24-hour sliding window) and checks for soft warning.
     Returns: (allowed, remaining, reset_after, is_soft_warning, warning_message)
     """
     l3_rpm = int(os.getenv("L3_RATE_LIMIT_PER_MINUTE", "10"))
-    key = f"l3_user:{user_id}" if user_id else "l3_user:anonymous"
-    allowed, remaining, reset_after = get_l3_rate_limiter().is_allowed(key, max_requests=l3_rpm)
+    l3_rpd = int(os.getenv("L3_RATE_LIMIT_PER_DAY", "100"))
+    base_key = f"l3_user:{user_id}" if user_id else "l3_user:anonymous"
 
+    limiter = get_l3_rate_limiter()
+
+    # 1. Check 24-hour daily quota limit first
+    allowed_d, rem_d, reset_d = limiter.is_allowed(f"{base_key}:daily", max_requests=l3_rpd, window_seconds=86400.0)
+    if not allowed_d:
+        msg = f"⚠️ [L3 Daily Limit Exceeded] Hạn mức gọi mô hình phân tích sâu L3 trong ngày của bạn đã vượt quá giới hạn ({l3_rpd} lượt/ngày). Vui lòng thử lại sau {int(reset_d)}s."
+        return False, 0, reset_d, False, msg
+
+    # 2. Check 1-minute quota limit
+    allowed_m, rem_m, reset_m = limiter.is_allowed(base_key, max_requests=l3_rpm, window_seconds=60.0)
+    if not allowed_m:
+        return False, 0, reset_m, False, None
+
+    # 3. Check soft warning threshold (>= 80% quota consumed)
     is_soft_warning = False
     warning_message = None
-    if allowed:
-        used = l3_rpm - remaining
-        # Trigger soft warning when at or above 80% capacity
-        soft_threshold_remaining = max(1, int(l3_rpm * 0.2))
-        if remaining <= soft_threshold_remaining:
-            is_soft_warning = True
-            warning_message = (
-                f"⚠️ [L3 Quota Soft Warning] Bạn đã sử dụng {used}/{l3_rpm} lượt phân tích sâu L3 trong phút này. "
-                f"Còn lại {remaining} lượt khả dụng trước khi bị giới hạn tạm thời."
-            )
+    soft_threshold_m = max(1, int(l3_rpm * 0.2))
+    soft_threshold_d = max(1, int(l3_rpd * 0.2))
 
-    return allowed, remaining, reset_after, is_soft_warning, warning_message
+    if rem_m <= soft_threshold_m:
+        used = l3_rpm - rem_m
+        is_soft_warning = True
+        warning_message = (
+            f"⚠️ [L3 Quota Soft Warning] Bạn đã sử dụng {used}/{l3_rpm} lượt phân tích sâu L3 trong phút này. "
+            f"Còn lại {rem_m} lượt khả dụng trước khi bị giới hạn tạm thời."
+        )
+    elif rem_d <= soft_threshold_d:
+        used_d = l3_rpd - rem_d
+        is_soft_warning = True
+        warning_message = (
+            f"⚠️ [L3 Daily Quota Soft Warning] Bạn đã sử dụng {used_d}/{l3_rpd} lượt phân tích sâu L3 trong 24h qua. "
+            f"Còn lại {rem_d} lượt trong ngày."
+        )
+
+    return True, rem_m, 0.0, is_soft_warning, warning_message
 
 
 def reset_rate_limiters() -> None:
@@ -368,19 +436,39 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             ip_clean = client_ip[:45].strip()
             key = f"ip:{ip_clean}"
 
-        allowed, remaining, retry_after = self._get_limiter().is_allowed(key)
-        if not allowed:
+        limiter = self._get_limiter()
+
+        # 1. Check 24h daily rate limit first
+        rpd = getattr(limiter, "requests_per_day", None)
+        if rpd is None:
+            rpd = int(os.getenv("RATE_LIMIT_PER_DAY", "1000"))
+        allowed_d, rem_d, retry_after_d = limiter.is_allowed(f"{key}:daily", max_requests=rpd, window_seconds=86400.0)
+        if not allowed_d:
             return JSONResponse(
                 status_code=429,
                 content={
                     "status": "error",
                     "error_code": "RATE_LIMIT_EXCEEDED",
-                    "message": f"Quá số lượng yêu cầu cho phép (Rate limit exceeded). Vui lòng thử lại sau {retry_after}s.",
-                    "retry_after_seconds": retry_after
+                    "message": f"Quá số lượng yêu cầu theo ngày cho phép (Daily rate limit exceeded). Vui lòng thử lại sau {retry_after_d}s.",
+                    "retry_after_seconds": retry_after_d
                 },
-                headers={"Retry-After": str(int(retry_after) + 1)}
+                headers={"Retry-After": str(int(retry_after_d) + 1)}
+            )
+
+        # 2. Check 1-minute rate limit
+        allowed_m, rem_m, retry_after_m = limiter.is_allowed(key)
+        if not allowed_m:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "status": "error",
+                    "error_code": "RATE_LIMIT_EXCEEDED",
+                    "message": f"Quá số lượng yêu cầu cho phép (Rate limit exceeded). Vui lòng thử lại sau {retry_after_m}s.",
+                    "retry_after_seconds": retry_after_m
+                },
+                headers={"Retry-After": str(int(retry_after_m) + 1)}
             )
 
         response = await call_next(request)
-        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        response.headers["X-RateLimit-Remaining"] = str(rem_m)
         return response

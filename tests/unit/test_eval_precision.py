@@ -1,6 +1,9 @@
 import pytest
 from unittest.mock import MagicMock
 
+# Pins it-helpdesk pack because EVAL_DATASET evaluates IT queries (SAP, VPN, Salesforce) against IT Helpdesk KB
+pytestmark = pytest.mark.usefixtures("pinned_it_helpdesk_pack")
+
 from scripts.eval_harness import (
     evaluate_retrieval_precision_at_k,
     run_eval_suite,

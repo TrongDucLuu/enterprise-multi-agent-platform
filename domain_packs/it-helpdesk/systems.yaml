@@ -178,4 +178,17 @@ document_processing:
 retrieval:
   fraction_lists_to_search: 0.05              # Fraction of IVF lists to search (0.0 to 1.0)
   hybrid_search_enabled: true                 # Enable lexical BM25/keyword boost alongside vector search
+  reranker_enabled: false                     # Enable Vertex AI Reranker
+  retrieve_k: 20                              # Number of initial candidate chunks retrieved
+  final_k: 3                                  # Number of final authorized top results returned
+  adaptive_retrieval_rounds: 2                # Max retrieval rounds if authorized count < final_k
+
+# Rate Limiting & Cost Caps Configuration
+rate_limiting:
+  requests_per_minute: 60                     # Global API requests allowed per minute
+  requests_per_day: 1000                      # Global API requests allowed per 24 hours
+  l3_requests_per_minute: 10                  # L3 deep reasoning requests allowed per minute
+  l3_requests_per_day: 100                    # L3 deep reasoning requests allowed per 24 hours
+  monthly_token_budget: 0                     # Cluster-wide monthly token budget (0 = unlimited)
+
 

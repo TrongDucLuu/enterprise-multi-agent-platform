@@ -282,9 +282,81 @@ def load_system_config(config_path: Optional[str] = None, force_reload: bool = F
             f"Trường 'retrieval.hybrid_search_enabled' ({hybrid_search_enabled}) phải là boolean. (Fail-Closed)"
         )
 
+    reranker_enabled = raw_retrieval.get("reranker_enabled", False)
+    if not isinstance(reranker_enabled, bool):
+        raise SystemConfigurationError(
+            f"Trường 'retrieval.reranker_enabled' ({reranker_enabled}) phải là boolean. (Fail-Closed)"
+        )
+
+    retrieve_k = raw_retrieval.get("retrieve_k", 20)
+    if not isinstance(retrieve_k, int) or retrieve_k <= 0:
+        raise SystemConfigurationError(
+            f"Trường 'retrieval.retrieve_k' ({retrieve_k}) phải là số nguyên dương. (Fail-Closed)"
+        )
+
+    final_k = raw_retrieval.get("final_k", 3)
+    if not isinstance(final_k, int) or final_k <= 0:
+        raise SystemConfigurationError(
+            f"Trường 'retrieval.final_k' ({final_k}) phải là số nguyên dương. (Fail-Closed)"
+        )
+
+    adaptive_retrieval_rounds = raw_retrieval.get("adaptive_retrieval_rounds", 2)
+    if not isinstance(adaptive_retrieval_rounds, int) or adaptive_retrieval_rounds <= 0:
+        raise SystemConfigurationError(
+            f"Trường 'retrieval.adaptive_retrieval_rounds' ({adaptive_retrieval_rounds}) phải là số nguyên dương. (Fail-Closed)"
+        )
+
     validated_retrieval = {
         "fraction_lists_to_search": float(fraction_lists_to_search),
         "hybrid_search_enabled": bool(hybrid_search_enabled),
+        "reranker_enabled": bool(reranker_enabled),
+        "retrieve_k": int(retrieve_k),
+        "final_k": int(final_k),
+        "adaptive_retrieval_rounds": int(adaptive_retrieval_rounds),
+    }
+
+    raw_rate_limiting = data.get("rate_limiting", {})
+    if not isinstance(raw_rate_limiting, dict):
+        raise SystemConfigurationError(
+            f"Trường 'rate_limiting' trong '{target_path}' phải là một mapping/dict. (Fail-Closed)"
+        )
+
+    rpm = raw_rate_limiting.get("requests_per_minute", 60)
+    if not isinstance(rpm, int) or rpm <= 0:
+        raise SystemConfigurationError(
+            f"Trường 'rate_limiting.requests_per_minute' ({rpm}) phải là số nguyên dương. (Fail-Closed)"
+        )
+
+    rpd = raw_rate_limiting.get("requests_per_day", 1000)
+    if not isinstance(rpd, int) or rpd <= 0:
+        raise SystemConfigurationError(
+            f"Trường 'rate_limiting.requests_per_day' ({rpd}) phải là số nguyên dương. (Fail-Closed)"
+        )
+
+    l3_rpm = raw_rate_limiting.get("l3_requests_per_minute", 10)
+    if not isinstance(l3_rpm, int) or l3_rpm <= 0:
+        raise SystemConfigurationError(
+            f"Trường 'rate_limiting.l3_requests_per_minute' ({l3_rpm}) phải là số nguyên dương. (Fail-Closed)"
+        )
+
+    l3_rpd = raw_rate_limiting.get("l3_requests_per_day", 100)
+    if not isinstance(l3_rpd, int) or l3_rpd <= 0:
+        raise SystemConfigurationError(
+            f"Trường 'rate_limiting.l3_requests_per_day' ({l3_rpd}) phải là số nguyên dương. (Fail-Closed)"
+        )
+
+    monthly_token_budget = raw_rate_limiting.get("monthly_token_budget", 0)
+    if not isinstance(monthly_token_budget, int) or monthly_token_budget < 0:
+        raise SystemConfigurationError(
+            f"Trường 'rate_limiting.monthly_token_budget' ({monthly_token_budget}) phải là số nguyên không âm (>= 0). (Fail-Closed)"
+        )
+
+    validated_rate_limiting = {
+        "requests_per_minute": int(rpm),
+        "requests_per_day": int(rpd),
+        "l3_requests_per_minute": int(l3_rpm),
+        "l3_requests_per_day": int(l3_rpd),
+        "monthly_token_budget": int(monthly_token_budget),
     }
 
     user_role_mappings = data.get("user_role_mappings", {})
@@ -305,6 +377,7 @@ def load_system_config(config_path: Optional[str] = None, force_reload: bool = F
         "chunking": validated_chunking,
         "document_processing": validated_doc_proc,
         "retrieval": validated_retrieval,
+        "rate_limiting": validated_rate_limiting,
         "user_role_mappings": user_role_mappings,
         "group_role_mappings": group_role_mappings,
         "domain_keywords": domain_keywords,
@@ -360,6 +433,18 @@ def get_shared_admin_roles(config_path: Optional[str] = None) -> list[str]:
     """Returns the list of shared admin / IT support roles."""
     cfg = load_system_config(config_path=config_path)
     return cfg.get("shared_admin_roles", [])
+
+
+def get_rate_limiting_config(config_path: Optional[str] = None) -> dict[str, int]:
+    """Returns the validated rate limiting configuration."""
+    cfg = load_system_config(config_path=config_path)
+    return cfg.get("rate_limiting", {
+        "requests_per_minute": 60,
+        "requests_per_day": 1000,
+        "l3_requests_per_minute": 10,
+        "l3_requests_per_day": 100,
+        "monthly_token_budget": 0,
+    })
 
 
 def get_system_metadata(system: str, config_path: Optional[str] = None) -> Optional[dict[str, Any]]:
@@ -426,11 +511,15 @@ def get_document_processing_config() -> dict[str, Any]:
 
 
 def get_retrieval_config() -> dict[str, Any]:
-    """Returns retrieval and search configuration (fraction_lists_to_search, hybrid_search_enabled)."""
+    """Returns retrieval and search configuration (fraction_lists_to_search, hybrid_search_enabled, reranker_enabled, retrieve_k, final_k, adaptive_retrieval_rounds)."""
     cfg = load_system_config()
     return cfg.get("retrieval", {
         "fraction_lists_to_search": 0.05,
         "hybrid_search_enabled": True,
+        "reranker_enabled": False,
+        "retrieve_k": 20,
+        "final_k": 3,
+        "adaptive_retrieval_rounds": 2,
     })
 
 

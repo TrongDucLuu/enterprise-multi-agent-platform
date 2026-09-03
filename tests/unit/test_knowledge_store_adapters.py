@@ -2,6 +2,10 @@ import os
 import logging
 from unittest.mock import MagicMock, patch
 import pytest
+
+# Pins it-helpdesk pack because tests query and assert IT Helpdesk sample articles, codes, and documents
+pytestmark = pytest.mark.usefixtures("pinned_it_helpdesk_pack")
+
 from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
     BaseKnowledgeStore,
     InMemoryKnowledgeStore,
@@ -11,6 +15,7 @@ from agent_core.tools.enterprise_rag_mcp.knowledge_store import (
     KnowledgeArticle,
     KnowledgeStoreUnavailableError,
     SecurityContext,
+    normalize_similarity,
 )
 from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 
@@ -103,7 +108,7 @@ def test_bigquery_vector_store_with_mock_client(test_sec_ctx):
     results = store.search("Lỗi tạo PO", security_context=test_sec_ctx, system="ERP", limit=1)
     assert len(results) == 1
     assert results[0].article_id == "ERP-KB-001"
-    assert results[0].relevance_score == 0.85
+    assert results[0].relevance_score == 0.925
     assert results[0].section_hierarchy.h1 == "ERP Guide"
     assert results[0].section_hierarchy.h2 == "Procurement"
     assert results[0].context_path == "ERP Guide > Procurement > PO Authorization"
@@ -1100,6 +1105,131 @@ def test_get_article_by_id_authorization_matrix_across_all_backends():
     assert v_art.id == "SEC-VERTEX-001"
     # Vertex: Unauthorized user gets None
     assert vertex_store.get_article_by_id("SEC-VERTEX-001", security_context=emp_ctx) is None
+
+
+def test_normalize_similarity_scale_and_metrics():
+    """
+    P1-03 [R2]: Tests similarity formula scaling across standard cosine distances [0.0, 2.0]
+    and verifies proper bounding [0.0, 1.0], rounding (4 decimals), and alternative metrics.
+    """
+    # 1. Cosine Distance Canonical Test Points
+    assert normalize_similarity(0.0, metric="COSINE") == 1.0
+    assert normalize_similarity(0.5, metric="COSINE") == 0.75
+    assert normalize_similarity(1.0, metric="COSINE") == 0.5
+    assert normalize_similarity(1.5, metric="COSINE") == 0.25
+    assert normalize_similarity(2.0, metric="COSINE") == 0.0
+
+    # 2. Precision and rounding (4 decimal places)
+    assert normalize_similarity(0.333333, metric="COSINE") == 0.8333
+
+    # 3. Clamping boundary checks
+    assert normalize_similarity(-0.5, metric="COSINE") == 1.0
+    assert normalize_similarity(2.5, metric="COSINE") == 0.0
+
+    # 4. Euclidean Metric
+    assert normalize_similarity(0.0, metric="EUCLIDEAN") == 1.0
+    assert normalize_similarity(1.0, metric="EUCLIDEAN") == 0.5
+    assert normalize_similarity(3.0, metric="EUCLIDEAN") == 0.25
+
+    # 5. Invalid / Non-numeric distance fails closed to 0.0
+    assert normalize_similarity("invalid", metric="COSINE") == 0.0
+    assert normalize_similarity(None, metric="COSINE") == 0.0
+
+
+def test_bigquery_hybrid_search_preserves_fused_ranking_and_omits_order_by(monkeypatch, test_sec_ctx):
+    """
+    P1-03 [R2]: Verifies that when hybrid_search_enabled is True, BigQuery VECTOR_SEARCH
+    omits 'ORDER BY distance ASC' so that BigQuery's fused hybrid ranking (combining
+    lexical BM25 and vector score) is preserved.
+    """
+    from types import SimpleNamespace
+
+    # Create two mock rows where row 1 has a higher hybrid rank from BigQuery even with larger vector distance
+    mock_row_1 = SimpleNamespace(
+        id="HYBRID-001",
+        parent_doc_id=None,
+        chunk_index=None,
+        system="ERP",
+        title="Tài liệu Hybrid 1",
+        category="General",
+        content="Nội dung khớp chính xác từ khóa và vector",
+        section_h1="Guide",
+        section_h2=None,
+        section_h3=None,
+        section_hierarchy=None,
+        allowed_roles=[],
+        sensitivity="INTERNAL",
+        source_uri=None,
+        owner="admin@company.com",
+        effective_date="2025-01-01",
+        expiry_date=None,
+        is_deleted=False,
+        keywords=["m_best_eko"],
+        distance=0.40,  # Larger vector distance, but ranked first by BigQuery hybrid fusion
+        clearance_level=1,
+    )
+    mock_row_2 = SimpleNamespace(
+        id="HYBRID-002",
+        parent_doc_id=None,
+        chunk_index=None,
+        system="ERP",
+        title="Tài liệu Hybrid 2",
+        category="General",
+        content="Nội dung chỉ khớp vector",
+        section_h1="Guide",
+        section_h2=None,
+        section_h3=None,
+        section_hierarchy=None,
+        allowed_roles=[],
+        sensitivity="INTERNAL",
+        source_uri=None,
+        owner="admin@company.com",
+        effective_date="2025-01-01",
+        expiry_date=None,
+        is_deleted=False,
+        keywords=[],
+        distance=0.20,  # Smaller vector distance, but ranked second by BigQuery hybrid fusion
+        clearance_level=1,
+    )
+
+    mock_bq = MagicMock()
+    mock_query_job = MagicMock()
+    mock_query_job.result.return_value = [mock_row_1, mock_row_2]
+    mock_bq.query.return_value = mock_query_job
+
+    store = BigQueryVectorKnowledgeStore(
+        project_id="test-project",
+        dataset_id="test_kb",
+        table_name="articles",
+        bq_client=mock_bq,
+        embedding_fn=lambda t: [0.1] * 64,
+    )
+
+    # 1. Hybrid Search Enabled: ORDER BY distance ASC must NOT be present
+    monkeypatch.setattr(
+        "agent_core.tools.enterprise_rag_mcp.knowledge_store.get_retrieval_config",
+        lambda: {"fraction_lists_to_search": 0.05, "hybrid_search_enabled": True}
+    )
+    results_hybrid = store.search("m_best_eko", security_context=test_sec_ctx, system="ERP", limit=2)
+    sql_hybrid = mock_bq.query.call_args[0][0]
+    assert "ORDER BY distance ASC" not in sql_hybrid
+    # BigQuery's hybrid fused order (row 1 first, row 2 second) must be preserved
+    assert len(results_hybrid) == 2
+    assert results_hybrid[0].article_id == "HYBRID-001"
+    assert results_hybrid[0].relevance_score == 0.80  # 1.0 - (0.4 / 2.0)
+    assert results_hybrid[1].article_id == "HYBRID-002"
+    assert results_hybrid[1].relevance_score == 0.90  # 1.0 - (0.2 / 2.0)
+
+    # 2. Hybrid Search Disabled (Pure Vector): ORDER BY distance ASC MUST be present
+    mock_bq.reset_mock()
+    monkeypatch.setattr(
+        "agent_core.tools.enterprise_rag_mcp.knowledge_store.get_retrieval_config",
+        lambda: {"fraction_lists_to_search": 0.05, "hybrid_search_enabled": False}
+    )
+    store.search("m_best_eko", security_context=test_sec_ctx, system="ERP", limit=2)
+    sql_pure = mock_bq.query.call_args[0][0]
+    assert "ORDER BY distance ASC" in sql_pure
+
 
 
 
