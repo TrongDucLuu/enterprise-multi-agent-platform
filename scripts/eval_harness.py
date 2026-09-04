@@ -70,6 +70,8 @@ _EVAL_EMPLOYEE_SEC_CTX = SecurityContext.from_user(
     clearance_level=1,
 )
 
+_RUNTIME_RETRIEVAL_OVERRIDES: Dict[str, Any] = {}
+
 
 def extract_eval_configuration(
     store: Optional[BaseKnowledgeStore] = None,
@@ -78,7 +80,7 @@ def extract_eval_configuration(
     k: int = 3,
 ) -> Dict[str, Any]:
     """Extracts active retrieval and model configuration metadata for reproducibility."""
-    retrieval_cfg = resolve_retrieval_config()
+    retrieval_cfg = {**resolve_retrieval_config(), **_RUNTIME_RETRIEVAL_OVERRIDES}
     num_chunks = len(getattr(store, "articles", [])) if store and hasattr(store, "articles") else 0
     return {
         "domain_pack": domain_pack,
@@ -504,7 +506,7 @@ def _is_offline_case_passed(
     return is_intent_ok
 
 
-def run_offline_eval_suite(
+def _execute_offline_eval(
     eval_dataset: Optional[List[Dict[str, Any]]] = None,
     store: Optional[BaseKnowledgeStore] = None,
     k: int = 3,
@@ -730,6 +732,24 @@ def run_offline_eval_suite(
     }
 
     return summary, all_passed
+
+
+def run_offline_eval_suite(
+    eval_dataset: Optional[List[Dict[str, Any]]] = None,
+    store: Optional[BaseKnowledgeStore] = None,
+    k: int = 3,
+    seed: Optional[int] = None,
+    domain_pack: str = "it-helpdesk",
+) -> Tuple[Dict[str, Any], bool]:
+    """Executes the offline evaluation suite, applying any runtime retrieval configuration overrides."""
+    if _RUNTIME_RETRIEVAL_OVERRIDES:
+        from unittest.mock import patch
+        eff_cfg = {**resolve_retrieval_config(), **_RUNTIME_RETRIEVAL_OVERRIDES}
+        with patch("agent_core.tools.enterprise_rag_mcp.knowledge.base.resolve_retrieval_config", return_value=eff_cfg), \
+             patch("agent_core.tools.enterprise_rag_mcp.knowledge_store.get_retrieval_config", return_value=eff_cfg), \
+             patch("agent_core.app_utils.system_config.get_retrieval_config", return_value=eff_cfg):
+            return _execute_offline_eval(eval_dataset=eval_dataset, store=store, k=k, seed=seed, domain_pack=domain_pack)
+    return _execute_offline_eval(eval_dataset=eval_dataset, store=store, k=k, seed=seed, domain_pack=domain_pack)
 
 
 # --- ONLINE EVALUATION WITH GOOGLE ADK ---
@@ -1144,7 +1164,31 @@ def main():
     parser.add_argument("--json", action="store_true", help="Output JSON report")
     parser.add_argument("--output", type=str, default=None, help="Save report to file")
     parser.add_argument("--compare", type=str, default=None, help="Compare current evaluation results against baseline JSON report")
+    
+    # Feature toggle flags for benchmark experiments
+    parser.add_argument("--reranker", action="store_true", default=None, help="Enable semantic reranker")
+    parser.add_argument("--no-reranker", dest="reranker", action="store_false", help="Disable semantic reranker")
+    parser.add_argument("--query-preprocessing", action="store_true", default=None, help="Enable query preprocessing")
+    parser.add_argument("--no-query-preprocessing", dest="query_preprocessing", action="store_false", help="Disable query preprocessing")
+    parser.add_argument("--query-rewrite", action="store_true", default=None, help="Enable LLM query rewrite")
+    parser.add_argument("--no-query-rewrite", dest="query_rewrite", action="store_false", help="Disable LLM query rewrite")
+    parser.add_argument("--corrective-retrieval", action="store_true", default=None, help="Enable corrective retrieval loop")
+    parser.add_argument("--no-corrective-retrieval", dest="corrective_retrieval", action="store_false", help="Disable corrective retrieval loop")
+    parser.add_argument("--hybrid-search", action="store_true", default=None, help="Enable hybrid search")
+    parser.add_argument("--no-hybrid-search", dest="hybrid_search", action="store_false", help="Disable hybrid search")
     args = parser.parse_args()
+
+    # Populate runtime retrieval overrides if specified
+    if args.reranker is not None:
+        _RUNTIME_RETRIEVAL_OVERRIDES["reranker_enabled"] = args.reranker
+    if args.query_preprocessing is not None:
+        _RUNTIME_RETRIEVAL_OVERRIDES["query_preprocessing_enabled"] = args.query_preprocessing
+    if args.query_rewrite is not None:
+        _RUNTIME_RETRIEVAL_OVERRIDES["query_rewrite_enabled"] = args.query_rewrite
+    if args.corrective_retrieval is not None:
+        _RUNTIME_RETRIEVAL_OVERRIDES["corrective_retrieval_enabled"] = args.corrective_retrieval
+    if args.hybrid_search is not None:
+        _RUNTIME_RETRIEVAL_OVERRIDES["hybrid_search_enabled"] = args.hybrid_search
 
     mode = "online" if args.online else ("offline" if args.offline else args.mode)
     dataset = load_eval_dataset(path=args.eval_set, limit=args.limit, seed=args.seed)

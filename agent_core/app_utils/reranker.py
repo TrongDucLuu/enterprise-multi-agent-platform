@@ -8,6 +8,7 @@ with fail-safe fallback to candidate order if the ranking service is disabled or
 
 import os
 import re
+import unicodedata
 import logging
 from typing import Optional, Any
 from agent_core.tools.enterprise_rag_mcp.rag_models import SearchResult
@@ -15,6 +16,82 @@ from agent_core.tools.enterprise_rag_mcp.rag_models import SearchResult
 logger = logging.getLogger(__name__)
 
 DEFAULT_RANKER_MODEL = "semantic-ranker-512@latest"
+
+
+def _normalize_text(text: str) -> str:
+    """Strip diacritics and lowercase text for robust cross-lingual / Vietnamese matching."""
+    if not text:
+        return ""
+    nfkd = unicodedata.normalize("NFKD", text.lower())
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).replace("đ", "d").replace("Đ", "d")
+
+
+def _fallback_cross_rerank(query: str, candidates: list[SearchResult], top_n: int) -> list[SearchResult]:
+    """
+    Deterministic cross-field ranking fallback when Vertex AI Ranking API is unavailable or offline.
+    Scores candidates on query token coverage, exact title/keyword matching, and base retriever relevance.
+    """
+    if not candidates:
+        return []
+
+    norm_q = _normalize_text(query).strip()
+    q_words = [w for w in re.findall(r"[\w\-]+", norm_q) if len(w) > 1]
+    q_tokens = set(q_words)
+    q_bigrams = {" ".join(q_words[i:i+2]) for i in range(len(q_words)-1)} if len(q_words) > 1 else set()
+
+    scored: list[tuple[float, int, SearchResult]] = []
+    for idx, cand in enumerate(candidates):
+        norm_title = _normalize_text(cand.title or "")
+        norm_snippet = _normalize_text(re.sub(r"<[^>]+>", "", cand.snippet or ""))
+        norm_id = _normalize_text(cand.article_id or "")
+        cand_keywords = [_normalize_text(k) for k in (cand.keywords or [])]
+
+        title_tokens = set(re.findall(r"[\w\-]+", norm_title))
+        snippet_tokens = set(re.findall(r"[\w\-]+", norm_snippet))
+
+        # Base retriever score preservation (strong base weight)
+        score = float(cand.relevance_score or 0.0) * 8.0
+
+        # Exact Article ID match in query
+        if norm_id and (norm_id in norm_q or norm_id in q_tokens):
+            score += 10.0
+
+        # Bigram phrase matching in title
+        matching_bigrams = sum(1 for bg in q_bigrams if bg in norm_title)
+        if matching_bigrams > 0:
+            score += min(matching_bigrams * 3.0, 9.0)
+
+        # Exact phrase in title or title in query
+        if len(norm_title) > 5 and norm_title in norm_q:
+            score += 6.0
+        elif len(norm_q) > 5 and norm_q in norm_title:
+            score += 6.0
+
+        # Keywords in query
+        for kw in cand_keywords:
+            if kw and len(kw) >= 2 and (kw in norm_q or kw in q_tokens):
+                score += 4.0
+
+        if q_tokens:
+            # Title token coverage
+            title_overlap = len(q_tokens.intersection(title_tokens))
+            score += (title_overlap / len(q_tokens)) * 5.0
+
+            # Content token coverage
+            content_overlap = len(q_tokens.intersection(snippet_tokens))
+            score += (content_overlap / len(q_tokens)) * 1.5
+
+        scored.append((score, idx, cand))
+
+    # Sort descending by cross-score with stable tie-breaking
+    scored.sort(key=lambda x: (x[0], -x[1]), reverse=True)
+
+    reranked = []
+    for score, _, cand in scored[:top_n]:
+        # Normalize score into [0.5, 1.0] for reranked results
+        norm_score = max(0.0, min(1.0, 0.5 + (min(score, 30.0) / 60.0)))
+        reranked.append(cand.model_copy(update={"relevance_score": norm_score}))
+    return reranked
 
 
 def rerank_search_results(
@@ -43,13 +120,15 @@ def rerank_search_results(
         return []
 
     target_top_n = top_n if top_n is not None and top_n > 0 else len(candidates)
-    target_top_n = min(target_top_n, len(candidates))
-
     if use_reranker is None:
         use_reranker = os.getenv("USE_VERTEX_RERANKER", "false").lower() in ("true", "1", "yes")
 
     if not use_reranker:
         return candidates[:target_top_n]
+
+    use_vertex_live = os.getenv("USE_VERTEX_RERANKER", "false").lower() in ("true", "1", "yes")
+    if not use_vertex_live:
+        return _fallback_cross_rerank(query, candidates, target_top_n)
 
     proj = project_id or os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("PROJECT_ID", "default")
 
@@ -86,9 +165,7 @@ def rerank_search_results(
         for record in response.records:
             if record.id in id_to_candidate:
                 cand = id_to_candidate[record.id]
-                # Normalize ranking score to [0.0, 1.0] if provided
                 raw_score = float(record.score) if hasattr(record, "score") and record.score is not None else cand.relevance_score
-                # Bound score to [0.0, 1.0]
                 norm_score = max(0.0, min(1.0, raw_score))
                 reranked_cand = cand.model_copy(update={"relevance_score": norm_score})
                 reranked_results.append(reranked_cand)
@@ -107,6 +184,6 @@ def rerank_search_results(
 
     except Exception as e:
         logger.warning(
-            "Vertex AI Ranking API call failed (%s). Falling back to original search ordering.", e
+            "Vertex AI Ranking API call unavailable or failed (%s). Falling back to cross-field semantic ranker.", e
         )
-        return candidates[:target_top_n]
+        return _fallback_cross_rerank(query, candidates, target_top_n)

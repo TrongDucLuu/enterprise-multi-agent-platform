@@ -14,6 +14,7 @@ from .base import (
     resolve_valid_system_filters,
     resolve_retrieval_config,
     resolve_authorize_document,
+    resolve_rerank_search_results,
 )
 from .similarity import normalize_similarity
 from .sanitize import wrap_retrieved_document
@@ -91,6 +92,7 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         # Check retrieval configuration and optimize query if enabled
         retrieval_cfg = resolve_retrieval_config()
         hybrid_enabled = retrieval_cfg.get("hybrid_search_enabled", True)
+        reranker_enabled = retrieval_cfg.get("reranker_enabled", False)
 
         effective_query = process_retrieval_query(query, retrieval_cfg)
         if not effective_query:
@@ -165,8 +167,9 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         # Sort by relevance score descending
         results.sort(key=lambda x: x[0], reverse=True)
 
+        retrieve_k = max(limit * 4, 15) if reranker_enabled else limit
         search_results = []
-        for score, article in results[:limit]:
+        for score, article in results[:retrieve_k]:
             is_truncated = len(article.content) > 1200
             raw_snippet = article.content[:1200].strip() + "..." if is_truncated else article.content.strip()
             snippet = wrap_retrieved_document(
@@ -204,7 +207,15 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
                 is_deleted=getattr(article, "is_deleted", False),
                 is_truncated=is_truncated,
             ))
-        return search_results
+
+        if reranker_enabled:
+            search_results = resolve_rerank_search_results(
+                query=effective_query,
+                candidates=search_results,
+                top_n=limit,
+                use_reranker=True,
+            )
+        return search_results[:limit]
 
     def get_article_by_id(
         self,
