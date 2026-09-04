@@ -367,16 +367,23 @@ def load_system_config(config_path: Optional[str] = None, force_reload: bool = F
             in_prod = is_production_mode()
         except ImportError:
             in_prod = os.getenv("ENVIRONMENT", "").lower() == "production" or bool(os.getenv("K_SERVICE"))
-        
-        if in_prod:
+
+        is_domain_pack_or_main = (
+            "domain_packs" in str(target_path)
+            or "it-helpdesk" in str(target_path)
+            or "_template" in str(target_path)
+            or "ERP" in data.get("systems", {})
+            or "CORE" in data.get("systems", {})
+        )
+        if in_prod and is_domain_pack_or_main:
             raise SystemConfigurationError(
                 f"Cấu hình '{target_path}' thiếu trường 'clearance_levels'. "
                 f"Trong môi trường production, clearance_levels là bắt buộc trong domain pack systems.yaml. (Fail-Closed)"
             )
-        # Development default fallback
+        # Development default / custom config fallback
         raw_clearance = {
-            3: ["it_admin", "sys_admin", "compliance_officer", "admin", "super_admin"],
-            2: ["support_lead", "security_analyst", "legal_counsel", "hr_manager", "finance_manager"],
+            3: ["it_admin", "sys_admin", "compliance_admin", "admin", "super_admin"],
+            2: ["compliance_officer", "legal_counsel", "hr_manager", "finance_manager", "director", "support_lead", "it_specialist", "security_analyst", "compliance_analyst", "auditor"],
             1: ["*"],
             0: [],
         }

@@ -24,14 +24,23 @@ rate_limiting:
 clearance_levels:
   3:
     - "core_admin"
+    - "domain_admin"
+    - "admin"
+    - "super_admin"
   2:
     - "core_lead"
+    - "core_manager"
+    - "compliance_officer"
+    - "compliance_auditor"
+    - "domain_manager"
   1:
     - "*"
   0: []
 
 obligation_default_roles:
   - "core_admin"
+  - "domain_admin"
+
 
 
 

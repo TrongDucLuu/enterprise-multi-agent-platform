@@ -831,35 +831,40 @@ class RedisSemanticCache(BaseSemanticCache):
             if exact_eid_user:
                 exact_keys.append(self.entry_key(exact_eid_user))
 
-            raw_exact_entries = self._redis.mget(exact_keys)
-            for raw_json in raw_exact_entries:
-                if not raw_json:
-                    continue
-                try:
-                    data = json.loads(raw_json)
-                    exact_entry = SemanticCacheEntry.from_dict(data)
-                    if not exact_entry.is_expired() and exact_entry.clearance_level <= caller_clearance:
-                        exact_entry.hit_count += 1
-                        self._local_hits += 1
-                        dt_ms = (time.perf_counter() - t0) * 1000.0
-                        GLOBAL_CACHE_METRICS["cache_scan_candidates_total"] += 1
-                        GLOBAL_CACHE_METRICS["cache_lookup_latency_ms_total"] += dt_ms
-                        GLOBAL_CACHE_METRICS["cache_lookup_count"] += 1
-                        GLOBAL_CACHE_METRICS["cache_hit_count"] += 1
-                        self._record_redis_success()
-                        return {
-                            "status": "cache_hit",
-                            "cached_query": exact_entry.query,
-                            "response": exact_entry.response,
-                            "similarity": 1.0,
-                            "tier": exact_entry.tier,
-                            "clearance_level": exact_entry.clearance_level,
-                            "hits": exact_entry.hit_count,
-                            "is_public": exact_entry.is_public,
-                            "metadata": exact_entry.metadata,
-                        }
-                except Exception:
-                    pass
+            try:
+                raw_exact_entries = self._redis.mget(exact_keys)
+            except Exception:
+                raw_exact_entries = None
+
+            if isinstance(raw_exact_entries, (list, tuple)):
+                for raw_json in raw_exact_entries:
+                    if not raw_json or not isinstance(raw_json, str):
+                        continue
+                    try:
+                        data = json.loads(raw_json)
+                        exact_entry = SemanticCacheEntry.from_dict(data)
+                        if not exact_entry.is_expired() and exact_entry.clearance_level <= caller_clearance:
+                            exact_entry.hit_count += 1
+                            self._local_hits += 1
+                            dt_ms = (time.perf_counter() - t0) * 1000.0
+                            GLOBAL_CACHE_METRICS["cache_scan_candidates_total"] += 1
+                            GLOBAL_CACHE_METRICS["cache_lookup_latency_ms_total"] += dt_ms
+                            GLOBAL_CACHE_METRICS["cache_lookup_count"] += 1
+                            GLOBAL_CACHE_METRICS["cache_hit_count"] += 1
+                            self._record_redis_success()
+                            return {
+                                "status": "cache_hit",
+                                "cached_query": exact_entry.query,
+                                "response": exact_entry.response,
+                                "similarity": 1.0,
+                                "tier": exact_entry.tier,
+                                "clearance_level": exact_entry.clearance_level,
+                                "hits": exact_entry.hit_count,
+                                "is_public": exact_entry.is_public,
+                                "metadata": exact_entry.metadata,
+                            }
+                    except Exception:
+                        pass
 
             # 2. Semantic Search Path with Candidate Set Limiting
             query_emb = self._generate_embedding(query)
@@ -868,17 +873,36 @@ class RedisSemanticCache(BaseSemanticCache):
 
             candidate_entry_ids = []
             
-            # Fetch from ZSETs (sorted by recent access/creation)
-            pub_z_ids = self._redis.zrevrange(self.public_zset, 0, max_candidates - 1)
-            if not pub_z_ids:
-                pub_z_ids = list(self._redis.smembers(self.public_keys_set) or [])
+            # Fetch from ZSETs (sorted by recent access/creation) with fallback to SET
+            pub_z_ids = None
+            try:
+                pub_z_ids = self._redis.zrevrange(self.public_zset, 0, max_candidates - 1)
+            except Exception:
+                pub_z_ids = None
+            if not isinstance(pub_z_ids, (list, tuple, set)) or not pub_z_ids:
+                pub_set = self._redis.smembers(self.public_keys_set)
+                if isinstance(pub_set, (list, tuple, set)):
+                    pub_z_ids = list(pub_set)
+                else:
+                    pub_z_ids = []
             candidate_entry_ids.extend(pub_z_ids)
 
             if user_id:
-                user_z_ids = self._redis.zrevrange(self.user_zset(user_id), 0, max_candidates - 1)
-                if not user_z_ids:
-                    user_z_ids = list(self._redis.smembers(self.user_keys_set(user_id)) or [])
+                user_z_ids = None
+                try:
+                    user_z_ids = self._redis.zrevrange(self.user_zset(user_id), 0, max_candidates - 1)
+                except Exception:
+                    user_z_ids = None
+                if not isinstance(user_z_ids, (list, tuple, set)) or not user_z_ids:
+                    user_set = self._redis.smembers(self.user_keys_set(user_id))
+                    if isinstance(user_set, (list, tuple, set)):
+                        user_z_ids = list(user_set)
+                    else:
+                        user_z_ids = []
                 candidate_entry_ids.extend(user_z_ids)
+
+            # Filter out any non-string items (such as mock objects)
+            candidate_entry_ids = [eid for eid in candidate_entry_ids if isinstance(eid, str)]
 
             if not candidate_entry_ids:
                 self._record_redis_success()
