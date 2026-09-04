@@ -284,13 +284,20 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
                 continue
 
             score = 0.0
+            art_id_lower = article.id.lower()
+            if art_id_lower in query_lower:
+                score += 10.0
+
             article_text = f"{article.title} {article.category} {article.content}".lower()
             article_keywords = [k.lower() for k in article.keywords]
 
             # 3. Keyword matching & Exact match boosting (M_BEST_EKO, ME21N, OB52, etc.)
             for term in terms:
+                # Exact article ID match
+                if term == art_id_lower:
+                    score += 10.0
                 # Exact phrase / code matching (case-insensitive)
-                if term in article.title.lower():
+                elif term in article.title.lower():
                     score += 3.0
                 elif term in article_keywords:
                     score += 2.0
