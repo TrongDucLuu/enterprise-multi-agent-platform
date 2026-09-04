@@ -179,6 +179,9 @@ retrieval:
   fraction_lists_to_search: 0.05              # Fraction of IVF lists to search (0.0 to 1.0)
   hybrid_search_enabled: true                 # Enable lexical BM25/keyword boost alongside vector search
   reranker_enabled: false                     # Enable Vertex AI Reranker
+  query_preprocessing_enabled: false          # Non-LLM query preprocessor (Unicode normalization, stop-words, code-preserving)
+  query_rewrite_enabled: false                # Fast LLM query rewrite with fallback
+  corrective_retrieval_enabled: false         # Corrective retrieval & confidence loop
   retrieve_k: 20                              # Number of initial candidate chunks retrieved
   final_k: 3                                  # Number of final authorized top results returned
   adaptive_retrieval_rounds: 2                # Max retrieval rounds if authorized count < final_k

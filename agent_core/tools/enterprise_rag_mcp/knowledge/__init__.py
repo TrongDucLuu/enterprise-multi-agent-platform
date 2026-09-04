@@ -40,6 +40,11 @@ from .facts import (
     BigQueryFactsStore,
     load_sample_facts,
 )
+from .query_processor import (
+    preprocess_query,
+    rewrite_query_with_llm,
+    process_retrieval_query,
+)
 
 
 def get_facts_store() -> BaseFactsStore:
@@ -98,4 +103,7 @@ __all__ = [
     "load_sample_facts",
     "get_facts_store",
     "get_knowledge_store",
+    "preprocess_query",
+    "rewrite_query_with_llm",
+    "process_retrieval_query",
 ]

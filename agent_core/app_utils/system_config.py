@@ -306,10 +306,31 @@ def load_system_config(config_path: Optional[str] = None, force_reload: bool = F
             f"Trường 'retrieval.adaptive_retrieval_rounds' ({adaptive_retrieval_rounds}) phải là số nguyên dương. (Fail-Closed)"
         )
 
+    query_preprocessing_enabled = raw_retrieval.get("query_preprocessing_enabled", False)
+    if not isinstance(query_preprocessing_enabled, bool):
+        raise SystemConfigurationError(
+            f"Trường 'retrieval.query_preprocessing_enabled' ({query_preprocessing_enabled}) phải là boolean. (Fail-Closed)"
+        )
+
+    query_rewrite_enabled = raw_retrieval.get("query_rewrite_enabled", False)
+    if not isinstance(query_rewrite_enabled, bool):
+        raise SystemConfigurationError(
+            f"Trường 'retrieval.query_rewrite_enabled' ({query_rewrite_enabled}) phải là boolean. (Fail-Closed)"
+        )
+
+    corrective_retrieval_enabled = raw_retrieval.get("corrective_retrieval_enabled", False)
+    if not isinstance(corrective_retrieval_enabled, bool):
+        raise SystemConfigurationError(
+            f"Trường 'retrieval.corrective_retrieval_enabled' ({corrective_retrieval_enabled}) phải là boolean. (Fail-Closed)"
+        )
+
     validated_retrieval = {
         "fraction_lists_to_search": float(fraction_lists_to_search),
         "hybrid_search_enabled": bool(hybrid_search_enabled),
         "reranker_enabled": bool(reranker_enabled),
+        "query_preprocessing_enabled": bool(query_preprocessing_enabled),
+        "query_rewrite_enabled": bool(query_rewrite_enabled),
+        "corrective_retrieval_enabled": bool(corrective_retrieval_enabled),
         "retrieve_k": int(retrieve_k),
         "final_k": int(final_k),
         "adaptive_retrieval_rounds": int(adaptive_retrieval_rounds),
@@ -632,12 +653,15 @@ def get_document_processing_config() -> dict[str, Any]:
 
 
 def get_retrieval_config() -> dict[str, Any]:
-    """Returns retrieval and search configuration (fraction_lists_to_search, hybrid_search_enabled, reranker_enabled, retrieve_k, final_k, adaptive_retrieval_rounds)."""
+    """Returns retrieval and search configuration (fraction_lists_to_search, hybrid_search_enabled, reranker_enabled, query_preprocessing_enabled, query_rewrite_enabled, corrective_retrieval_enabled, retrieve_k, final_k, adaptive_retrieval_rounds)."""
     cfg = load_system_config()
     return cfg.get("retrieval", {
         "fraction_lists_to_search": 0.05,
         "hybrid_search_enabled": True,
         "reranker_enabled": False,
+        "query_preprocessing_enabled": False,
+        "query_rewrite_enabled": False,
+        "corrective_retrieval_enabled": False,
         "retrieve_k": 20,
         "final_k": 3,
         "adaptive_retrieval_rounds": 2,

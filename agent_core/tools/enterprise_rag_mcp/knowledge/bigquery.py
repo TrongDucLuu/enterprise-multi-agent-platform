@@ -25,6 +25,7 @@ from .base import (
 )
 from .similarity import normalize_similarity
 from .sanitize import wrap_retrieved_document
+from .query_processor import process_retrieval_query
 
 try:
     from rag_models import (
@@ -269,8 +270,10 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
         target_final_k = limit if limit is not None and limit > 0 else cfg_final_k
         max_rounds = int(retrieval_cfg.get("adaptive_retrieval_rounds", 2))
 
+        effective_query = process_retrieval_query(query, retrieval_cfg) or query
+
         try:
-            query_vec = self._generate_embedding(query)
+            query_vec = self._generate_embedding(effective_query)
             full_table = f"`{self.project_id}.{self.dataset_id}.{self.table_name}`"
 
             from google.cloud import bigquery
@@ -318,7 +321,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                     base_table_expr = f"(SELECT * FROM {full_table} WHERE {base_filters})"
 
                 if hybrid_enabled:
-                    query_params.append(bigquery.ScalarQueryParameter("query_text", "STRING", query.strip()))
+                    query_params.append(bigquery.ScalarQueryParameter("query_text", "STRING", effective_query.strip()))
                     sql = f"""
                     SELECT {select_cols}
                     FROM VECTOR_SEARCH(
@@ -388,7 +391,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
 
             if reranker_enabled:
                 authorized_candidates = resolve_rerank_search_results(
-                    query=query,
+                    query=effective_query,
                     candidates=authorized_candidates,
                     top_n=target_final_k,
                     project_id=self.project_id,

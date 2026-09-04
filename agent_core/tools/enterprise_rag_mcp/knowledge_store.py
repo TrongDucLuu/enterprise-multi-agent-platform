@@ -84,6 +84,9 @@ from .knowledge import (
     load_sample_facts,
     get_facts_store,
     get_knowledge_store,
+    preprocess_query,
+    rewrite_query_with_llm,
+    process_retrieval_query,
 )
 
 __all__ = [
@@ -108,6 +111,9 @@ __all__ = [
     "load_sample_facts",
     "get_facts_store",
     "get_knowledge_store",
+    "preprocess_query",
+    "rewrite_query_with_llm",
+    "process_retrieval_query",
     "KnowledgeArticle",
     "SearchResult",
     "DocumentSummary",

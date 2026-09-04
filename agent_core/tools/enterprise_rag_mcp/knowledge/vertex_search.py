@@ -18,6 +18,7 @@ from .base import (
     _extract_list,
 )
 from .sanitize import wrap_retrieved_document
+from .query_processor import process_retrieval_query
 
 try:
     from rag_models import (
@@ -120,6 +121,8 @@ class VertexAISearchKnowledgeStore(BaseKnowledgeStore):
 
         # Resolve effective security context: Fail-closed (default to anonymous, never fabricate roles)
         sec_ctx = resolve_security_context(security_context=security_context)
+        retrieval_cfg = resolve_retrieval_config()
+        effective_query = process_retrieval_query(query, retrieval_cfg) or query
 
         # Build filter expression
         filter_parts = []
@@ -137,7 +140,7 @@ class VertexAISearchKnowledgeStore(BaseKnowledgeStore):
             from google.cloud import discoveryengine_v1 as discoveryengine
             request = discoveryengine.SearchRequest(
                 serving_config=serving_config,
-                query=query.strip(),
+                query=effective_query.strip(),
                 page_size=limit,
                 filter=filter_expr,
                 content_search_spec=discoveryengine.SearchRequest.ContentSearchSpec(

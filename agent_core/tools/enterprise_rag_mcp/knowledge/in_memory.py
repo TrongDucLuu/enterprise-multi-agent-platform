@@ -17,6 +17,7 @@ from .base import (
 )
 from .similarity import normalize_similarity
 from .sanitize import wrap_retrieved_document
+from .query_processor import process_retrieval_query
 
 try:
     from rag_models import (
@@ -87,9 +88,13 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         # Resolve effective security context: Fail-closed (default to anonymous, never fabricate roles)
         sec_ctx = resolve_security_context(security_context=security_context)
 
-        # Check if hybrid search is enabled in configuration
+        # Check retrieval configuration and optimize query if enabled
         retrieval_cfg = resolve_retrieval_config()
         hybrid_enabled = retrieval_cfg.get("hybrid_search_enabled", True)
+
+        effective_query = process_retrieval_query(query, retrieval_cfg)
+        if not effective_query:
+            effective_query = query
 
         # Common Vietnamese and English stop words
         STOP_WORDS = {
@@ -101,7 +106,7 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
             "the", "a", "an", "in", "on", "at", "to", "for", "of", "and", "or", "is", "are"
         }
 
-        query_lower = query.lower()
+        query_lower = effective_query.lower()
         raw_terms = re.findall(r'[\w\-]+', query_lower)
         terms = [t for t in raw_terms if t not in STOP_WORDS and len(t) > 1]
         if not terms:

@@ -87,7 +87,14 @@ except ImportError:
         def get_valid_system_filters() -> set[str]:
             return {"ERP", "HRM", "CRM", "ALL"}
         def get_retrieval_config() -> dict[str, Any]:
-            return {"fraction_lists_to_search": 0.05, "hybrid_search_enabled": False, "reranker_enabled": False}
+            return {
+                "fraction_lists_to_search": 0.05,
+                "hybrid_search_enabled": False,
+                "reranker_enabled": False,
+                "query_preprocessing_enabled": False,
+                "query_rewrite_enabled": False,
+                "corrective_retrieval_enabled": False,
+            }
         DEFAULT_EMBEDDING_MODEL = "text-multilingual-embedding-002"
         def generate_text_embedding(text: str, **kwargs) -> list[float]:
             return [0.0] * 768
