@@ -50,8 +50,8 @@ Thư mục này lưu trữ các baseline chính thức và bảng theo dõi delt
 | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | **PR 1** | **Baseline (Phase 0: P0-A & P0-B)** | 95.83% | 0.914 | 2.08 ms | 2.50 ms | 100.0% | **BASELINE** | Thiết lập so sánh A/B & mở rộng eval set 127 cases |
 | **PR 2** | **Hạng mục A: Tiền xử lý & Query Rewrite** | 95.83% (0.00%) | 0.914 (0.000) | 2.07 ms (-0.01 ms) | 2.58 ms (+0.08 ms) | 100.0% (0.00%) | ✅ MERGED | A1 (Unicode/stop-words/code-safe) + A2 (Rewrite LLM fallback) |
-| **PR 3** | **Hạng mục B: Vertex AI Semantic Reranker** | 95.83% (0.00%) | 0.884 (-0.030) | 2.63 ms (+0.55 ms) | 3.51 ms (+1.01 ms) | 100.0% (0.00%) | ✅ READY | Semantic ranker Discovery Engine + offline cross-field ranking |
-| **PR 4** | **Hạng mục C: Corrective Retrieval Loop** | - | - | - | - | - | *Pending* | Cờ `corrective_retrieval_enabled: true` |
+| **PR 3** | **Hạng mục B: Vertex AI Semantic Reranker** | 95.83% (0.00%) | 0.884 (-0.030) | 2.63 ms (+0.55 ms) | 3.51 ms (+1.01 ms) | 100.0% (0.00%) | ✅ MERGED | Semantic ranker Discovery Engine + offline cross-field ranking |
+| **PR 4** | **Hạng mục C: Corrective Retrieval Loop** | 95.83% (0.00%) | 0.914 (0.000) | 2.02 ms (-0.06 ms) | 2.53 ms (+0.03 ms) | 100.0% (0.00%) | ✅ READY | Cờ `corrective_retrieval_enabled: true`, adaptive rounds & confidence threshold |
 | **PR 5** | **Hạng mục D: Thử nghiệm Chunking** | - | - | - | - | - | *Pending* | So sánh kích thước chunk & overlap |
 
 ---

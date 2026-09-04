@@ -19,6 +19,11 @@ from .base import (
 from .similarity import normalize_similarity
 from .sanitize import wrap_retrieved_document
 from .query_processor import process_retrieval_query
+from .corrective_retriever import (
+    evaluate_retrieval_confidence,
+    refine_corrective_query,
+    merge_candidate_results,
+)
 
 try:
     from rag_models import (
@@ -70,34 +75,16 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
     def __init__(self, articles: Optional[list[KnowledgeArticle]] = None):
         self.articles = list(articles) if articles is not None else load_sample_articles()
 
-    def search(
+    def _search_candidates(
         self,
-        query: str,
-        security_context: SecurityContext,
-        system: str = "ALL",
-        limit: int = 3,
-        allowed_systems: Optional[list[str]] = None,
+        query_text: str,
+        sec_ctx: SecurityContext,
+        clean_system: str,
+        allowed_upper: Optional[set[str]],
+        hybrid_enabled: bool,
+        retrieve_k: int,
     ) -> list[SearchResult]:
-        """Search knowledge articles by query keywords, system filter, authorized systems, and security context."""
-        valid_systems = resolve_valid_system_filters()
-        clean_system = system.upper().strip() if system else "ALL"
-        if clean_system not in valid_systems:
-            clean_system = "ALL"
-
-        allowed_upper = set(s.upper() for s in allowed_systems) if allowed_systems is not None else None
-
-        # Resolve effective security context: Fail-closed (default to anonymous, never fabricate roles)
-        sec_ctx = resolve_security_context(security_context=security_context)
-
-        # Check retrieval configuration and optimize query if enabled
-        retrieval_cfg = resolve_retrieval_config()
-        hybrid_enabled = retrieval_cfg.get("hybrid_search_enabled", True)
-        reranker_enabled = retrieval_cfg.get("reranker_enabled", False)
-
-        effective_query = process_retrieval_query(query, retrieval_cfg)
-        if not effective_query:
-            effective_query = query
-
+        """Internal search helper to retrieve authorized candidates matching query_text."""
         # Common Vietnamese and English stop words
         STOP_WORDS = {
             "và", "các", "cho", "của", "là", "ở", "trong", "trên", "được", "với", "tại",
@@ -108,7 +95,7 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
             "the", "a", "an", "in", "on", "at", "to", "for", "of", "and", "or", "is", "are"
         }
 
-        query_lower = effective_query.lower()
+        query_lower = query_text.lower()
         raw_terms = re.findall(r'[\w\-]+', query_lower)
         terms = [t for t in raw_terms if t not in STOP_WORDS and len(t) > 1]
         if not terms:
@@ -167,7 +154,6 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
         # Sort by relevance score descending
         results.sort(key=lambda x: x[0], reverse=True)
 
-        retrieve_k = max(limit * 4, 15) if reranker_enabled else limit
         search_results = []
         for score, article in results[:retrieve_k]:
             is_truncated = len(article.content) > 1200
@@ -207,6 +193,65 @@ class InMemoryKnowledgeStore(BaseKnowledgeStore):
                 is_deleted=getattr(article, "is_deleted", False),
                 is_truncated=is_truncated,
             ))
+        return search_results
+
+    def search(
+        self,
+        query: str,
+        security_context: SecurityContext,
+        system: str = "ALL",
+        limit: int = 3,
+        allowed_systems: Optional[list[str]] = None,
+    ) -> list[SearchResult]:
+        """Search knowledge articles by query keywords, system filter, authorized systems, and security context."""
+        valid_systems = resolve_valid_system_filters()
+        clean_system = system.upper().strip() if system else "ALL"
+        if clean_system not in valid_systems:
+            clean_system = "ALL"
+
+        allowed_upper = set(s.upper() for s in allowed_systems) if allowed_systems is not None else None
+
+        # Resolve effective security context: Fail-closed (default to anonymous, never fabricate roles)
+        sec_ctx = resolve_security_context(security_context=security_context)
+
+        # Check retrieval configuration and optimize query if enabled
+        retrieval_cfg = resolve_retrieval_config()
+        hybrid_enabled = retrieval_cfg.get("hybrid_search_enabled", True)
+        reranker_enabled = retrieval_cfg.get("reranker_enabled", False)
+        corrective_enabled = retrieval_cfg.get("corrective_retrieval_enabled", False)
+        max_rounds = int(retrieval_cfg.get("adaptive_retrieval_rounds", 2))
+        confidence_threshold = float(retrieval_cfg.get("confidence_threshold", 0.65))
+
+        effective_query = process_retrieval_query(query, retrieval_cfg) or query
+        retrieve_k = max(limit * 4, 15) if reranker_enabled else limit
+
+        # Round 1: Initial search
+        search_results = self._search_candidates(
+            query_text=effective_query,
+            sec_ctx=sec_ctx,
+            clean_system=clean_system,
+            allowed_upper=allowed_upper,
+            hybrid_enabled=hybrid_enabled,
+            retrieve_k=retrieve_k,
+        )
+
+        # Corrective retrieval loop: if confidence is low, iteratively refine query and merge results
+        if corrective_enabled and max_rounds > 1 and not evaluate_retrieval_confidence(search_results, threshold=confidence_threshold):
+            for round_idx in range(2, max_rounds + 1):
+                refined_query = refine_corrective_query(query, round_idx)
+                if not refined_query or refined_query.strip() == effective_query.strip():
+                    continue
+                new_candidates = self._search_candidates(
+                    query_text=refined_query,
+                    sec_ctx=sec_ctx,
+                    clean_system=clean_system,
+                    allowed_upper=allowed_upper,
+                    hybrid_enabled=hybrid_enabled,
+                    retrieve_k=retrieve_k,
+                )
+                search_results = merge_candidate_results(search_results, new_candidates, limit=retrieve_k)
+                if evaluate_retrieval_confidence(search_results, threshold=confidence_threshold):
+                    break
 
         if reranker_enabled:
             search_results = resolve_rerank_search_results(
