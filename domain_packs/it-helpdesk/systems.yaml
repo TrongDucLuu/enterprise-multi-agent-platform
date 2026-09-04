@@ -194,22 +194,33 @@ rate_limiting:
 # Role Clearance Lattice Configuration
 clearance_levels:
   3:
+    - "admin"
+    - "super_admin"
     - "it_admin"
     - "sys_admin"
-    - "compliance_officer"
+    - "security_admin"
+    - "compliance_admin"
   2:
-    - "support_lead"
-    - "security_analyst"
+    - "hr_admin"
+    - "finance_admin"
+    - "compliance_officer"
     - "legal_counsel"
+    - "hr_manager"
+    - "finance_manager"
+    - "director"
+    - "support_lead"
+    - "it_specialist"
+    - "security_analyst"
+    - "compliance_analyst"
+    - "auditor"
   1:
     - "*"
   0: []
 
 obligation_default_roles:
   - "compliance_officer"
+  - "legal_counsel"
   - "it_admin"
   - "sys_admin"
-  - "legal_counsel"
-
-
-
+  - "compliance_admin"
+  - "security_admin"
