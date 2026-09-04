@@ -135,6 +135,14 @@ DOMAIN_PACK=_template ENVIRONMENT=development .venv/bin/pytest tests/ -q
 3. **Nạp Kho Tri Thức Vector**: Tải tài liệu nghiệp vụ vào BigQuery dataset của tenant.
 4. **Triển khai Hạ tầng Độc lập**: Chạy Terraform stack cho GCP Project của khách hàng với `DOMAIN_PACK=<new-domain>`.
 
+### SOP-03: Đăng Ký Agent Vào Gemini Enterprise Mesh & A2A Gateway
+1. **Kiểm tra nhãn hạ tầng**: Xác nhận Cloud Run service đã được gắn nhãn `functional-type = "agent"` ([Cloud Run Labels Doc](https://cloud.google.com/run/docs/configuring/labels)) hoặc GKE có annotation `apps.google.com/agent-type: adk-agent` ([GKE Labels Doc](https://cloud.google.com/kubernetes-engine/docs/concepts/labels-annotations)).
+2. **Xác minh A2A AgentCard**:
+   ```bash
+   curl -s -H "Authorization: Bearer $(gcloud auth print-identity-token)" https://${SERVICE_URL}/a2a/.well-known/agent-card.json | jq .
+   ```
+3. **Đăng ký vào Agent Registry**: Thực hiện đăng ký qua Gemini Enterprise Admin Console hoặc `gcloud alpha genai agents register` (tham khảo `Runbook_Onboarding_Khach_Hang.md` Bước 8).
+
 ---
 
 ## 6. Xử Lý Sự Cố Khẩn Cấp (Incident Response Playbooks)
@@ -144,3 +152,4 @@ DOMAIN_PACK=_template ENVIRONMENT=development .venv/bin/pytest tests/ -q
 | **Lỗi 401 Unauthorized Hàng Loạt** | Mọi API trả về `401 Invalid Token` | Token OIDC hết hạn, domain email bị chặn, hoặc sai `SSO_CLIENT_ID`. | Kiểm tra log Cloud Run, xác minh `ALLOWED_DOMAINS` trong biến môi trường và Google IAM JWKS. |
 | **Lỗi 500 Case Concurrency Conflict** | Lỗi cập nhật Case/Ticket với mã `CaseConcurrencyConflictError` | Hai kỹ sư cùng cập nhật một case đồng thời. | Client thực hiện đọc lại version mới nhất (`get_case`) và retry cập nhật với `expected_version` mới. |
 | **Lỗi RAG Fallback Kích Hoạt** | Log ghi nhận `Warning: Cross-Encoder model unavailable, falling back to Cosine Distance` | Model weights Re-ranker không tải được hoặc thiếu RAM. | Hệ thống tự duy trì hoạt động qua Fallback. Cần kiểm tra RAM của Cloud Run instance (khuyến nghị nâng lên 2GB-4GB). |
+| **Lỗi A2A Degraded (503 trên /readyz)** | Endpoint `/readyz` trả về `503 Service Degraded: A2A endpoint failed` | Lỗi cấu hình Domain Pack metadata hoặc không nạp được ADK Agent hierarchy. | Trong `production`, pod sẽ fail-fast lúc khởi động; trong `development`, kiểm tra `pack.yaml` và `agents.yaml` để khắc phục lỗi cấu hình schema. |

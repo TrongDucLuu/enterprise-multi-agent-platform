@@ -258,7 +258,11 @@ Khi doanh nghiệp triển khai kiến trúc Multi-Agent phân tán hoặc muố
    enable_a2a_endpoint   = true
    enable_agent_registry = true
    ```
-   Sau khi `terraform apply`, Cloud Run service sẽ tự động được gán nhãn `functional-type = "agent"` và kích hoạt các API `agentregistry.googleapis.com`, `agentgateway.googleapis.com`.
+   Sau khi `terraform apply`, Cloud Run service sẽ tự động được gán nhãn `functional-type = "agent"` ([Cloud Run Labels Doc](https://cloud.google.com/run/docs/configuring/labels)) và kích hoạt các API `agentregistry.googleapis.com`, `agentgateway.googleapis.com`.
+
+   > [!NOTE]
+   > **Trạng thái Terraform Provider (Kiểm tra ngày 04/09/2026 trên Terraform Registry):**
+   > Hiện tại `hashicorp/google` và `hashicorp/google-beta` chưa cung cấp resource Terraform native (như `google_agent_registry_agent` hay `google_gemini_agent`). Do đó, hạ tầng quản lý việc bật API và cấu hình Cloud Run, còn đăng ký Agent thực hiện qua một trong hai phương án bên dưới.
 
 2. **Quy Tắc Ghép Nối (Pairing Rules):**
    - **Mỗi GCP Project / Region chỉ có tối đa 1 Agent Gateway và 1 Agent Registry** đóng vai trò Central Hub điều phối.
@@ -275,12 +279,44 @@ Khi doanh nghiệp triển khai kiến trúc Multi-Agent phân tán hoặc muố
    # -> JSON Agent Card chuẩn khai báo danh sách skills, name, description theo domain pack
    ```
 
-4. **Đăng Ký Agent Trên Gemini Enterprise Admin Console:**
-   - Truy cập **Google Cloud Console** > **Vertex AI / Gemini Enterprise** > **Agent Registry**.
-   - Nhấn **Register Agent** > Nhập tên định danh (ví dụ: `it-helpdesk-agent`).
-   - Nhập URL máy chủ A2A: `https://<cloud-run-url>/a2a`.
-   - Chọn **Agent Gateway** đích cùng vùng (`asia-southeast1` hoặc `us-central1`).
-   - Cấp quyền IAM: Gán vai trò `roles/agentregistry.viewer` hoặc `roles/agentregistry.agentCaller` cho các hệ thống hoặc Agent tiêu thụ khác.
+4. **Đăng Ký Agent Vào Agent Registry:**
+
+   #### Bước 8a: Manual Setup qua Gemini Enterprise Admin Console (Giao diện Web)
+   1. Mở [Google Cloud Console](https://console.cloud.google.com/) > chọn Project khách hàng.
+   2. Điều hướng tới **Vertex AI / Gemini Enterprise** > **Agent Builder** > **Agent Registry**.
+   3. Nhấn **Register Agent**:
+      - **Agent Name / ID**: `it-helpdesk-agent` (hoặc định danh theo domain pack).
+      - **Protocol**: Chọn `Agent-to-Agent (A2A)`.
+      - **Endpoint URL**: `https://<cloud-run-url>/a2a` (hoặc RPC path `/a2a/`).
+      - **Authentication**: Chọn `OAuth 2.0 / OIDC Bearer Token` và điền OAuth Client ID được cấp từ Identity Provider.
+      - **Target Agent Gateway**: Chọn Gateway trung tâm cùng region (ví dụ: `asia-southeast1` hoặc `us-central1`).
+   4. Nhấn **Save & Verify Connection**. Hệ thống sẽ tự động fetch `agent-card.json` và đồng bộ danh mục năng lực (skills & capabilities).
+   5. Cấp quyền IAM: Trong tab **Permissions**, gán vai trò `roles/agentregistry.viewer` hoặc `roles/agentregistry.agentCaller` cho các client SA được phép gọi Agent.
+
+   #### Bước 8b: CLI Automation qua `gcloud` hoặc REST API
+   1. Sử dụng lệnh `gcloud` để đăng ký Agent vào Registry:
+      ```bash
+      gcloud alpha genai agents register it-helpdesk-agent \
+          --project="customer-gcp-project-id" \
+          --location="asia-southeast1" \
+          --display-name="IT Helpdesk Enterprise Agent" \
+          --endpoint-url="https://<cloud-run-url>/a2a" \
+          --protocol="A2A" \
+          --gateway="projects/customer-gcp-project-id/locations/asia-southeast1/gateways/central-agent-gateway"
+      ```
+   2. Hoặc gọi trực tiếp Google Cloud Agent Registry REST API:
+      ```bash
+      ACCESS_TOKEN=$(gcloud auth print-access-token)
+      curl -X POST \
+          -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+          -H "Content-Type: application/json" \
+          "https://agentregistry.googleapis.com/v1alpha/projects/customer-gcp-project-id/locations/asia-southeast1/agents?agentId=it-helpdesk-agent" \
+          -d '{
+            "displayName": "IT Helpdesk Enterprise Agent",
+            "endpointUri": "https://<cloud-run-url>/a2a",
+            "protocol": "A2A"
+          }'
+      ```
 
 
 ---

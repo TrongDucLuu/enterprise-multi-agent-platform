@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+from typing import Optional
 from fastapi import FastAPI, Depends, Query
 from google.adk.cli.fast_api import get_fast_api_app
 from google.cloud import logging as cloud_logging
@@ -143,6 +144,16 @@ async def health_check():
     }
 
 
+# Global A2A status tracking for readiness probes
+_A2A_STATUS: str = "uninitialized"
+_A2A_ERROR_MESSAGE: Optional[str] = None
+
+
+def get_a2a_status() -> tuple[str, Optional[str]]:
+    """Returns the current A2A status ('healthy', 'degraded', 'disabled', 'uninitialized') and any error message."""
+    return _A2A_STATUS, _A2A_ERROR_MESSAGE
+
+
 @app.get("/readyz", tags=["Health"])
 async def readiness_check():
     """Readiness probe endpoint confirming system readiness."""
@@ -154,12 +165,19 @@ async def readiness_check():
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Service not ready: {error_msg}",
         )
+    if is_enable_a2a_endpoint() and _A2A_STATUS == "degraded":
+        from fastapi import HTTPException, status
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Service degraded: A2A endpoint failed to initialize ({_A2A_ERROR_MESSAGE})",
+        )
     return {
         "status": "ready",
         "service": "it-helpdesk-agent",
         "core_version": CORE_VERSION,
         "pack_id": PACK_ID,
         "pack_version": PACK_VERSION,
+        "a2a_status": _A2A_STATUS if is_enable_a2a_endpoint() else "disabled",
     }
 
 
@@ -181,6 +199,19 @@ async def get_semantic_cache_stats(user: SSOUser = Depends(require_admin)):
         "status": "success",
         "stats": cache.get_stats()
     }
+
+
+@app.post("/api/cache/invalidate", tags=["Optimization"])
+async def invalidate_semantic_cache(user: SSOUser = Depends(require_admin)):
+    """Flushes/invalidates the semantic response cache (e.g., after KB article updates)."""
+    cache = get_semantic_cache()
+    count = cache.invalidate_all()
+    return {
+        "status": "ok",
+        "message": f"Successfully invalidated {count} cached entries across all tenants.",
+        "invalidated_count": count
+    }
+
 
 @app.get("/api/cache/query", tags=["Optimization"])
 async def query_semantic_cache(
@@ -253,8 +284,16 @@ def setup_a2a_endpoint(app_instance: FastAPI):
     Initializes and mounts the A2A (Agent-to-Agent) protocol endpoint at /a2a.
     Dynamically generates the AgentCard from the active domain pack and ADK agent hierarchy.
     Enforces parent middleware authentication (SSOAuthenticationMiddleware, RateLimitMiddleware).
+
+    Fail-Loud Behavior:
+    - ENVIRONMENT=production: Raises RuntimeError on setup failure to crash pod immediately (fail fast).
+    - ENVIRONMENT=development (or other): Logs warning, marks _A2A_STATUS='degraded', causes /readyz to return 503
+      so Kubernetes/monitoring detects degradation while allowing local debugging of other endpoints.
     """
+    global _A2A_STATUS, _A2A_ERROR_MESSAGE
     if not is_enable_a2a_endpoint():
+        _A2A_STATUS = "disabled"
+        _A2A_ERROR_MESSAGE = None
         return None
 
     try:
@@ -303,14 +342,23 @@ def setup_a2a_endpoint(app_instance: FastAPI):
             asyncio.run(_init_routes())
 
         app_instance.mount("/a2a", a2a_sub_app)
+        _A2A_STATUS = "healthy"
+        _A2A_ERROR_MESSAGE = None
         logger.info(
             "A2A Protocol endpoint successfully initialized and mounted at /a2a for domain pack '%s'",
             pack_meta.get("id", "unknown")
         )
         return a2a_sub_app
     except Exception as e:
-        logger.error("Failed to initialize A2A endpoint: %s", e, exc_info=True)
-        return None
+        env = os.getenv("ENVIRONMENT", "development").lower()
+        _A2A_STATUS = "degraded"
+        _A2A_ERROR_MESSAGE = str(e)
+        if env == "production":
+            logger.critical("CRITICAL: Failed to initialize A2A endpoint in production environment: %s. Crashing startup (fail-fast).", e, exc_info=True)
+            raise RuntimeError(f"A2A Protocol endpoint initialization failed in production: {e}") from e
+        else:
+            logger.warning("WARNING: Failed to initialize A2A endpoint in development mode: %s. Marking A2A status as degraded (503 on /readyz).", e, exc_info=True)
+            return None
 
 
 # Initialize A2A endpoint if enabled via feature flag

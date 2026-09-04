@@ -290,13 +290,33 @@ pie title Phân bổ Bộ Kiểm thử Đơn vị & Tích hợp (361 Test Cases)
 ```bash
 # Suite 1: Môi trường Development với Local SSO
 ENVIRONMENT=development ALLOW_LOCAL_DEV_SSO=true .venv/bin/pytest tests/ -q
-# Kết quả: 361 passed in ~85s
 
 # Suite 2: Môi trường Production không cho phép Local SSO (Fail-Closed)
 ENVIRONMENT=production ALLOW_LOCAL_DEV_SSO=false .venv/bin/pytest tests/ -q
-# Kết quả: 361 passed in ~89s
 
 # Suite 3: Cô lập Domain Pack Template
 DOMAIN_PACK=_template ENVIRONMENT=development .venv/bin/pytest tests/ -q
-# Kết quả: 361 passed in ~86s
 ```
+
+---
+
+## 12. KIẾN TRÚC GIAO THỨC AGENT-TO-AGENT (A2A) & MULTI-AGENT MESH
+
+### 12.1. Chuẩn Hóa Điểm Cuối A2A & Khám Phá Năng Lực (AgentCard)
+- Endpoint `/a2a`: Tự động sinh `AgentCard` chuẩn hóa phản ánh cây Agent ADK và metadata của Domain Pack đang hoạt động.
+- Giao thức A2A được bảo vệ bằng lớp middleware SSO/OIDC hiện hữu (401 Unauthorized khi thiếu Bearer token).
+- **Cơ chế Fail-Loud theo môi trường:**
+  - `ENVIRONMENT=production`: Nếu A2A endpoint khởi tạo thất bại -> lập tức raise `RuntimeError`, crash container (fail-fast).
+  - `ENVIRONMENT=development`: Log cảnh báo, đánh dấu `a2a_status="degraded"`, endpoint `/readyz` trả về `503 Service Unavailable` kèm nguyên nhân để Kubernetes/monitoring nhận diện mà vẫn giữ pod chạy để debug các endpoint khác.
+
+### 12.2. Quy Chuẩn Nhãn Định Danh Hạ Tầng (Labels & Annotations)
+- **Google Cloud Run:** Tuân thủ quy định nhãn của Google Cloud ([Cloud Run Labels Doc](https://cloud.google.com/run/docs/configuring/labels)): lowercase, chỉ dùng ký tự chữ số và dấu gạch ngang (`-`), tối đa 63 ký tự.
+  - Nhãn: `functional-type = "agent"`
+- **Google Kubernetes Engine (GKE):** Sử dụng chuẩn nhãn và chú thích Kubernetes ([GKE Labels & Annotations Doc](https://cloud.google.com/kubernetes-engine/docs/concepts/labels-annotations)):
+  - Label / Annotation: `apps.google.com/agent-type: adk-agent`
+
+### 12.3. Tích Hợp Gemini Enterprise Agent Registry & Agent Gateway
+- **Trạng thái Terraform Provider (Kiểm tra ngày 04/09/2026 trên Terraform Registry):**
+  - HashiCorp Google provider (`google` / `google-beta`) quản lý việc kích hoạt các API nền tảng (`agentregistry.googleapis.com`, `agentgateway.googleapis.com`).
+  - Việc đăng ký Agent vào Registry được thực hiện tự động qua `gcloud alpha genai agents register` hoặc giao diện Gemini Enterprise Admin Console (chi tiết trong `Runbook_Onboarding_Khach_Hang.md` Bước 8).
+

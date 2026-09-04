@@ -620,6 +620,10 @@ resource "google_cloud_run_v2_service" "default" {
   location = var.region
   ingress  = var.enable_load_balancer ? "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER" : "INGRESS_TRAFFIC_ALL"
 
+  # Cloud Run label format rules: lowercase alphanumeric + hyphen, max 63 chars (cannot contain forward slashes or dots).
+  # Doc: https://cloud.google.com/run/docs/configuring/labels
+  # Note: For GKE / Kubernetes deployments, use metadata annotations/labels: `apps.google.com/agent-type: adk-agent`
+  # Doc: https://cloud.google.com/kubernetes-engine/docs/concepts/labels-annotations
   labels = merge(
     {
       "environment" = var.environment
@@ -936,6 +940,14 @@ check "production_model_sla" {
 }
 
 # 11. Google Cloud Agent Registry & Agent Gateway APIs (Optional Multi-Agent Enterprise Mesh)
+# [READY-DEFERRED] Terraform Provider Verification (Checked 04/09/2026 on registry.terraform.io/providers/hashicorp/google):
+# As of 04/09/2026, native Terraform resources for registering agents (e.g. `google_agent_registry_agent` or `google_gemini_agent`)
+# are not yet available in the HashiCorp Google provider.
+# Therefore, Terraform provisions and enables the underlying GCP APIs (agentregistry.googleapis.com, agentgateway.googleapis.com).
+# Registration of individual agents into the registry is executed post-deployment via:
+# - Step 8a: Gemini Enterprise Admin Console (UI)
+# - Step 8b: `gcloud alpha genai agents register` (CLI automation)
+# Detailed operational instructions are documented in Runbook_Onboarding_Khach_Hang.md (Step 8).
 resource "google_project_service" "agent_registry_apis" {
   for_each = var.enable_agent_registry ? toset([
     "agentregistry.googleapis.com",
