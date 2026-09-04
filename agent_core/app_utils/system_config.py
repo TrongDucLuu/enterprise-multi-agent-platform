@@ -359,6 +359,70 @@ def load_system_config(config_path: Optional[str] = None, force_reload: bool = F
         "monthly_token_budget": int(monthly_token_budget),
     }
 
+    # Validate clearance_levels
+    raw_clearance = data.get("clearance_levels")
+    if raw_clearance is None:
+        try:
+            from agent_core.app_utils.env import is_production_mode
+            in_prod = is_production_mode()
+        except ImportError:
+            in_prod = os.getenv("ENVIRONMENT", "").lower() == "production" or bool(os.getenv("K_SERVICE"))
+        
+        if in_prod:
+            raise SystemConfigurationError(
+                f"Cấu hình '{target_path}' thiếu trường 'clearance_levels'. "
+                f"Trong môi trường production, clearance_levels là bắt buộc trong domain pack systems.yaml. (Fail-Closed)"
+            )
+        # Development default fallback
+        raw_clearance = {
+            3: ["it_admin", "sys_admin", "compliance_officer", "admin", "super_admin"],
+            2: ["support_lead", "security_analyst", "legal_counsel", "hr_manager", "finance_manager"],
+            1: ["*"],
+            0: [],
+        }
+
+    if not isinstance(raw_clearance, dict):
+        raise SystemConfigurationError(
+            f"Trường 'clearance_levels' trong '{target_path}' phải là dictionary. (Fail-Closed)"
+        )
+
+    validated_clearance: dict[int, list[str]] = {}
+    for k, v in raw_clearance.items():
+        try:
+            lvl = int(k)
+        except (ValueError, TypeError):
+            raise SystemConfigurationError(
+                f"Mức clearance '{k}' trong 'clearance_levels' phải là số nguyên (0..3). (Fail-Closed)"
+            )
+        if lvl < 0 or lvl > 3:
+            raise SystemConfigurationError(
+                f"Mức clearance {lvl} trong 'clearance_levels' không hợp lệ (phải trong khoảng 0..3). (Fail-Closed)"
+            )
+        if not isinstance(v, list):
+            raise SystemConfigurationError(
+                f"Danh sách role cho mức clearance {lvl} phải là list. (Fail-Closed)"
+            )
+        validated_clearance[lvl] = [str(r).strip().lower() for r in v if str(r).strip()]
+
+    # Ensure all levels 0..3 exist in dict
+    for lvl in range(4):
+        if lvl not in validated_clearance:
+            validated_clearance[lvl] = []
+
+    # Validate obligation_default_roles
+    raw_obligation_roles = data.get("obligation_default_roles")
+    if raw_obligation_roles is not None and not isinstance(raw_obligation_roles, list):
+        raise SystemConfigurationError(
+            f"Trường 'obligation_default_roles' trong '{target_path}' phải là list các role. (Fail-Closed)"
+        )
+    
+    if raw_obligation_roles is None:
+        validated_obligation_roles = validated_clearance.get(3, []) + validated_clearance.get(2, [])
+        if not validated_obligation_roles:
+            validated_obligation_roles = ["compliance_officer", "it_admin", "sys_admin", "legal_counsel"]
+    else:
+        validated_obligation_roles = [str(r).strip().lower() for r in raw_obligation_roles if str(r).strip()]
+
     user_role_mappings = data.get("user_role_mappings", {})
     if not isinstance(user_role_mappings, dict):
         user_role_mappings = {}
@@ -378,6 +442,8 @@ def load_system_config(config_path: Optional[str] = None, force_reload: bool = F
         "document_processing": validated_doc_proc,
         "retrieval": validated_retrieval,
         "rate_limiting": validated_rate_limiting,
+        "clearance_levels": validated_clearance,
+        "obligation_default_roles": validated_obligation_roles,
         "user_role_mappings": user_role_mappings,
         "group_role_mappings": group_role_mappings,
         "domain_keywords": domain_keywords,
@@ -433,6 +499,54 @@ def get_shared_admin_roles(config_path: Optional[str] = None) -> list[str]:
     """Returns the list of shared admin / IT support roles."""
     cfg = load_system_config(config_path=config_path)
     return cfg.get("shared_admin_roles", [])
+
+
+def get_clearance_levels(config_path: Optional[str] = None) -> dict[int, list[str]]:
+    """Returns normalized clearance levels mapping {0: [...], 1: [...], 2: [...], 3: [...]}."""
+    cfg = load_system_config(config_path=config_path)
+    return cfg.get("clearance_levels", {0: [], 1: ["*"], 2: [], 3: []})
+
+
+def get_obligation_default_roles(config_path: Optional[str] = None) -> list[str]:
+    """Returns default roles authorized to view/manage contract obligations."""
+    cfg = load_system_config(config_path=config_path)
+    return cfg.get("obligation_default_roles", ["compliance_officer", "it_admin", "sys_admin", "legal_counsel"])
+
+
+def get_admin_roles(config_path: Optional[str] = None) -> list[str]:
+    """Returns combined list of administrator roles (clearance level 3 and shared_admin_roles)."""
+    cfg = load_system_config(config_path=config_path)
+    clearance_lvl3 = cfg.get("clearance_levels", {}).get(3, [])
+    shared_admins = cfg.get("shared_admin_roles", [])
+    combined = list(dict.fromkeys([*clearance_lvl3, *shared_admins]))
+    return combined
+
+
+def compute_user_clearance(user_roles: list[str], config_path: Optional[str] = None) -> int:
+    """
+    Computes effective clearance level (0..3) for a given list of user roles
+    based on the active domain pack's clearance_levels lattice.
+    """
+    if not user_roles:
+        return 0
+
+    clean_roles = {str(r).strip().lower() for r in user_roles if str(r).strip()}
+    if not clean_roles:
+        return 0
+
+    clearance_map = get_clearance_levels(config_path=config_path)
+
+    # Check from highest clearance (3) down to lowest (1)
+    for lvl in sorted(clearance_map.keys(), reverse=True):
+        if lvl <= 0:
+            continue
+        level_roles = set(clearance_map.get(lvl, []))
+        if bool(clean_roles & level_roles):
+            return lvl
+        if "*" in level_roles:
+            return lvl
+
+    return 0
 
 
 def get_rate_limiting_config(config_path: Optional[str] = None) -> dict[str, int]:

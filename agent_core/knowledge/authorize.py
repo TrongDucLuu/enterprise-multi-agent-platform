@@ -127,11 +127,21 @@ def authorize_document(
     raw_doc_roles = get_field(doc, "allowed_roles", [])
     doc_roles = [str(r).lower().strip() for r in (raw_doc_roles or []) if r]
     if not doc_roles and (resource_type == "OBLIGATION" or get_field(doc, "obligation_id", None) is not None):
-        doc_roles = ["compliance_officer", "legal_counsel", "it_admin", "sys_admin", "compliance_admin", "security_admin"]
+        try:
+            from agent_core.app_utils.system_config import get_obligation_default_roles
+            doc_roles = get_obligation_default_roles()
+        except Exception:
+            doc_roles = ["compliance_officer", "legal_counsel", "it_admin", "sys_admin"]
 
     user_roles = [str(r).lower().strip() for r in security_context.roles if r]
     
-    is_admin = any(r in ("admin", "it_admin", "security_admin", "super_admin") for r in user_roles)
+    try:
+        from agent_core.app_utils.system_config import get_admin_roles
+        admin_roles = get_admin_roles()
+    except Exception:
+        admin_roles = ["admin", "super_admin", "it_admin", "sys_admin"]
+
+    is_admin = any(r in admin_roles or r in ("admin", "super_admin") for r in user_roles)
     
     if doc_roles:
         if not is_admin and not any(r in user_roles for r in doc_roles):

@@ -332,3 +332,87 @@ def test_retrieval_config_invalid_hybrid_fails_closed(monkeypatch):
         reload_system_config()
 
 
+def test_clearance_levels_and_roles_loading(pinned_it_helpdesk_pack):
+    reload_system_config()
+    from agent_core.app_utils.system_config import (
+        get_clearance_levels,
+        get_obligation_default_roles,
+        get_admin_roles,
+    )
+    clearance_map = get_clearance_levels()
+    assert 3 in clearance_map
+    assert "it_admin" in clearance_map[3]
+    assert 2 in clearance_map
+    assert "support_lead" in clearance_map[2]
+    assert clearance_map[1] == ["*"]
+
+    obl_roles = get_obligation_default_roles()
+    assert "compliance_officer" in obl_roles
+    assert "it_admin" in obl_roles
+
+    admin_roles = get_admin_roles()
+    assert "it_admin" in admin_roles
+    assert "sys_admin" in admin_roles
+
+
+def test_compute_user_clearance_lattice(pinned_it_helpdesk_pack):
+    reload_system_config()
+    from agent_core.app_utils.system_config import compute_user_clearance
+    from agent_core.knowledge.base import SecurityContext
+
+    # Level 3 role
+    assert compute_user_clearance(["it_admin"]) == 3
+    assert compute_user_clearance(["sys_admin", "employee"]) == 3
+
+    # Level 2 role
+    assert compute_user_clearance(["support_lead"]) == 2
+    assert compute_user_clearance(["security_analyst", "employee"]) == 2
+
+    # Level 1 role (wildcard)
+    assert compute_user_clearance(["employee"]) == 1
+    assert compute_user_clearance(["erp_user"]) == 1
+
+    # Level 0 (no roles or empty)
+    assert compute_user_clearance([]) == 0
+    assert compute_user_clearance([""]) == 0
+
+    # SecurityContext integration
+    ctx_admin = SecurityContext.from_user("admin@co.com", ["it_admin"])
+    assert ctx_admin.clearance_level == 3
+    assert ctx_admin.authenticated is True
+
+    ctx_lead = SecurityContext.from_user("lead@co.com", ["support_lead"])
+    assert ctx_lead.clearance_level == 2
+
+    ctx_emp = SecurityContext.from_user("user@co.com", ["employee"])
+    assert ctx_emp.clearance_level == 1
+
+    ctx_anon = SecurityContext.from_user("anonymous", [])
+    assert ctx_anon.clearance_level == 0
+
+
+def test_clearance_levels_fail_closed_in_production(monkeypatch):
+    custom_yaml = {
+        "shared_admin_roles": ["admin"],
+        "systems": {
+            "ERP": {"roles": ["erp_user"]}
+        }
+    }
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.dump(custom_yaml, f)
+        temp_path = f.name
+
+    try:
+        monkeypatch.setenv("SYSTEMS_CONFIG_PATH", temp_path)
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        with pytest.raises(SystemConfigurationError, match="clearance_levels"):
+            reload_system_config(temp_path)
+    finally:
+        monkeypatch.delenv("SYSTEMS_CONFIG_PATH", raising=False)
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        reload_system_config()
+
+
+

@@ -191,4 +191,25 @@ rate_limiting:
   l3_requests_per_day: 100                    # L3 deep reasoning requests allowed per 24 hours
   monthly_token_budget: 0                     # Cluster-wide monthly token budget (0 = unlimited)
 
+# Role Clearance Lattice Configuration
+clearance_levels:
+  3:
+    - "it_admin"
+    - "sys_admin"
+    - "compliance_officer"
+  2:
+    - "support_lead"
+    - "security_analyst"
+    - "legal_counsel"
+  1:
+    - "*"
+  0: []
+
+obligation_default_roles:
+  - "compliance_officer"
+  - "it_admin"
+  - "sys_admin"
+  - "legal_counsel"
+
+
 

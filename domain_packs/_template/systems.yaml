@@ -21,4 +21,17 @@ rate_limiting:
   l3_requests_per_day: 100
   monthly_token_budget: 0
 
+clearance_levels:
+  3:
+    - "core_admin"
+  2:
+    - "core_lead"
+  1:
+    - "*"
+  0: []
+
+obligation_default_roles:
+  - "core_admin"
+
+
 

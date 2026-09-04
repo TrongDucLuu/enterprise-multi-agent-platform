@@ -22,14 +22,16 @@ class SecurityContext:
         if clearance_level is not None:
             eff_clearance = int(clearance_level)
         else:
-            if any(r in ("admin", "it_admin", "security_admin", "super_admin") for r in clean_roles):
-                eff_clearance = 3
-            elif any(r in ("hr_admin", "finance_admin", "compliance_officer", "legal_counsel", "hr_manager", "finance_manager") for r in clean_roles):
-                eff_clearance = 2
-            elif clean_roles:
-                eff_clearance = 1
-            else:
-                eff_clearance = 0
+            try:
+                from agent_core.app_utils.system_config import compute_user_clearance
+                eff_clearance = compute_user_clearance(clean_roles)
+            except Exception:
+                if any(r in ("admin", "super_admin") for r in clean_roles):
+                    eff_clearance = 3
+                elif clean_roles:
+                    eff_clearance = 1
+                else:
+                    eff_clearance = 0
                 
         is_auth = bool(user_id and user_id != "anonymous" and (clean_roles or eff_clearance > 0))
         return cls(
