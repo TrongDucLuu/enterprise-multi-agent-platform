@@ -7,6 +7,9 @@ import time
 import pytest
 from unittest.mock import patch, MagicMock
 
+# Pins it-helpdesk pack for IT helpdesk knowledge articles
+pytestmark = pytest.mark.usefixtures("pinned_it_helpdesk_pack")
+
 from agent_core.tools.enterprise_rag_mcp.knowledge.query_processor import (
     preprocess_query,
     rewrite_query_with_llm,
