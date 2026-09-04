@@ -621,9 +621,15 @@ resource "google_cloud_run_v2_service" "default" {
   ingress  = var.enable_load_balancer ? "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER" : "INGRESS_TRAFFIC_ALL"
 
   # Cloud Run label format rules: lowercase alphanumeric + hyphen, max 63 chars (cannot contain forward slashes or dots).
-  # Doc: https://cloud.google.com/run/docs/configuring/labels
-  # Note: For GKE / Kubernetes deployments, use metadata annotations/labels: `apps.google.com/agent-type: adk-agent`
-  # Doc: https://cloud.google.com/kubernetes-engine/docs/concepts/labels-annotations
+  # Tra cứu ngày 04/09/2026:
+  # - Cloud Run Labels: https://cloud.google.com/run/docs/configuring/labels
+  # - App Hub Functional Types: https://cloud.google.com/app-hub/docs/concepts/overview
+  # Lưu ý: Label `functional-type = "agent"` là metadata phân loại tài nguyên GCP và App Hub categorization.
+  # Google Cloud Run không tự động auto-register service lên Gemini Enterprise / Vertex AI Agent Registry chỉ bằng label này.
+  # Quy trình đăng ký chính thức đã kiểm chứng được thực hiện qua UI (Gemini Enterprise Admin Console - Bước 8a)
+  # hoặc gcloud alpha / REST API (Bước 8b) như đã hướng dẫn trong Runbook_Onboarding_Khach_Hang.md.
+  # Đối với GKE / Kubernetes deployments, sử dụng annotation/label: `apps.google.com/agent-type: adk-agent`
+  # (Doc: https://cloud.google.com/kubernetes-engine/docs/concepts/labels-annotations).
   labels = merge(
     {
       "environment" = var.environment

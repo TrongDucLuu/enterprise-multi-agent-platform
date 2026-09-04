@@ -41,7 +41,7 @@ Hệ thống **Enterprise Multi-Agent AI Platform (`agent_core`)** được thi�
 
 ---
 
-## 3. Đo Đạc Chi Phí Thực Tế & Khả Năng Mở Rộng Kho Tri Thức (Retrieval Cost Benchmark)
+## 3. Chi Phí Truy Xuất & Khả Năng Mở Rộng Kho Tri Thức (Retrieval Cost & Scalability Benchmark)
 
 Hệ thống cung cấp công cụ đo lường và giả lập benchmark hoàn toàn tự động, có thể tái lập (reproducible) tại `scripts/generate_synthetic_kb.py` và `scripts/benchmark_retrieval_cost.py`.
 
@@ -51,8 +51,11 @@ Hệ thống cung cấp công cụ đo lường và giả lập benchmark hoàn 
 # 1. Sinh tập dữ liệu giả lập 5.000 chunks chuẩn doanh nghiệp (768-dim embeddings, RBAC, tombstones, expirations):
 python scripts/generate_synthetic_kb.py --num-chunks 5000 --output data/synthetic_kb_5000.jsonl
 
-# 2. Chạy kịch bản benchmark đo đạc chi phí và độ trễ truy xuất:
-python scripts/benchmark_retrieval_cost.py --num-chunks 5000 --num-queries 100 --price-per-tib 6.25
+# 2a. Ước tính chi phí mô phỏng (Estimate mode, không cần GCP credentials):
+python scripts/benchmark_retrieval_cost.py --mode=estimate --num-chunks 5000 --num-queries 100 --price-per-tib 6.25
+
+# 2b. Đo đạc chi phí và độ trễ thực tế trên BigQuery (Live mode, yêu cầu GCP credentials & dự án BigQuery thật):
+python scripts/benchmark_retrieval_cost.py --mode=live --project-id <PROJECT_ID> --dataset-id <DATASET_ID> --num-queries 100
 ```
 
 ### 3.2 Công Thức Tính Toán Chi Phí BigQuery On-Demand
@@ -79,7 +82,7 @@ $$\text{Cost per 1,000 queries} = \frac{\text{Bytes Billed}}{1024^4} \times \$6.
 - **P95 Bytes Billed / Query:** `15,937,500` bytes ($15.20\text{ MB}$)
 - **Chi phí cho 1.000 lượt truy vấn:** **`$0.0596` USD / 1.000 queries** (~6 xu cho 1.000 câu hỏi nghiệp vụ)
 - **Chi phí cho 100.000 lượt truy vấn:** **`$5.96` USD / 100.000 queries**
-- **Đặc tính độ trễ:** Đo đạc qua BigQuery Vector Store live cho thấy độ trễ phụ thuộc chủ yếu vào round-trip mạng từ Cloud Run đến BigQuery API ($\approx 50 - 200\text{ ms}$).
+- **Độ trễ truy xuất live:** Chưa được đo trực tiếp trong môi trường live. Để đo độ trễ thực tế (p50/p95 network round-trip và truy vấn BQ), thực thi lệnh live tại mục 3.1: `python scripts/benchmark_retrieval_cost.py --mode=live --project-id <PROJECT_ID> --dataset-id <DATASET_ID>`.
 
 ### 3.4 Bảng So Sánh 4 Kiến Trúc Kho Tri Thức Doanh Nghiệp (4-Way Comparison)
 

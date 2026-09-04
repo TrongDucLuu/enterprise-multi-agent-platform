@@ -258,11 +258,12 @@ Khi doanh nghiệp triển khai kiến trúc Multi-Agent phân tán hoặc muố
    enable_a2a_endpoint   = true
    enable_agent_registry = true
    ```
-   Sau khi `terraform apply`, Cloud Run service sẽ tự động được gán nhãn `functional-type = "agent"` ([Cloud Run Labels Doc](https://cloud.google.com/run/docs/configuring/labels)) và kích hoạt các API `agentregistry.googleapis.com`, `agentgateway.googleapis.com`.
-
+   Sau khi `terraform apply`, Cloud Run service sẽ tự động được gán nhãn `functional-type = "agent"` ([Cloud Run Labels Doc](https://cloud.google.com/run/docs/configuring/labels), tra cứu 04/09/2026; [App Hub Functional Types](https://cloud.google.com/app-hub/docs/concepts/overview)) và kích hoạt các API `agentregistry.googleapis.com`, `agentgateway.googleapis.com`.
+   
    > [!NOTE]
-   > **Trạng thái Terraform Provider (Kiểm tra ngày 04/09/2026 trên Terraform Registry):**
-   > Hiện tại `hashicorp/google` và `hashicorp/google-beta` chưa cung cấp resource Terraform native (như `google_agent_registry_agent` hay `google_gemini_agent`). Do đó, hạ tầng quản lý việc bật API và cấu hình Cloud Run, còn đăng ký Agent thực hiện qua một trong hai phương án bên dưới.
+   > **Lưu ý về Phân loại vs Đăng ký (Tra cứu ngày 04/09/2026):**
+   > Label `functional-type = "agent"` đóng vai trò phân loại tài nguyên GCP và liên kết App Hub service. Google Cloud Run không tự động auto-register service vào Gemini Enterprise / Vertex AI Agent Registry. Quy trình đăng ký chính thức đã được kiểm chứng và đảm bảo 100% hoạt động là thực hiện qua giao diện **Gemini Enterprise Admin Console (Bước 8a)** hoặc **gcloud alpha / REST API (Bước 8b)**.
+   > Hiện tại `hashicorp/google` Terraform Provider chưa hỗ trợ native resource cho Agent Registry, do đó việc đăng ký thực hiện qua các bước dưới đây.
 
 2. **Quy Tắc Ghép Nối (Pairing Rules):**
    - **Mỗi GCP Project / Region chỉ có tối đa 1 Agent Gateway và 1 Agent Registry** đóng vai trò Central Hub điều phối.

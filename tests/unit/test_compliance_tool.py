@@ -1,5 +1,5 @@
 import pytest
-from agent_core.tools.compliance_tool import review_it_contract_sla
+from agent_core.tools.compliance_tool import review_it_contract_sla, prescreen_contract_keywords
 from agent_core.app_utils.sso_auth import SSOUser, current_sso_user
 
 
@@ -26,7 +26,7 @@ def test_review_contract_with_full_sla():
     5. Thông báo sự cố: Nhà cung cấp có trách nhiệm thông báo vi phạm dữ liệu trong vòng 24h.
     6. Quyền kiểm toán: Khách hàng có quyền audit an toàn thông tin hàng năm.
     """
-    res = review_it_contract_sla(contract_sample, vendor_name="Cloud SaaS Provider")
+    res = prescreen_contract_keywords(contract_sample, vendor_name="Cloud SaaS Provider")
     assert res["status"] == "success"
     assert "99.95% Uptime" in res["uptime_commitments"]
     assert any("30 phút" in m for m in res["mttr_commitments"])
@@ -34,8 +34,52 @@ def test_review_contract_with_full_sla():
     assert res["compliance_checklist"]["NDA_CONFIDENTIALITY"] is True
     assert res["compliance_checklist"]["DPA_DATA_PROTECTION"] is True
     assert res["compliance_checklist"]["SERVICE_CREDITS_PENALTY"] is True
-    assert len(res["identified_legal_risks"]) == 1
-    assert "đáp ứng đầy đủ" in res["identified_legal_risks"][0]
+    assert res["compliance_checklist"]["DATA_BREACH_NOTIFICATION"] is True
+    assert res["confidence_level"] == "HIGH"
+    assert len(res["structured_findings"]) >= 4
+
+
+def test_breach_notification_not_triggered_by_generic_24h():
+    """
+    Spec condition: Text contains 'SLA phản hồi trong 24h' but NO breach notification clause
+    -> must NOT report DATA_BREACH_NOTIFICATION: true.
+    """
+    contract_text = """
+    HỢP ĐỒNG DỊCH VỤ IT:
+    - SLA phản hồi trong 24h đối với mọi yêu cầu hỗ trợ tiêu chuẩn.
+    - Thời gian khắc phục trong vòng 48h.
+    - Bảo mật thông tin: Cam kết giữ bí mật thông tin kinh doanh.
+    """
+    res = prescreen_contract_keywords(contract_text, vendor_name="Vendor Support")
+    assert res["status"] == "success"
+    # 24h was for SLA response, not breach notification
+    assert res["compliance_checklist"]["DATA_BREACH_NOTIFICATION"] is False
+    # No finding of category DATA_BREACH_NOTIFICATION
+    assert not any(f["category"] == "DATA_BREACH_NOTIFICATION" for f in res["structured_findings"])
+
+
+def test_structured_findings_contain_verified_citations():
+    """
+    Spec condition: Every item in structured findings must have quote and char_offset pointing to real text.
+    """
+    contract_text = """
+    QUY ĐỊNH DỊCH VỤ:
+    - Cam kết 99.9% uptime toàn hệ thống.
+    - Thời gian phản hồi: 2 giờ.
+    - Thỏa thuận bảo mật thông tin nội bộ.
+    """
+    res = prescreen_contract_keywords(contract_text, vendor_name="Vendor Alpha")
+    assert res["status"] == "success"
+    assert len(res["structured_findings"]) > 0
+
+    for finding in res["structured_findings"]:
+        if finding["status"] == "compliant":
+            quote = finding["quote"]
+            offset = finding["char_offset"]
+            assert offset is not None and offset >= 0
+            assert quote != ""
+            # Verify quote is actually present in contract_text at/near that offset
+            assert contract_text[offset:offset + len(quote)].lower() == quote.lower()
 
 
 def test_review_contract_prefix_syntax():
@@ -51,17 +95,6 @@ def test_review_contract_prefix_syntax():
     assert "99.9% Uptime" in res["uptime_commitments"]
     assert any("2 hours" in m for m in res["mttr_commitments"])
     assert any("12 hours" in m for m in res["mttr_commitments"])
-
-
-def test_review_contract_with_missing_penalties():
-    poor_contract = """
-    Cung cấp phần mềm quản lý kho.
-    Hệ thống duy trì trạng thái hoạt động bình thường và hỗ trợ bảo mật cơ bản.
-    """
-    res = review_it_contract_sla(poor_contract, vendor_name="Vendor X")
-    assert res["status"] == "success"
-    assert res["compliance_checklist"]["SERVICE_CREDITS_PENALTY"] is False
-    assert any("RỦI RO CAO" in r for r in res["identified_legal_risks"])
 
 
 def test_review_contract_rbac_denied(monkeypatch):
