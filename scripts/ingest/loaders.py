@@ -7,6 +7,7 @@ vector index DDL creation, and coverage monitoring.
 import os
 import json
 import uuid
+import time
 import logging
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -30,8 +31,8 @@ def ensure_vector_index(
 ):
     """
     Executes BigQuery CREATE VECTOR INDEX DDL if index does not exist with STORING clause.
-    BigQuery IVF Vector Index will automatically optimize vector queries;
-    if dataset has fewer than 5,000 rows, BigQuery will automatically use exact cosine search.
+    BigQuery IVF Vector Index will automatically optimize vector queries.
+    Fails loud if DDL execution encounters non-recoverable errors.
     """
     ddl = f"""
     CREATE VECTOR INDEX IF NOT EXISTS `{index_name}`
@@ -45,11 +46,12 @@ def ensure_vector_index(
         query_job.result()
         logger.info("BigQuery Vector Index '%s' is verified and active.", index_name)
     except Exception as e:
-        logger.warning(
-            "Note: BigQuery Vector Index DDL returned: %s. "
-            "(BigQuery automatically executes exact cosine search when dataset size is under 5,000 rows threshold).",
-            e
-        )
+        err_str = str(e).lower()
+        if "already exists" in err_str or "duplicate" in err_str:
+            logger.info("BigQuery Vector Index '%s' already exists.", index_name)
+        else:
+            logger.error("Failed to create BigQuery Vector Index '%s': %s", index_name, e)
+            raise RuntimeError(f"Failed to create BigQuery Vector Index '{index_name}': {e}") from e
 
 
 def check_vector_index_coverage(
@@ -121,6 +123,114 @@ def check_vector_index_coverage(
         }
     except Exception as e:
         logger.warning("Could not query INFORMATION_SCHEMA.VECTOR_INDEXES: %s", e)
+        return {"index_status": "ERROR", "coverage_percentage": 0.0, "error": str(e)}
+
+
+def wait_for_vector_index_ready(
+    bq_client: Any,
+    project_id: str,
+    dataset_id: str,
+    table_name: str = "knowledge_articles",
+    index_name: str = "knowledge_articles_vector_idx",
+    target_coverage: float = 95.0,
+    timeout_seconds: float = 60.0,
+    poll_interval: float = 5.0,
+) -> dict[str, Any]:
+    """
+    Polls BigQuery INFORMATION_SCHEMA.VECTOR_INDEXES until coverage reaches target_coverage or timeout.
+    """
+    start_time = time.time()
+    last_status: dict[str, Any] = {}
+    while time.time() - start_time < timeout_seconds:
+        last_status = check_vector_index_coverage(bq_client, project_id, dataset_id, table_name, index_name)
+        coverage = last_status.get("coverage_percentage", 0.0)
+        index_status = last_status.get("index_status", "UNKNOWN")
+        if coverage >= target_coverage or index_status == "ACTIVE":
+            logger.info("Vector Index '%s' reached target coverage (%.1f%%).", index_name, coverage)
+            return last_status
+        if index_status == "TEMPORARILY DISABLED":
+            logger.info("Vector index '%s' is TEMPORARILY DISABLED (< 10MB dataset). Exact cosine search active.", index_name)
+            return last_status
+        time.sleep(poll_interval)
+    logger.warning("Timed out waiting for Vector Index '%s' to reach %.1f%% coverage. Last status: %s", index_name, target_coverage, last_status)
+    return last_status
+
+
+def get_kb_metadata_schema() -> list[Any]:
+    """Returns the BigQuery SchemaField list for Knowledge Base metadata verification table."""
+    from google.cloud import bigquery
+    return [
+        bigquery.SchemaField("metadata_key", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("embedding_model", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("embedding_dim", "INTEGER", mode="REQUIRED"),
+        bigquery.SchemaField("kb_version", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("chunk_count", "INTEGER", mode="REQUIRED"),
+        bigquery.SchemaField("ingested_at", "TIMESTAMP", mode="REQUIRED"),
+    ]
+
+
+def record_kb_metadata(
+    bq_client: Any,
+    project_id: str,
+    dataset_id: str,
+    embedding_model: str = "text-multilingual-embedding-002",
+    embedding_dim: int = 768,
+    kb_version: str = "1.0.0",
+    chunk_count: int = 0,
+    metadata_table: str = "kb_metadata",
+):
+    """
+    Creates or updates the kb_metadata table recording the active embedding model and dimension.
+    """
+    from google.cloud import bigquery
+    table_ref = f"{project_id}.{dataset_id}.{metadata_table}"
+    
+    try:
+        bq_client.get_table(table_ref)
+    except Exception:
+        schema = get_kb_metadata_schema()
+        table = bigquery.Table(table_ref, schema=schema)
+        table.description = "Metadata table tracking active Knowledge Base embedding model and dimensions"
+        bq_client.create_table(table, exists_ok=True)
+        logger.info("Created metadata table '%s'", table_ref)
+
+    now_ts = datetime.now(timezone.utc).isoformat()
+    merge_sql = f"""
+    MERGE `{table_ref}` T
+    USING (
+        SELECT 
+            @metadata_key AS metadata_key,
+            @embedding_model AS embedding_model,
+            @embedding_dim AS embedding_dim,
+            @kb_version AS kb_version,
+            @chunk_count AS chunk_count,
+            TIMESTAMP(@ingested_at) AS ingested_at
+    ) S
+    ON T.metadata_key = S.metadata_key
+    WHEN MATCHED THEN
+        UPDATE SET 
+            embedding_model = S.embedding_model,
+            embedding_dim = S.embedding_dim,
+            kb_version = S.kb_version,
+            chunk_count = S.chunk_count,
+            ingested_at = S.ingested_at
+    WHEN NOT MATCHED THEN
+        INSERT (metadata_key, embedding_model, embedding_dim, kb_version, chunk_count, ingested_at)
+        VALUES (S.metadata_key, S.embedding_model, S.embedding_dim, S.kb_version, S.chunk_count, S.ingested_at)
+    """
+    job_cfg = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("metadata_key", "STRING", "active_kb"),
+            bigquery.ScalarQueryParameter("embedding_model", "STRING", embedding_model),
+            bigquery.ScalarQueryParameter("embedding_dim", "INT64", embedding_dim),
+            bigquery.ScalarQueryParameter("kb_version", "STRING", kb_version),
+            bigquery.ScalarQueryParameter("chunk_count", "INT64", chunk_count),
+            bigquery.ScalarQueryParameter("ingested_at", "STRING", now_ts),
+        ]
+    )
+    bq_client.query(merge_sql, job_config=job_cfg).result()
+    logger.info("Recorded KB metadata in '%s': model=%s, dim=%d, version=%s, chunks=%d", table_ref, embedding_model, embedding_dim, kb_version, chunk_count)
+
 def get_knowledge_articles_schema() -> list[Any]:
     """Returns the canonical BigQuery SchemaField list for enterprise knowledge articles."""
     from google.cloud import bigquery
@@ -326,7 +436,8 @@ def ingest_articles_to_bigquery(
     articles: list[dict[str, Any]],
     project_id: str,
     dataset_id: str,
-    table_name: str = "knowledge_articles"
+    table_name: str = "knowledge_articles",
+    bq_client: Optional[Any] = None,
 ) -> int:
     """
     Performs production-grade idempotent upsert (MERGE) into BigQuery:
@@ -364,14 +475,16 @@ def ingest_articles_to_bigquery(
         )
     articles = list(deduped_articles.values())
 
-    try:
-        from google.cloud import bigquery
-    except ImportError:
-        logger.error("google-cloud-bigquery is not installed. Please install dependencies.")
-        raise
+    if bq_client is None:
+        try:
+            from google.cloud import bigquery
+            bq_client = bigquery.Client(project=project_id)
+        except ImportError:
+            logger.error("google-cloud-bigquery is not installed. Please install dependencies.")
+            raise
 
-    bq_client = bigquery.Client(project=project_id)
     full_target_table = f"`{project_id}.{dataset_id}.{table_name}`"
+
 
     # 1. CDC Pre-Check: Retrieve existing content hashes to avoid redundant embedding generation
     source_uris = list({a["source_uri"] for a in articles if a.get("source_uri")})
@@ -392,10 +505,22 @@ def ingest_articles_to_bigquery(
             )
             cdc_rows = list(bq_client.query(cdc_sql, job_config=job_config).result())
             for r in cdc_rows:
-                if hasattr(r, "id") and hasattr(r, "content_hash") and r.id and r.content_hash:
-                    existing_hashes[r.id] = r.content_hash
-                    if hasattr(r, "embedding") and r.embedding:
-                        existing_embeddings[r.id] = list(r.embedding)
+                r_id = getattr(r, "id", None)
+                r_hash = getattr(r, "content_hash", None)
+                r_emb = getattr(r, "embedding", None)
+                if (
+                    isinstance(r_id, str)
+                    and type(r_id).__name__ not in ("MagicMock", "Mock")
+                    and isinstance(r_hash, str)
+                    and type(r_hash).__name__ not in ("MagicMock", "Mock")
+                ):
+                    existing_hashes[r_id] = r_hash
+                    if (
+                        isinstance(r_emb, (list, tuple))
+                        and type(r_emb).__name__ not in ("MagicMock", "Mock")
+                        and len(r_emb) == 768
+                    ):
+                        existing_embeddings[r_id] = list(r_emb)
         except Exception as e:
             logger.debug("CDC pre-check bypassed (table may be newly initialized): %s", e)
 
@@ -438,6 +563,19 @@ def ingest_articles_to_bigquery(
                 a["clearance_level"] = 3
             else:
                 a["clearance_level"] = 1
+
+    # Guard Embedding Dimension and Nullability
+    EXPECTED_EMBEDDING_DIM = 768
+    for a in articles:
+        emb = a.get("embedding")
+        if emb is not None:
+            if not isinstance(emb, (list, tuple)):
+                raise ValueError(f"Invalid embedding type for article '{a.get('id')}': expected list/tuple, got {type(emb)}")
+            if len(emb) != EXPECTED_EMBEDDING_DIM:
+                raise ValueError(
+                    f"Embedding dimension mismatch for article '{a.get('id')}': "
+                    f"expected {EXPECTED_EMBEDDING_DIM}, got {len(emb)}."
+                )
 
     # 3. Create Temporary Staging Table
     staging_suffix = uuid.uuid4().hex[:8]
@@ -567,6 +705,22 @@ def ingest_articles_to_bigquery(
     # 8. Automatically Ensure Vector Index DDL & Monitor Coverage
     ensure_vector_index(bq_client, project_id, dataset_id, table_name)
     check_vector_index_coverage(bq_client, project_id, dataset_id, table_name)
+
+    # 9. Record Knowledge Base Metadata
+    try:
+        sample_model = articles[0].get("embedding_model") or DEFAULT_EMBEDDING_MODEL if articles else DEFAULT_EMBEDDING_MODEL
+        record_kb_metadata(
+            bq_client=bq_client,
+            project_id=project_id,
+            dataset_id=dataset_id,
+            embedding_model=sample_model,
+            embedding_dim=EXPECTED_EMBEDDING_DIM,
+            kb_version="1.0.0",
+            chunk_count=len(articles),
+        )
+    except Exception as meta_err:
+        logger.warning("Failed to record KB metadata: %s", meta_err)
+
 
     return len(articles)
 

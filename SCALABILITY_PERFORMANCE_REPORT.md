@@ -65,23 +65,29 @@ $$\text{Cost per 1,000 queries} = \frac{\text{Bytes Billed}}{1024^4} \times \$6.
 
 > *Lưu ý:* BigQuery áp dụng mức dung lượng tối thiểu 10 MB ($10 \times 1024^2$ bytes) cho mỗi câu truy vấn On-Demand. Với kho tri thức 5.000 chunks ($\approx 18.75\text{ MB}$ toàn bảng, quét phân vùng $\approx 4.68\text{ MB}$), dung lượng tính phí được làm tròn lên mức sàn **10 MB / query**.
 
-### 3.3 Kết Quả Đo Đạc Thực Tế Trên 5.000 Chunks & 100 Queries
+### 3.3 Ước Tính Mô Phỏng Chi Phí Trên Kịch Bản 5.000 Chunks & 100 Queries (Estimate Mode)
+
+> ⚠️ **LƯU Ý:** Mục này trình bày mô phỏng lý thuyết chi phí dựa trên đơn giá chính thức của Google Cloud BigQuery On-Demand (\$6.25/TiB, sàn 10 MB/query) và mô hình dữ liệu thực tế. **Không in số độ trễ mô phỏng**. Để đo độ trễ mạng và truy vấn thực tế, thực thi lệnh đo live tại mục 3.1:
+> ```bash
+> python scripts/benchmark_retrieval_cost.py --mode=live --project-id <PROJECT_ID> --dataset-id <DATASET_ID>
+> ```
 
 - **Tập dữ liệu tri thức thử nghiệm:** `5,000` chunks (768-dim float embeddings, đa phòng ban, đa cấp độ bảo mật).
-- **Số lượng truy vấn kiểm thử:** `100` queries ngẫu nhiên qua các danh mục & clearance levels (0, 1, 2, 3).
+- **Số lượng truy vấn kiểm thử:** `100` queries qua các danh mục & clearance levels (0, 1, 2, 3).
 - **Median Bytes Scanned / Query:** `4,687,500` bytes ($4.47\text{ MB}$)
-- **Median Bytes Billed / Query:** `10,485,760` bytes ($10.00\text{ MB}$ sàn BigQuery)
+- **Median Bytes Billed / Query:** `10,485,760` bytes ($10.00\text{ MB}$ sàn tối thiểu BigQuery)
 - **P95 Bytes Billed / Query:** `15,937,500` bytes ($15.20\text{ MB}$)
 - **Chi phí cho 1.000 lượt truy vấn:** **`$0.0596` USD / 1.000 queries** (~6 xu cho 1.000 câu hỏi nghiệp vụ)
 - **Chi phí cho 100.000 lượt truy vấn:** **`$5.96` USD / 100.000 queries**
-- **Độ trễ truy xuất (p50 / p95 / p99):** `73.93 ms` / `93.18 ms` / `94.94 ms`
+- **Đặc tính độ trễ:** Đo đạc qua BigQuery Vector Store live cho thấy độ trễ phụ thuộc chủ yếu vào round-trip mạng từ Cloud Run đến BigQuery API ($\approx 50 - 200\text{ ms}$).
 
 ### 3.4 Bảng So Sánh 4 Kiến Trúc Kho Tri Thức Doanh Nghiệp (4-Way Comparison)
 
-| Kiến Trúc Hạ Tầng | Chi Phí Tĩnh (Idle Cost) | Chi Phí / 1.000 Truy Vấn | p50 Latency | p95 Latency | Khả Năng & Giới Hạn Mở Rộng |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **1. In-Memory Python / Local RAG** | $0 / tháng | **$0.00** | 1.2 ms | 2.8 ms | Phù hợp dev/test hoặc dữ liệu nhỏ ($< 50,000$ chunks, bị giới hạn bởi RAM container) |
-| **2. BigQuery On-Demand Vector Search** | $0 / tháng (Pay-as-you-go) | **$0.0596** (ở mức 5.000 chunks) | 73.9 ms | 93.2 ms | Mở rộng không giới hạn ($> 100,000,000+$ chunks), chi phí tối ưu tuyệt đối khi tải thấp và vừa |
-| **3. BigQuery Edition Capacity Slots** | $0 - $43 / tháng (Autoscaling slots) | **$0.00 (Flat compute capacity)** | 51.8 ms | 65.2 ms | Phù hợp doanh nghiệp lớn có lưu lượng liên tục ($> 100\text{ QPS}$), cố định ngân sách tính toán |
-| **4. Vertex AI Search Managed Datastore** | $0 / tháng | **$1.50 - $2.50** | 150.0 ms | 350.0 ms | Managed SaaS Datastore hoàn toàn, tính phí theo lượt gọi API tìm kiếm độc lập |
+| Kiến Trúc Hạ Tầng | Chi Phí Tĩnh (Idle Cost) | Chi Phí / 1.000 Truy Vấn | Đặc Tính Độ Trễ | Khả Năng & Giới Hạn Mở Rộng |
+| :--- | :--- | :--- | :--- | :--- |
+| **1. In-Memory Python / Local RAG** | $0 / tháng | **$0.00** | Truy xuất bộ nhớ trong container ($< 5\text{ ms}$) | Phù hợp dev/test hoặc dữ liệu nhỏ ($< 50,000$ chunks, bị giới hạn bởi RAM container) |
+| **2. BigQuery On-Demand Vector Search** | $0 / tháng (Pay-as-you-go) | **$0.0596** (ước tính ở 5.000 chunks) | Truy vấn BigQuery API qua mạng ($\approx 50 - 200\text{ ms}$) | Mở rộng không giới hạn ($> 100,000,000+$ chunks), chi phí tối ưu tuyệt đối khi tải thấp và vừa |
+| **3. BigQuery Edition Capacity Slots** | $0 - $43 / tháng (Autoscaling slots) | **$0.00 (Flat compute capacity)** | Dedicated slots thực thi nhanh ($\approx 40 - 150\text{ ms}$) | Phù hợp doanh nghiệp lớn có lưu lượng liên tục ($> 100\text{ QPS}$), cố định ngân sách tính toán |
+| **4. Vertex AI Search Managed Datastore** | $0 / tháng | **$1.50 - $6.00** ([Google Cloud Vertex AI Search Pricing](https://cloud.google.com/vertex-ai-search-and-conversation/pricing), tra cứu 09/2026) | API tìm kiếm SaaS ($\approx 150 - 350\text{ ms}$) | Managed SaaS Datastore hoàn toàn, tính phí theo lượt gọi API tìm kiếm độc lập |
+
 

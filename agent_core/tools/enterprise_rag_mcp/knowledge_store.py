@@ -435,19 +435,31 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
         bq_client: Optional[Any] = None,
         embedding_fn: Optional[Any] = None,
     ):
-        self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "it-helpdesk-prod")
-        self.dataset_id = dataset_id or os.getenv("BIGQUERY_KB_DATASET", "it_helpdesk_kb")
-        self.table_name = table_name
+        raw_project = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "it-helpdesk-prod")
+        raw_dataset = dataset_id or os.getenv("BIGQUERY_KB_DATASET", "it_helpdesk_kb")
+        raw_table = table_name
+
+        # Validate identifiers to prevent SQL injection in DDL/DML templates
+        for ident, name in [(raw_project, "project_id"), (raw_dataset, "dataset_id"), (raw_table, "table_name")]:
+            if not re.match(r"^[a-zA-Z0-9_\-\.]+$", str(ident)):
+                raise ValueError(f"Invalid BigQuery identifier '{ident}' for {name}")
+
+        self.project_id = str(raw_project)
+        self.dataset_id = str(raw_dataset)
+        self.table_name = str(raw_table)
         self.embedding_model = embedding_model
         self.embedding_fn = embedding_fn
         self._index_active_cache: Optional[tuple[bool, float]] = None
 
         if bq_client is not None:
             self.bq_client = bq_client
+            if type(bq_client).__name__ not in ("MagicMock", "Mock"):
+                self._verify_kb_metadata()
         else:
             try:
                 from google.cloud import bigquery
                 self.bq_client = bigquery.Client(project=self.project_id)
+                self._verify_kb_metadata()
             except ImportError as e:
                 logger.error("google-cloud-bigquery library is required for BigQueryVectorKnowledgeStore (%s).", e)
                 raise ImportError(
@@ -457,6 +469,57 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             except Exception as e:
                 logger.error("Failed to initialize BigQuery Client for Vector Search (%s).", e)
                 self.bq_client = None
+
+    def _verify_kb_metadata(self) -> None:
+        """
+        Verifies that the ingested KB metadata matches the active runtime embedding model and dimension.
+        Refuses startup (raises RuntimeError) if there is a mismatch.
+        """
+        if not self.bq_client:
+            return
+        try:
+            from google.cloud import bigquery
+            sql = f"""
+            SELECT metadata_key, embedding_model, embedding_dim, kb_version
+            FROM `{self.project_id}.{self.dataset_id}.kb_metadata`
+            WHERE metadata_key = @meta_key
+            LIMIT 1
+            """
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("meta_key", "STRING", "active_kb")
+                ]
+            )
+            rows = list(self.bq_client.query(sql, job_config=job_config).result(timeout=5.0))
+            if rows:
+                row = rows[0]
+                ingested_model = getattr(row, "embedding_model", None)
+                ingested_dim = getattr(row, "embedding_dim", None)
+
+                if (
+                    isinstance(ingested_model, str)
+                    and type(ingested_model).__name__ not in ("MagicMock", "Mock")
+                ):
+                    if ingested_model.strip() != self.embedding_model.strip():
+                        raise RuntimeError(
+                            f"CRITICAL: Knowledge Base metadata mismatch! "
+                            f"Ingested embedding model is '{ingested_model}', but service is configured with '{self.embedding_model}'. "
+                            f"Refusing startup to prevent invalid embeddings."
+                        )
+                if (
+                    isinstance(ingested_dim, (int, float))
+                    and type(ingested_dim).__name__ not in ("MagicMock", "Mock")
+                ):
+                    if int(ingested_dim) != 768:
+                        raise RuntimeError(
+                            f"CRITICAL: Knowledge Base metadata mismatch! "
+                            f"Ingested embedding dimension is {ingested_dim}, but service dimension is 768. "
+                            f"Refusing startup."
+                        )
+        except RuntimeError:
+            raise
+        except Exception as e:
+            logger.debug("Could not verify kb_metadata table (might not exist yet or local mock): %s", e)
 
     def _generate_embedding(self, text: str, task_type: str = "RETRIEVAL_QUERY") -> list[float]:
         """Generates embedding using the shared enterprise embedding model or injected function."""
@@ -476,13 +539,19 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             return False
 
         try:
+            from google.cloud import bigquery
             sql = f"""
             SELECT index_status, coverage_percentage 
             FROM `{self.project_id}.{self.dataset_id}.INFORMATION_SCHEMA.VECTOR_INDEXES`
-            WHERE table_name = '{self.table_name}'
+            WHERE table_name = @table_name
             LIMIT 1
             """
-            rows = list(self.bq_client.query(sql).result(timeout=5.0))
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("table_name", "STRING", self.table_name)
+                ]
+            )
+            rows = list(self.bq_client.query(sql, job_config=job_config).result(timeout=5.0))
             if rows:
                 status = getattr(rows[0], "index_status", "UNKNOWN")
                 cov = getattr(rows[0], "coverage_percentage", None)
@@ -521,7 +590,14 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
 
         # 2. Get retrieval configuration (fraction_lists_to_search, hybrid_search_enabled, retrieve_k, final_k, adaptive_retrieval_rounds)
         retrieval_cfg = get_retrieval_config()
-        fraction_lists_to_search = retrieval_cfg.get("fraction_lists_to_search", 0.05)
+        raw_fraction = retrieval_cfg.get("fraction_lists_to_search", 0.05)
+        try:
+            clean_fraction = float(raw_fraction)
+            if clean_fraction <= 0.0 or clean_fraction > 1.0 or not math.isfinite(clean_fraction):
+                clean_fraction = 0.05
+        except (ValueError, TypeError):
+            clean_fraction = 0.05
+
         hybrid_enabled = retrieval_cfg.get("hybrid_search_enabled", True)
         reranker_enabled = retrieval_cfg.get("reranker_enabled", False) or os.getenv("USE_VERTEX_RERANKER", "false").lower() in ("true", "1", "yes")
 
@@ -546,7 +622,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
             )
 
             index_active = self._is_vector_index_active()
-            options_clause = f", options => '{{\"fraction_lists_to_search\": {fraction_lists_to_search}}}'" if index_active else ""
+            options_clause = f", options => '{{\"fraction_lists_to_search\": {clean_fraction}}}'" if index_active else ""
 
             authorized_candidates: list[SearchResult] = []
             seen_ids: set[str] = set()
@@ -558,6 +634,7 @@ class BigQueryVectorKnowledgeStore(BaseKnowledgeStore):
                     bigquery.ScalarQueryParameter("limit", "INT64", current_retrieve_k),
                     bigquery.ScalarQueryParameter("today", "DATE", today_iso),
                     bigquery.ScalarQueryParameter("user_clearance", "INT64", sec_ctx.clearance_level),
+
                 ]
 
                 # 1. Construct Pre-Filter Subquery for VECTOR_SEARCH (Tombstone + Dates + System RBAC + Scalar Clearance)

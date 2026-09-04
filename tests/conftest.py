@@ -9,14 +9,14 @@ def _compute_deterministic_embedding(text_or_obj) -> list[float]:
         text = str(text_or_obj.text)
     else:
         text = str(text_or_obj)
-    vec = [0.0] * 128
+    vec = [0.0] * 768
     cleaned = text.lower().strip()
     words = cleaned.split()
     for i, char in enumerate(cleaned):
-        idx = (ord(char) * (i + 1) * 31) % 128
+        idx = (ord(char) * (i + 1) * 31) % 768
         vec[idx] += 1.0
     for w in words:
-        idx = (sum(ord(c) for c in w) * 17) % 128
+        idx = (sum(ord(c) for c in w) * 17) % 768
         vec[idx] += 2.0
     norm = math.sqrt(sum(x * x for x in vec)) or 1.0
     return [x / norm for x in vec]
@@ -32,10 +32,9 @@ class MockTextEmbeddingModel:
         return [MockEmbeddingItem(_compute_deterministic_embedding(t)) for t in texts]
 
 
-# NOTE: In unit test environments, we use a lightweight 128-dimensional deterministic mock vector
-# for performance and hermetic testing without GCP network calls.
-# In live production environments, Vertex AI TextEmbeddingModel (e.g. text-multilingual-embedding-002)
-# produces 768-dimensional embeddings.
+# NOTE: In unit test environments, we use a 768-dimensional deterministic mock vector
+# matching Vertex AI TextEmbeddingModel (text-multilingual-embedding-002)
+# without requiring GCP network calls.
 # USE_VERTEX_EMBEDDING=true is set as default so all code paths utilizing embeddings are exercised in tests.
 os.environ.setdefault("USE_VERTEX_EMBEDDING", "true")
 
