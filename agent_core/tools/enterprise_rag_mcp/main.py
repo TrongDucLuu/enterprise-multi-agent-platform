@@ -621,10 +621,12 @@ def draft_email_response(
     """
     Drafts a standardized, polite, and professional email response to update the user regarding their ticket.
     """
-    email_subject = f"[IT Helpdesk - {ticket_id}] Cập nhật xử lý: {issue_summary}"
+    pack_name = os.getenv("DOMAIN_PACK", "it-helpdesk")
+    team_title = "IT Helpdesk" if pack_name == "it-helpdesk" else "Enterprise Support"
+    email_subject = f"[{team_title} - {ticket_id}] Cập nhật xử lý: {issue_summary}"
     email_body = f"""Kính gửi Anh/Chị {user_name},
 
-Bộ phận IT Helpdesk xin thông báo về tiến độ xử lý yêu cầu hỗ trợ của Anh/Chị:
+Bộ phận {team_title} xin thông báo về tiến độ xử lý yêu cầu hỗ trợ của Anh/Chị:
 - Mã Ticket: {ticket_id}
 - Vấn đề ghi nhận: {issue_summary}
 - Mức độ ưu tiên: {urgency}
@@ -632,10 +634,10 @@ Bộ phận IT Helpdesk xin thông báo về tiến độ xử lý yêu cầu h�
 --- HƯỚNG DẪN XỬ LÝ / KẾT QUẢ ---
 {solution_steps}
 
-Nếu Anh/Chị cần hỗ trợ thêm hoặc sự cố chưa được giải quyết triệt để, vui lòng phản hồi trực tiếp email này hoặc liên hệ hotline IT Helpdesk (Ext: 1080).
+Nếu Anh/Chị cần hỗ trợ thêm hoặc sự cố chưa được giải quyết triệt để, vui lòng phản hồi trực tiếp email này hoặc liên hệ hotline {team_title} (Ext: 1080).
 
 Trân trọng,
-Đội ngũ IT Helpdesk & Enterprise Support
+Đội ngũ {team_title}
 """
     return {
         "status": "success",

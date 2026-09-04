@@ -33,8 +33,8 @@ resource "google_project_service" "services" {
 resource "google_artifact_registry_repository" "repo" {
   project       = var.project_id
   location      = var.region
-  repository_id = "it-helpdesk-repo"
-  description   = "Docker repository for IT Helpdesk Agent"
+  repository_id = "${var.service_name}-repo"
+  description   = "Docker repository for Enterprise Multi-Agent Platform"
   format        = "DOCKER"
   depends_on    = [google_project_service.services]
 }
@@ -43,7 +43,7 @@ resource "google_artifact_registry_repository" "repo" {
 resource "google_service_account" "agent_sa" {
   project      = var.project_id
   account_id   = "${var.service_name}-sa"
-  display_name = "IT Helpdesk Agent Service Account"
+  display_name = "${var.service_name} Service Account"
 }
 
 # 4. IAM Permissions for Vertex AI, BigQuery, Firestore, Logging, and Secret Access
@@ -92,8 +92,8 @@ resource "google_storage_bucket_iam_member" "allowed_artifacts_viewer" {
 resource "google_bigquery_dataset" "kb_dataset" {
   project                    = var.project_id
   dataset_id                 = var.bigquery_kb_dataset
-  friendly_name              = "IT Helpdesk Enterprise Knowledge Base"
-  description                = "Dataset storing IT Helpdesk articles and vector embeddings for BigQuery VECTOR_SEARCH"
+  friendly_name              = "Enterprise Knowledge Base (${var.domain_pack})"
+  description                = "Dataset storing enterprise knowledge articles and vector embeddings for BigQuery VECTOR_SEARCH"
   location                   = var.region
   delete_contents_on_destroy = false
   depends_on                 = [google_project_service.services]
@@ -554,7 +554,7 @@ resource "google_bigquery_dataset_iam_member" "kb_dataset_viewer" {
 # BigQuery Enterprise Edition Reservation for Vector Search Auto-scaling (Fluid Scaling)
 resource "google_bigquery_reservation" "enterprise_rag_reservation" {
   count             = var.enable_bigquery_reservation ? 1 : 0
-  name              = "it-helpdesk-rag-reservation"
+  name              = "${var.service_name}-rag-reservation"
   project           = var.project_id
   location          = var.region
   slot_capacity     = var.bigquery_baseline_slots

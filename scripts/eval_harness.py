@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Enterprise IT Helpdesk AI — Evaluation Harness & Benchmark Suite
+Enterprise Multi-Agent AI — Evaluation Harness & Benchmark Suite
 ================================================================
 Evaluates Agent Intent Accuracy, L2 RAG Groundedness (Faithfulness),
 Information Retrieval (Precision@k, Recall@k, MRR), RBAC Persona Security,
@@ -68,15 +68,16 @@ _EVAL_EMPLOYEE_SEC_CTX = SecurityContext.from_user(
 
 def load_eval_dataset(path: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
     """
-    Loads evaluation dataset from specified path, falling back to domain_packs/it-helpdesk/eval_set.jsonl.
+    Loads evaluation dataset from specified path, falling back to active domain pack eval_set.jsonl.
     Slices by limit if specified.
     """
     candidates = []
     if path:
         candidates.append(Path(path))
     else:
-        candidates.append(Path(PROJECT_ROOT) / "domain_packs" / "it-helpdesk" / "eval_set.jsonl")
-        candidates.append(Path("domain_packs/it-helpdesk/eval_set.jsonl"))
+        pack = os.getenv("DOMAIN_PACK", "it-helpdesk")
+        candidates.append(Path(PROJECT_ROOT) / "domain_packs" / pack / "eval_set.jsonl")
+        candidates.append(Path("domain_packs") / pack / "eval_set.jsonl")
 
     dataset = []
     for cand in candidates:
@@ -767,7 +768,7 @@ def print_markdown_report(summary: Dict[str, Any]) -> None:
     status_icon = "✅" if q["overall_status"] == "PASSED" else "❌"
 
     print("\n" + "=" * 80)
-    print(f"📊 ENTERPRISE IT HELPDESK AI — EVALUATION REPORT [{mode} MODE] ({status_icon} {q['overall_status']})")
+    print(f"📊 ENTERPRISE MULTI-AGENT AI — EVALUATION REPORT [{mode} MODE] ({status_icon} {q['overall_status']})")
     print("=" * 80)
     print(f"• Timestamp: {summary['timestamp']}")
     print(f"• Mode: {mode}")
@@ -801,13 +802,13 @@ def print_markdown_report(summary: Dict[str, Any]) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="IT Helpdesk AI Eval Harness")
+    parser = argparse.ArgumentParser(description="Enterprise Multi-Agent AI Eval Harness")
     parser.add_argument("--mode", choices=["offline", "online"], default="offline", help="Execution mode (default: offline)")
     parser.add_argument("--online", action="store_true", help="Run online evaluation with live ADK runner and LLM calls")
     parser.add_argument("--offline", action="store_true", help="Run offline baseline evaluation")
     parser.add_argument("--eval-set", type=str, default=None, help="Path to evaluation dataset jsonl")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of test cases")
-    parser.add_argument("--domain-pack", type=str, default="it-helpdesk", help="Domain pack to evaluate")
+    parser.add_argument("--domain-pack", type=str, default=os.getenv("DOMAIN_PACK", "it-helpdesk"), help="Domain pack to evaluate")
     parser.add_argument("--json", action="store_true", help="Output JSON report")
     parser.add_argument("--output", type=str, default=None, help="Save report to file")
     args = parser.parse_args()

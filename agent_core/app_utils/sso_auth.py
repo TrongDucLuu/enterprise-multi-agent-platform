@@ -39,7 +39,7 @@ def is_allow_local_dev_sso() -> bool:
 # Dynamic property aliases for backward compatibility
 IS_PRODUCTION = is_production_mode()
 
-SSO_CLIENT_ID = os.getenv("SSO_CLIENT_ID", "it-helpdesk-agent-client-id")
+SSO_CLIENT_ID = os.getenv("SSO_CLIENT_ID", "enterprise-agent-client-id")
 SSO_ISSUER = os.getenv("SSO_ISSUER", "https://accounts.google.com")
 ALLOWED_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 if SSO_ISSUER:
@@ -289,7 +289,7 @@ def verify_google_oidc_token(
     Strictly checks RS256 signature, expiry, audience (Client ID), and hosted domain (hd).
     Fail-closed: In production, ALLOWED_DOMAINS is strictly required.
     """
-    expected_client_id = client_id or os.getenv("SSO_CLIENT_ID", "it-helpdesk-agent-client-id")
+    expected_client_id = client_id or os.getenv("SSO_CLIENT_ID", "enterprise-agent-client-id")
     domains_to_check = allowed_domains if allowed_domains is not None else get_allowed_domains()
     is_prod = is_production_mode()
 

@@ -3,12 +3,12 @@
 # Provides shared cluster state for Rate Limiting & Semantic Cache
 # ==============================================================================
 
-# 1. Dedicated VPC Network for IT Helpdesk Infrastructure
+# 1. Dedicated VPC Network for Enterprise Agent Infrastructure
 resource "google_compute_network" "app_vpc" {
   project                 = var.project_id
   name                    = "${var.service_name}-vpc"
   auto_create_subnetworks = false
-  description             = "VPC network for IT Helpdesk Cloud Run Direct VPC Egress and Memorystore Redis"
+  description             = "VPC network for Enterprise Agent Cloud Run Direct VPC Egress and Memorystore Redis"
   depends_on              = [google_project_service.services]
 }
 
@@ -55,7 +55,7 @@ resource "google_redis_instance" "cache_redis" {
   authorized_network      = google_compute_network.app_vpc.id
   connect_mode            = "PRIVATE_SERVICE_ACCESS"
   redis_version           = "REDIS_7_0"
-  display_name            = "IT Helpdesk Shared Redis Cache"
+  display_name            = "${var.service_name} Shared Redis Cache"
   auth_enabled            = true
   transit_encryption_mode = "SERVER_AUTHENTICATION"
 

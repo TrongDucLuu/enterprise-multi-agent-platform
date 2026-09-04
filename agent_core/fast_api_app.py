@@ -41,7 +41,7 @@ def _get_memory_bank_uri() -> tuple[str | None, str | None]:
     direct_resource = os.environ.get("AGENT_ENGINE_RESOURCE_NAME")
     if direct_resource:
         uri = f"agentengine://{direct_resource}"
-        print(f"Connecting to IT Helpdesk Memory Bank: {uri}")
+        print(f"Connecting to Enterprise Memory Bank ({PACK_ID}): {uri}")
         return uri, uri
 
     # Priority 2: Lookup by display name or create lazily if permitted
@@ -128,6 +128,8 @@ async def _wrapped_lifespan(app_instance: FastAPI) -> AsyncGenerator[None, None]
 app.router.lifespan_context = _wrapped_lifespan
 
 
+SERVICE_NAME = os.getenv("K_SERVICE", os.getenv("SERVICE_NAME", f"{PACK_ID}-agent"))
+
 # 1. System Health & Readiness Endpoints (Used by Cloud Run startup/liveness probes & Load Balancer)
 @app.get("/healthz", tags=["Health"])
 @app.get("/health", tags=["Health"])
@@ -136,7 +138,7 @@ async def health_check():
     """Liveness probe endpoint confirming container availability and pack metadata."""
     return {
         "status": "healthy",
-        "service": "it-helpdesk-agent",
+        "service": SERVICE_NAME,
         "core_version": CORE_VERSION,
         "pack_id": PACK_ID,
         "pack_version": PACK_VERSION,
@@ -173,7 +175,7 @@ async def readiness_check():
         )
     return {
         "status": "ready",
-        "service": "it-helpdesk-agent",
+        "service": SERVICE_NAME,
         "core_version": CORE_VERSION,
         "pack_id": PACK_ID,
         "pack_version": PACK_VERSION,

@@ -4,7 +4,7 @@ output "cloud_run_url" {
 }
 
 output "service_account_email" {
-  description = "The Service Account used by the IT Helpdesk Agent"
+  description = "The Service Account used by the Enterprise Multi-Agent AI Service"
   value       = google_service_account.agent_sa.email
 }
 

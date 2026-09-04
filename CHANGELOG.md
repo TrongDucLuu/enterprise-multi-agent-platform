@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `knowledge/facts.py`: Deterministic facts registry adapters (`InMemoryFactsStore`, `BigQueryFactsStore`).
     - `knowledge/__init__.py`: Factory dispatchers (`get_knowledge_store`, `get_facts_store`).
   - Implemented `knowledge_store.py` as a lightweight backward-compatibility shim re-exporting all symbols for callers and test suites. Every module is verified under 500 lines.
+- **Binary Docx & Compiler Cleanup (Hạng mục E - [R0] [P2])**:
+  - Removed binary `.docx` files (`DEVOPS_RUNBOOK.docx`, `PRODUCT_SRS_DOCUMENT.docx`) and generation scripts (`generate_devops_runbook.py`, `generate_srs_document.py`, `docx_styler.py`) to maintain a clean git repository containing only source code and markdown documentation.
+  - Removed obsolete docx compiler verification steps from `.github/workflows/ci.yml`.
+- **Domain-Pack Agnostic Identifier Standardization (Hạng mục F - [R0] [P2])**:
+  - Standardized remaining hardcoded identifiers across `agent_core/fast_api_app.py`, `agent_core/app_utils/telemetry.py`, `agent_core/app_utils/sso_auth.py`, `agent_core/tools/enterprise_rag_mcp/main.py`, `deployment/terraform/`, and `scripts/eval_harness.py`.
+  - Service names, repository IDs, database descriptions, and evaluation reporting dynamically resolve against `DOMAIN_PACK`, `K_SERVICE`, `SERVICE_NAME`, or `var.service_name` with clear fallback documentation.
 
 ## [2.2.0] - 2026-09-03
 

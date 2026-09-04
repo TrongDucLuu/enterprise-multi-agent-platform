@@ -1,4 +1,4 @@
-name: CI/CD Pipeline - IT Helpdesk Multi-Agent AI
+name: CI/CD Pipeline - Enterprise Multi-Agent AI Platform
 
 on:
   push:
@@ -18,7 +18,7 @@ jobs:
             allow_local_dev_sso: "true"
           - name: "production"
             allow_local_dev_sso: "false"
-        domain_pack: ["it-helpdesk"]
+        domain_pack: ["it-helpdesk"] # Reference domain pack for matrix validation
         include:
           - python-version: "3.12"
             environment:
@@ -56,13 +56,6 @@ jobs:
           ALLOWED_ARTIFACT_BUCKET: "company-artifacts-dev"
         run: |
           uv run pytest tests/ -v -m "not boot" --cov=agent_core --cov-report=term-missing
-
-      - name: Verify Enterprise Document Compilers
-        run: |
-          uv run python generate_srs_document.py
-          uv run python generate_devops_runbook.py
-          test -f PRODUCT_SRS_DOCUMENT.docx
-          test -f DEVOPS_RUNBOOK.docx
 
   boot-tests:
     name: Subprocess Boot Tests

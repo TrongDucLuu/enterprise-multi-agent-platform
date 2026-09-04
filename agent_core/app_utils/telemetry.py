@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Optional, Any
 from collections import deque
 
-logger = logging.getLogger("it_helpdesk_telemetry")
+logger = logging.getLogger("enterprise_agent_telemetry")
 
 # In-memory sliding window of recent telemetry events (max 1,000 events) for real-time stats
 _METRICS_BUFFER: deque = deque(maxlen=1000)
