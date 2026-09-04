@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-09-04
+
+### Changed
+- **Semantic Cache Claims & Documentation (Hạng mục A - [R1] [P1])**:
+  - Corrected semantic cache performance claims in `README.md` and `Technical_Specification.md`, removing unrealistic sub-millisecond end-to-end and 100% token cost reduction assertions.
+  - Documented realistic measured latencies (p50=0.003ms for InMemory, p50=0.045ms / p95=0.050ms for Redis candidate-set in-process simulation) and highlighted 1 embedding API call cost per cache query.
+- **Benchmark Script Hardening & Parameterization (Hạng mục B - [R2] [P1])**:
+  - Enhanced `scripts/benchmark_semantic_cache.py` with `--redis-host` and `--redis-port` support for live Memorystore testing.
+  - Added explicit `IN-PROCESS SIMULATION — network cost not measured` labeling when running on `fakeredis`.
+  - Parameterized LLM baseline via `--llm-baseline-ms` and integrated hit-rate evaluation (100% candidate-set accuracy vs full-scan reference).
+- **Fast Loop & Secret Manager Optimization (Hạng mục C - [R1] [P2])**:
+  - Added timeout guard (`timeout=2.0`) to Secret Manager remote fetch in `_fetch_secrets()` and reduced BigQuery metadata verify timeout, ensuring `pytest -m "not boot"` reliably finishes in ~12s (well under the 25s threshold).
+
 ## [2.2.0] - 2026-09-03
 
 ### Added

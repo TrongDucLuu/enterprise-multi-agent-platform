@@ -33,7 +33,7 @@ def _fetch_secrets(project_id: str) -> dict[str, str]:
                 if secret_id not in fetched_secrets:
                     name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
                     try:
-                        response = client.access_secret_version(request={"name": name})
+                        response = client.access_secret_version(request={"name": name}, timeout=2.0)
                         fetched_secrets[secret_id] = response.payload.data.decode("UTF-8")
                     except Exception as e:
                         logger.warning(f"Could not fetch secret '{secret_id}' from Secret Manager: {e}")

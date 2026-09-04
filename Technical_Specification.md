@@ -185,7 +185,7 @@ Mô hình `CaseRecord` tổng quát phục vụ cho mọi domain (IT Ticket, HR 
 - **Candidate-Set Vector Matching**:
   - Tra cứu các vector ứng viên từ `public_keys_set` và `user_keys_set(user_id)`.
   - Thực thi bộ lọc nghiêm ngặt `entry.clearance_level <= caller_clearance`.
-  - Tính Cosine Similarity trên mảng 768 chiều. Nếu đạt ngưỡng $\ge 0.92$, trả lời tức thì ($< 25	ext{ms}$).
+  - Tính Cosine Similarity trên mảng 768 chiều. Nếu đạt ngưỡng $\ge 0.92$, trả lời tức thì ($p50 < 0.1\text{ms}$ in-process simulation, candidate limit 200).
 - **TTL Phân cấp**: Public FAQ có TTL 4 giờ; User-specific cache có TTL 1 giờ.
 
 ### 6.2. Hệ Thống Điều Tốc (Rate Limiting)

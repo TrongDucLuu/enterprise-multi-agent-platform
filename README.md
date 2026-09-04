@@ -76,7 +76,7 @@ Hệ thống được thiết kế theo mô hình **Độc Lập Hạ Tầng (In
 
 ## ⚡ 3. Tối Ưu Hiệu Năng & Chi Phí Hạ Tầng
 
-- **Redis Multi-Tenant Vector Semantic Cache**: Cắt giảm $\approx 100\%$ chi phí token và độ trễ xuống $\sim 20\text{ms}$ cho các câu hỏi phổ biến với cơ chế candidate-set cosine matching.
+- **Redis Multi-Tenant Vector Semantic Cache**: Loại bỏ chi phí sinh token LLM (vẫn tiêu tốn 1 lượt embedding vector 768 chiều), đạt độ trễ cache hit $p50 = 0.003\text{ms}$ (In-Memory) và $p50 = 0.044\text{ms}$ / $p95 = 0.049\text{ms}$ (In-Process Simulation tại quy mô 10.000 entries) với cơ chế candidate-set (tối đa 200 ứng viên) kết hợp exact lookup fast path $O(1)$.
 - **Dual-Engine Enterprise Knowledge Store**: Chuyển đổi linh hoạt qua biến môi trường `KNOWLEDGE_BACKEND`:
   - `bigquery` (Mặc định Data Warehouse): Serverless Vector Search với IVF Index, SQL pre-filtering, 100% Zero-Data Egress, mô hình on-demand thanh toán theo dung lượng quét thực tế ($6.25/TiB scanned), lưu trữ active (~$0.02/GB/tháng). Trong môi trường production, hạ tầng nền bao gồm Cloud Run (`min_instance_count >= 1` để triệt tiêu cold-start cho ADK agent) và Memorystore Redis HA.
   - `vertex_ai_search` (Managed Enterprise Grounding): Tích hợp trực tiếp Google Cloud Vertex AI Search Discovery Engine, hỗ trợ OCR tài liệu đa định dạng, extractive segments và trích dẫn chuẩn xác.
