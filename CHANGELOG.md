@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Parameterized LLM baseline via `--llm-baseline-ms` and integrated hit-rate evaluation (100% candidate-set accuracy vs full-scan reference).
 - **Fast Loop & Secret Manager Optimization (Hạng mục C - [R1] [P2])**:
   - Added timeout guard (`timeout=2.0`) to Secret Manager remote fetch in `_fetch_secrets()` and reduced BigQuery metadata verify timeout, ensuring `pytest -m "not boot"` reliably finishes in ~12s (well under the 25s threshold).
+- **Enterprise Knowledge Store Modular Architecture (Hạng mục D - [R2] [P2])**:
+  - Decomposed the 1,470-line monolithic `knowledge_store.py` into a modular package `agent_core/tools/enterprise_rag_mcp/knowledge/`:
+    - `knowledge/base.py`: Abstract base classes (`BaseKnowledgeStore`, `BaseFactsStore`), security context resolvers, error classes, and dynamic resolution helpers.
+    - `knowledge/similarity.py`: Distance and similarity normalization algorithms (`normalize_similarity`).
+    - `knowledge/sanitize.py`: XML sanitization and security boundary wrapping (`wrap_retrieved_document`, `sanitize_retrieved_content`).
+    - `knowledge/in_memory.py`: In-memory keyword and hybrid retrieval store (`InMemoryKnowledgeStore`).
+    - `knowledge/bigquery.py`: Production BigQuery vector search adapter with hybrid search, pre-filtering subqueries, and reranking (`BigQueryVectorKnowledgeStore`).
+    - `knowledge/vertex_search.py`: Google Cloud Vertex AI Search / Discovery Engine adapter (`VertexAISearchKnowledgeStore`).
+    - `knowledge/facts.py`: Deterministic facts registry adapters (`InMemoryFactsStore`, `BigQueryFactsStore`).
+    - `knowledge/__init__.py`: Factory dispatchers (`get_knowledge_store`, `get_facts_store`).
+  - Implemented `knowledge_store.py` as a lightweight backward-compatibility shim re-exporting all symbols for callers and test suites. Every module is verified under 500 lines.
 
 ## [2.2.0] - 2026-09-03
 
