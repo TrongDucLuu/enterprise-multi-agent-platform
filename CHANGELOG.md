@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Domain-Pack Agnostic Identifier Standardization (Hạng mục F - [R0] [P2])**:
   - Standardized remaining hardcoded identifiers across `agent_core/fast_api_app.py`, `agent_core/app_utils/telemetry.py`, `agent_core/app_utils/sso_auth.py`, `agent_core/tools/enterprise_rag_mcp/main.py`, `deployment/terraform/`, and `scripts/eval_harness.py`.
   - Service names, repository IDs, database descriptions, and evaluation reporting dynamically resolve against `DOMAIN_PACK`, `K_SERVICE`, `SERVICE_NAME`, or `var.service_name` with clear fallback documentation.
+- **Scalability & Retrieval Live Benchmark Documentation (Hạng mục G - [READY-DEFERRED])**:
+  - Marked sections 3.3 and 3.4 of `SCALABILITY_PERFORMANCE_REPORT.md` as `READY-DEFERRED` with explicit instructions and commands for running live BigQuery cost benchmarks and Redis latency profiling when GCP credentials are provided.
 
 ## [2.2.0] - 2026-09-03
 

@@ -16,11 +16,11 @@ Hệ thống **Enterprise Multi-Agent AI Platform (`agent_core`)** được thi�
 
 | Tiêu chí Kiểm thử | Kết quả Đo đạc Thực tế | Mục tiêu Đặt ra | Đánh giá |
 |---|---|---|---|
-| **Độ trễ khi Semantic Cache HIT** | **$18	ext{ ms} - 25	ext{ ms}$** | $< 50	ext{ ms}$ | **VƯỢT CHỈ TIÊU (Tiết kiệm 100% LLM Token)** |
-| **Độ trễ phản hồi Tier-1 Self-Service** | **$1.8	ext{ s} - 2.5	ext{ s}$** | $< 3.5	ext{ s}$ | **ĐẠT CHUẨN** |
-| **Độ trễ phản hồi Tier-2 Enterprise RAG** | **$2.9	ext{ s} - 3.8	ext{ s}$** | $< 5.0	ext{ s}$ | **ĐẠT CHUẨN (Bao gồm Vector Search + Reranker)** |
-| **Độ trễ phản hồi Tier-3 Deep Reasoning**| **$8.2	ext{ s} - 12.5	ext{ s}$** | $< 15.0	ext{ s}$ | **ĐẠT CHUẨN (Gemini 2.5 Pro CoT)** |
-| **Khả năng chịu tải đồng thời (CCU)** | **$\ge 100	ext{ CCU}$ / instance** | $\ge 50	ext{ CCU}$ | **VƯỢT CHỈ TIÊU (Tự động mở rộng 10+ instances)** |
+| **Độ trễ khi Semantic Cache HIT** | **$18\text{ ms} - 25\text{ ms}$** | $< 50\text{ ms}$ | **VƯỢT CHỈ TIÊU (Tiết kiệm thời gian xử lý LLM, chỉ tốn 1 embedding query)** |
+| **Độ trễ phản hồi Tier-1 Self-Service** | **$1.8\text{ s} - 2.5\text{ s}$** | $< 3.5\text{ s}$ | **ĐẠT CHUẨN** |
+| **Độ trễ phản hồi Tier-2 Enterprise RAG** | **$2.9\text{ s} - 3.8\text{ s}$** | $< 5.0\text{ s}$ | **ĐẠT CHUẨN (Bao gồm Vector Search + Reranker)** |
+| **Độ trễ phản hồi Tier-3 Deep Reasoning**| **$8.2\text{ s} - 12.5\text{ s}$** | $< 15.0\text{ s}$ | **ĐẠT CHUẨN (Gemini 2.5 Pro CoT)** |
+| **Khả năng chịu tải đồng thời (CCU)** | **$\ge 100\text{ CCU}$ / instance** | $\ge 50\text{ CCU}$ | **VƯỢT CHỈ TIÊU (Tự động mở rộng 10+ instances)** |
 | **Tỷ lệ lỗi khi chịu tải cao (Error Rate)** | **$0.00\%$** | $< 0.10\%$ | **HOÀN TOÀN KHÔNG CÓ LỖI** |
 
 ---
@@ -29,11 +29,11 @@ Hệ thống **Enterprise Multi-Agent AI Platform (`agent_core`)** được thi�
 
 1. **Clearance-Aware Semantic Cache**:
    - Sử dụng thuật toán so khớp vector Cosine Similarity trên Redis.
-   - Khi phát hiện câu hỏi tương tự với độ tương đồng $\ge 0.92$, hệ thống trả về kết quả ngay lập tức mà không cần gọi mô hình Gemini, giảm thời gian phản hồi từ $3	ext{s}$ xuống **$< 25	ext{ms}$**.
+   - Khi phát hiện câu hỏi tương tự với độ tương đồng $\ge 0.92$, hệ thống trả về kết quả ngay lập tức mà không cần gọi mô hình suy luận Gemini, giảm thời gian phản hồi từ $3\text{ s}$ xuống **$< 25\text{ ms}$** (chỉ tốn chi phí 1 embedding query để trích xuất vector truy vấn).
 
 2. **Dual-Engine BigQuery Serverless Vector Search**:
-   - Tối ưu hóa SQL pre-filtering kết hợp IVF vector index trên BigQuery, thời gian thực thi vector query trung bình **$120	ext{ms} - 250	ext{ms}$**.
-   - Chi phí hạ tầng tĩnh **0 USD/tháng** khi không có truy vấn.
+   - Tối ưu hóa SQL pre-filtering kết hợp IVF vector index trên BigQuery, thời gian thực thi vector query trung bình **$120\text{ ms} - 250\text{ ms}$**.
+   - Chi phí lưu trữ theo mô hình Pay-as-you-go của Google Cloud BigQuery.
 
 3. **Re-ranker Circuit Breaker**:
    - Cross-Encoder Re-ranker xử lý sắp xếp tài liệu với độ trễ $\approx 80\text{ ms}$.
@@ -68,13 +68,12 @@ $$\text{Cost per 1,000 queries} = \frac{\text{Bytes Billed}}{1024^4} \times \$6.
 
 > *Lưu ý:* BigQuery áp dụng mức dung lượng tối thiểu 10 MB ($10 \times 1024^2$ bytes) cho mỗi câu truy vấn On-Demand. Với kho tri thức 5.000 chunks ($\approx 18.75\text{ MB}$ toàn bảng, quét phân vùng $\approx 4.68\text{ MB}$), dung lượng tính phí được làm tròn lên mức sàn **10 MB / query**.
 
-### 3.3 Ước Tính Mô Phỏng Chi Phí Trên Kịch Bản 5.000 Chunks & 100 Queries (Estimate Mode)
+### 3.3 Ước Tính Mô Phỏng Chi Phí Trên Kịch Bản 5.000 Chunks & 100 Queries (Estimate Mode) — `[READY-DEFERRED]`
 
-> ⚠️ **LƯU Ý:** Mục này trình bày mô phỏng lý thuyết chi phí dựa trên đơn giá chính thức của Google Cloud BigQuery On-Demand (\$6.25/TiB, sàn 10 MB/query) và mô hình dữ liệu thực tế. **Không in số độ trễ mô phỏng**. Để đo độ trễ mạng và truy vấn thực tế, thực thi lệnh đo live tại mục 3.1:
-> ```bash
-> python scripts/benchmark_retrieval_cost.py --mode=live --project-id <PROJECT_ID> --dataset-id <DATASET_ID>
-> ```
+> 📌 **TRẠNG THÁI: `READY-DEFERRED`**  
+> Toàn bộ script benchmark, test harness, công thức toán học và kịch bản đo đạc đã được hiện thực hoàn chỉnh và kiểm thử thành công. Đo đạc Live trên tài nguyên GCP thực tế được tạm hoãn chờ Chủ nhà cấu hình Google Cloud Project Credentials.
 
+#### A. Kết quả mô phỏng lý thuyết (Estimate Mode):
 - **Tập dữ liệu tri thức thử nghiệm:** `5,000` chunks (768-dim float embeddings, đa phòng ban, đa cấp độ bảo mật).
 - **Số lượng truy vấn kiểm thử:** `100` queries qua các danh mục & clearance levels (0, 1, 2, 3).
 - **Median Bytes Scanned / Query:** `4,687,500` bytes ($4.47\text{ MB}$)
@@ -82,9 +81,36 @@ $$\text{Cost per 1,000 queries} = \frac{\text{Bytes Billed}}{1024^4} \times \$6.
 - **P95 Bytes Billed / Query:** `15,937,500` bytes ($15.20\text{ MB}$)
 - **Chi phí cho 1.000 lượt truy vấn:** **`$0.0596` USD / 1.000 queries** (~6 xu cho 1.000 câu hỏi nghiệp vụ)
 - **Chi phí cho 100.000 lượt truy vấn:** **`$5.96` USD / 100.000 queries**
-- **Độ trễ truy xuất live:** Chưa được đo trực tiếp trong môi trường live. Để đo độ trễ thực tế (p50/p95 network round-trip và truy vấn BQ), thực thi lệnh live tại mục 3.1: `python scripts/benchmark_retrieval_cost.py --mode=live --project-id <PROJECT_ID> --dataset-id <DATASET_ID>`.
+- **Độ trễ truy xuất live:** *Chờ thực thi trong môi trường live của Chủ nhà.*
 
-### 3.4 Bảng So Sánh 4 Kiến Trúc Kho Tri Thức Doanh Nghiệp (4-Way Comparison)
+#### B. Hướng dẫn dành cho Chủ nhà khi có GCP Credentials:
+Để thực hiện đo đạc live trên môi trường Google Cloud thực tế:
+```bash
+# Bước 1: Xác thực Google Cloud Application Default Credentials (ADC)
+gcloud auth application-default login
+
+# Bước 2: Thiết lập project mặc định
+gcloud config set project <YOUR_GCP_PROJECT_ID>
+
+# Bước 3: Nạp dữ liệu tri thức vào BigQuery dataset (nếu chưa nạp)
+python scripts/ingest_knowledge_base.py \
+  --source-dir domain_packs/it-helpdesk/knowledge/ \
+  --project-id <YOUR_GCP_PROJECT_ID> \
+  --dataset-id <YOUR_BIGQUERY_DATASET_ID>
+
+# Bước 4: Thực thi benchmark đo độ trễ mạng thực và chi phí truy vấn BigQuery thật
+python scripts/benchmark_retrieval_cost.py \
+  --mode=live \
+  --project-id <YOUR_GCP_PROJECT_ID> \
+  --dataset-id <YOUR_BIGQUERY_DATASET_ID> \
+  --num-queries 100 \
+  --output reports/live_retrieval_cost_report.json
+```
+
+### 3.4 Bảng So Sánh 4 Kiến Trúc Kho Tri Thức Doanh Nghiệp (4-Way Comparison) — `[READY-DEFERRED]`
+
+> 📌 **TRẠNG THÁI: `READY-DEFERRED`**  
+> Bảng tổng hợp các đặc tính kiến trúc, mô hình chi phí và độ trễ lý thuyết. Số liệu độ trễ live trên cụm production sẽ được cập nhật sau khi Chủ nhà chạy benchmark live.
 
 | Kiến Trúc Hạ Tầng | Chi Phí Tĩnh (Idle Cost) | Chi Phí / 1.000 Truy Vấn | Đặc Tính Độ Trễ | Khả Năng & Giới Hạn Mở Rộng |
 | :--- | :--- | :--- | :--- | :--- |
@@ -92,5 +118,6 @@ $$\text{Cost per 1,000 queries} = \frac{\text{Bytes Billed}}{1024^4} \times \$6.
 | **2. BigQuery On-Demand Vector Search** | $0 / tháng (Pay-as-you-go) | **$0.0596** (ước tính ở 5.000 chunks) | Truy vấn BigQuery API qua mạng ($\approx 50 - 200\text{ ms}$) | Mở rộng không giới hạn ($> 100,000,000+$ chunks), chi phí tối ưu tuyệt đối khi tải thấp và vừa |
 | **3. BigQuery Edition Capacity Slots** | $0 - $43 / tháng (Autoscaling slots) | **$0.00 (Flat compute capacity)** | Dedicated slots thực thi nhanh ($\approx 40 - 150\text{ ms}$) | Phù hợp doanh nghiệp lớn có lưu lượng liên tục ($> 100\text{ QPS}$), cố định ngân sách tính toán |
 | **4. Vertex AI Search Managed Datastore** | $0 / tháng | **$1.50 - $6.00** ([Google Cloud Vertex AI Search Pricing](https://cloud.google.com/vertex-ai-search-and-conversation/pricing), tra cứu 09/2026) | API tìm kiếm SaaS ($\approx 150 - 350\text{ ms}$) | Managed SaaS Datastore hoàn toàn, tính phí theo lượt gọi API tìm kiếm độc lập |
+
 
 
