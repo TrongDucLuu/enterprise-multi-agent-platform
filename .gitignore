@@ -40,3 +40,7 @@ htmlcov/
 .idea/
 *.swp
 
+
+# Synthetic evaluation data
+data/
+

@@ -1218,3 +1218,765 @@
   expiry_date: null
   is_deleted: false
   deleted_at: null
+- id: SEC-KB-001
+  system: ALL
+  title: Chính sách bảo mật mật khẩu và xác thực tài khoản nội bộ
+  category: Security & Compliance
+  content: 'Chính sách mật khẩu công ty: Mật khẩu tối thiểu 12 ký tự gồm chữ hoa,
+    thường, số và ký tự đặc biệt. Định kỳ 3 tháng (90 ngày) phải đổi mật khẩu. Tài
+    khoản tự động khóa sau 5 lần gõ sai liên tiếp.'
+  keywords:
+  - security
+  - mật khẩu
+  - password
+  - 12 ký tự
+  - 90 ngày
+  - đổi mật khẩu
+  - khóa tài khoản
+  section_h1: Bảo mật Doanh nghiệp
+  section_h2: Quản lý Định danh
+  section_h3: Chính sách Mật khẩu
+  section_hierarchy:
+    h1: Bảo mật Doanh nghiệp
+    h2: Quản lý Định danh
+    h3: Chính sách Mật khẩu
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles: []
+  sensitivity: PUBLIC
+  clearance_level: 0
+  source_uri: docs/sec_password_policy.md
+  owner: infosec@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: SEC-KB-002
+  system: ALL
+  title: Quy trình thiết lập xác thực hai bước 2FA / MFA
+  category: Security & Compliance
+  content: 'Hướng dẫn kích hoạt 2FA/MFA: Cài đặt ứng dụng Google Authenticator hoặc
+    Okta Verify trên điện thoại. Quét mã QR tại trang security profile. Lưu trữ 10
+    mã backup codes an toàn.'
+  keywords:
+  - 2fa
+  - mfa
+  - xác thực 2 bước
+  - authenticator
+  - okta verify
+  - otp
+  - backup code
+  section_h1: Bảo mật Doanh nghiệp
+  section_h2: Xác thực
+  section_h3: Cấu hình 2FA MFA
+  section_hierarchy:
+    h1: Bảo mật Doanh nghiệp
+    h2: Xác thực
+    h3: Cấu hình 2FA MFA
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles: []
+  sensitivity: PUBLIC
+  clearance_level: 0
+  source_uri: docs/sec_mfa_setup.md
+  owner: infosec@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: SEC-KB-003
+  system: ALL
+  title: Đánh giá mức độ tuân thủ tiêu chuẩn ISO 27001 và SOC 2 Type II
+  category: Security & Compliance
+  content: Khung đánh giá tuân thủ an toàn thông tin ISO/IEC 27001:2022 và báo cáo
+    kiểm toán SOC 2 Type II cho các nhà cung cấp dịch vụ cloud, backup và lưu trữ
+    dữ liệu.
+  keywords:
+  - iso 27001
+  - soc 2
+  - soc2 type ii
+  - kiểm toán
+  - compliance
+  - bảo mật
+  - cloud backup
+  section_h1: Tuân thủ & Tiêu chuẩn
+  section_h2: ISO & SOC2
+  section_h3: Đánh giá nhà cung cấp
+  section_hierarchy:
+    h1: Tuân thủ & Tiêu chuẩn
+    h2: ISO & SOC2
+    h3: Đánh giá nhà cung cấp
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles:
+  - security_auditor
+  - it_admin
+  sensitivity: CONFIDENTIAL
+  clearance_level: 2
+  source_uri: docs/sec_iso_soc2_compliance.md
+  owner: compliance@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: NET-KB-001
+  system: ALL
+  title: Hướng dẫn kết nối mạng Wi-Fi Enterprise và cấu hình OpenVPN
+  category: Network & Connectivity
+  content: 'Kết nối Wi-Fi nội bộ: Chọn SSID Corp-Secure, nhập tài khoản AD. Kết nối
+    OpenVPN: Tải file config ovpn, cổng kết nối OpenVPN là Port 1194/UDP hoặc 443/TCP.
+    Mạng Guest Wi-Fi yêu cầu đăng ký qua cổng captive portal.'
+  keywords:
+  - wifi
+  - wi-fi
+  - vpn
+  - openvpn
+  - port
+  - '1194'
+  - mạng nội bộ
+  - guest wifi
+  - kết nối mạng
+  section_h1: Hạ tầng Mạng
+  section_h2: Wi-Fi & VPN
+  section_h3: Hướng dẫn kết nối
+  section_hierarchy:
+    h1: Hạ tầng Mạng
+    h2: Wi-Fi & VPN
+    h3: Hướng dẫn kết nối
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles: []
+  sensitivity: PUBLIC
+  clearance_level: 0
+  source_uri: docs/net_wifi_vpn_manual.md
+  owner: network-ops@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: AD-KB-001
+  system: ALL
+  title: Mở khóa tài khoản Active Directory và SSO Google Workspace / Drive Share
+  category: Identity & Access
+  content: 'Xử lý sự cố tài khoản: Khi tài khoản Active Directory (AD) bị khóa do
+    nhập sai mật khẩu quá 5 lần hoặc quên mật khẩu SSO Google Workspace, liên hệ hotline
+    IT nội bộ #1080 hoặc gửi ticket. Phân quyền Google Drive Share theo bộ phận Marketing/Sales
+    được IT cấp theo ticket duyệt.'
+  keywords:
+  - active directory
+  - ad
+  - sso
+  - google workspace
+  - khóa tài khoản
+  - reset mật khẩu
+  - quên mật khẩu
+  - share drive
+  - quyền drive
+  section_h1: Quản lý Định danh
+  section_h2: Active Directory & SSO
+  section_h3: Mở khóa tài khoản
+  section_hierarchy:
+    h1: Quản lý Định danh
+    h2: Active Directory & SSO
+    h3: Mở khóa tài khoản
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles: []
+  sensitivity: INTERNAL
+  clearance_level: 1
+  source_uri: docs/ad_account_recovery.md
+  owner: it-helpdesk@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: PRT-KB-001
+  system: ALL
+  title: Hướng dẫn cài đặt máy in mạng Ricoh và Canon văn phòng
+  category: Peripherals & Hardware
+  content: 'Cài đặt máy in mạng: Truy cập IP 192.168.10.50 (Ricoh Tầng 4) hoặc 192.168.10.51
+    (Canon Tầng 3). Cài đặt driver PCL6, nhập mã pin in ấn của nhân viên.'
+  keywords:
+  - máy in
+  - printer
+  - ricoh
+  - canon
+  - tầng 4
+  - in ấn
+  - driver máy in
+  section_h1: Thiết bị & Phần cứng
+  section_h2: Máy in
+  section_h3: Cài đặt Ricoh Tầng 4
+  section_hierarchy:
+    h1: Thiết bị & Phần cứng
+    h2: Máy in
+    h3: Cài đặt Ricoh Tầng 4
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles: []
+  sensitivity: PUBLIC
+  clearance_level: 0
+  source_uri: docs/prt_setup_guide.md
+  owner: it-helpdesk@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: HDW-KB-001
+  system: ALL
+  title: Quy định cấp phát thiết bị phần cứng, màn hình, bàn phím, cáp chuyển đổi
+  category: Peripherals & Hardware
+  content: 'Quy trình cấp phát thiết bị IT: 1. Màn hình phụ thứ hai: Dành cho lập
+    trình viên (Developer) và Designer sau khi Trưởng bộ phận phê duyệt. 2. Bàn phím
+    cơ và chuột Bluetooth Logitech: Đổi mới nếu hỏng vật lý hoặc tạo ticket yêu cầu.
+    3. Cáp chuyển đổi HDMI sang Type-C: Mượn trực tiếp tại phòng IT trong giờ hành
+    chính.'
+  keywords:
+  - phần cứng
+  - màn hình phụ
+  - màn hình
+  - bàn phím cơ
+  - chuột bluetooth
+  - logitech
+  - cáp chuyển đổi
+  - hdmi
+  - type-c
+  - đổi bàn phím
+  - mượn cáp
+  section_h1: Thiết bị & Phần cứng
+  section_h2: Cấp phát thiết bị
+  section_h3: Màn hình & Phụ kiện
+  section_hierarchy:
+    h1: Thiết bị & Phần cứng
+    h2: Cấp phát thiết bị
+    h3: Màn hình & Phụ kiện
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles: []
+  sensitivity: INTERNAL
+  clearance_level: 1
+  source_uri: docs/hdw_peripherals_allocation.md
+  owner: it-hardware@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: SOFT-KB-001
+  system: ALL
+  title: Hướng dẫn cài đặt phần mềm doanh nghiệp tiêu chuẩn (Slack, Zoom, Chrome)
+  category: Software & Applications
+  content: 'Cài đặt phần mềm chuẩn: Mở Self-Service Portal trên Mac hoặc Software
+    Center trên Windows để cài đặt Slack Enterprise, Zoom Workplace, Google Chrome
+    theo cấu hình chuẩn doanh nghiệp.'
+  keywords:
+  - phần mềm
+  - slack
+  - zoom
+  - chrome
+  - google chrome
+  - software center
+  - cài đặt phần mềm
+  section_h1: Phần mềm Doanh nghiệp
+  section_h2: Ứng dụng Tiêu chuẩn
+  section_h3: Slack Zoom Chrome
+  section_hierarchy:
+    h1: Phần mềm Doanh nghiệp
+    h2: Ứng dụng Tiêu chuẩn
+    h3: Slack Zoom Chrome
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles: []
+  sensitivity: PUBLIC
+  clearance_level: 0
+  source_uri: docs/soft_standard_apps.md
+  owner: it-helpdesk@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: IT-POL-003
+  system: ALL
+  title: Chính sách quản lý vòng đời ticket và bàn giao thiết bị CNTT
+  category: IT Governance
+  content: 'Chính sách IT Helpdesk: 1. Vòng đời ticket: Thời gian lưu trữ ticket sau
+    khi đóng là 3 năm phục vụ audit. Nhân viên có thể tra cứu lịch sử và tiến độ ticket
+    INC qua portal. 2. Bàn giao laptop khi nghỉ việc: Phải hoàn tất kiểm tra phần
+    cứng và bàn giao trước ngày làm việc cuối cùng.'
+  keywords:
+  - ticket
+  - vòng đời ticket
+  - lưu trữ ticket
+  - tiến độ ticket
+  - bàn giao máy tính
+  - nghỉ việc
+  - tra cứu ticket
+  - inc
+  section_h1: Quy chế CNTT
+  section_h2: Quản lý Dịch vụ IT
+  section_h3: Vòng đời Ticket & Bàn giao
+  section_hierarchy:
+    h1: Quy chế CNTT
+    h2: Quản lý Dịch vụ IT
+    h3: Vòng đời Ticket & Bàn giao
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles: []
+  sensitivity: INTERNAL
+  clearance_level: 1
+  source_uri: docs/it_lifecycle_policy.md
+  owner: it-governance@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: DIAG-KB-001
+  system: ALL
+  title: Quy trình phân tích nguyên nhân gốc rễ (RCA), crash log, OutOfMemory và segfault
+  category: Diagnostics & Engineering
+  content: 'Quy trình chẩn đoán sự cố L3: Phân tích stack trace, OutOfMemoryError
+    Java heap space, NullPointerException tại PaymentGatewayClient/SessionManager,
+    và core dump segfault libc.so.6. Thực hiện dump heap, phân tích GC log và rà soát
+    memory leaks.'
+  keywords:
+  - rca
+  - root cause analysis
+  - stack trace
+  - outofmemoryerror
+  - heap space
+  - nullpointerexception
+  - crash log
+  - segfault
+  - libc.so.6
+  section_h1: Kỹ thuật L3
+  section_h2: Chẩn đoán Sự cố
+  section_h3: Phân tích RCA & Crash Log
+  section_hierarchy:
+    h1: Kỹ thuật L3
+    h2: Chẩn đoán Sự cố
+    h3: Phân tích RCA & Crash Log
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles:
+  - it_admin
+  - security_auditor
+  sensitivity: CONFIDENTIAL
+  clearance_level: 2
+  source_uri: docs/diag_rca_crash_analysis.md
+  owner: l3-engineering@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: DIAG-KB-002
+  system: ALL
+  title: Xử lý sự cố deadlock database PostgreSQL và locking transactions
+  category: Diagnostics & Engineering
+  content: 'Khắc phục deadlock PostgreSQL: Phân tích pg_stat_activity, log ExclusiveLock
+    relation, kiểm tra lock wait timeout và tối ưu lại thứ tự cập nhật transaction
+    trong application.'
+  keywords:
+  - deadlock
+  - postgresql
+  - database
+  - exclusivelock
+  - lock wait
+  - pg_stat_activity
+  - database crash
+  section_h1: Kỹ thuật L3
+  section_h2: Database
+  section_h3: Xử lý Deadlock PostgreSQL
+  section_hierarchy:
+    h1: Kỹ thuật L3
+    h2: Database
+    h3: Xử lý Deadlock PostgreSQL
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles:
+  - it_admin
+  sensitivity: CONFIDENTIAL
+  clearance_level: 2
+  source_uri: docs/diag_postgres_deadlock.md
+  owner: dba-team@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: DIAG-KB-003
+  system: ALL
+  title: Chẩn đoán và phục hồi kết nối Redis Cluster Connection Pool
+  category: Diagnostics & Engineering
+  content: 'Xử lý sự cố Redis Cluster: Khi gặp lỗi connection pool exhausted vượt
+    ngưỡng 500 active clients, kiểm tra redis maxclients, kiểm tra connection leak
+    và tăng kích thước connection pool trong ứng dụng.'
+  keywords:
+  - redis
+  - redis cluster
+  - connection pool
+  - 500 active clients
+  - cache exhausted
+  - redis crash
+  section_h1: Kỹ thuật L3
+  section_h2: Caching & In-Memory DB
+  section_h3: Redis Cluster Sập Kết Nối
+  section_hierarchy:
+    h1: Kỹ thuật L3
+    h2: Caching & In-Memory DB
+    h3: Redis Cluster Sập Kết Nối
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles:
+  - it_admin
+  sensitivity: CONFIDENTIAL
+  clearance_level: 2
+  source_uri: docs/diag_redis_cluster_recovery.md
+  owner: devops@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: DIAG-KB-004
+  system: ALL
+  title: Khắc phục lỗi 504 Gateway Timeout trên hệ thống API Ingress Kubernetes
+  category: Diagnostics & Engineering
+  content: 'Xử lý lỗi 504 Gateway Timeout: Kiểm tra proxy-read-timeout trên Nginx
+    Ingress Controller, kiểm tra downstream microservices response latency và cấu
+    hình timeout gRPC/HTTP.'
+  keywords:
+  - '504'
+  - gateway timeout
+  - ingress
+  - kubernetes
+  - nginx ingress
+  - microservices
+  - timeout
+  section_h1: Kỹ thuật L3
+  section_h2: Kubernetes & Ingress
+  section_h3: 504 Gateway Timeout
+  section_hierarchy:
+    h1: Kỹ thuật L3
+    h2: Kubernetes & Ingress
+    h3: 504 Gateway Timeout
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles:
+  - it_admin
+  sensitivity: CONFIDENTIAL
+  clearance_level: 2
+  source_uri: docs/diag_504_gateway_timeout.md
+  owner: devops@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: DIAG-KB-005
+  system: ALL
+  title: Chẩn đoán và xử lý sự cố CPU Throttling 100% trên container Kubernetes
+  category: Diagnostics & Engineering
+  content: 'Xử lý CPU Throttling: Kiểm tra CFS quota (cpu.cfs_quota_us), nâng mức
+    CPU limits trên UserService deployment pod và kiểm tra thread contention trong
+    application.'
+  keywords:
+  - cpu throttling
+  - cpu 100%
+  - kubernetes
+  - container
+  - cfs quota
+  - userservice
+  - limits
+  section_h1: Kỹ thuật L3
+  section_h2: Kubernetes & Compute
+  section_h3: CPU Throttling 100%
+  section_hierarchy:
+    h1: Kỹ thuật L3
+    h2: Kubernetes & Compute
+    h3: CPU Throttling 100%
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles:
+  - it_admin
+  sensitivity: CONFIDENTIAL
+  clearance_level: 2
+  source_uri: docs/diag_cpu_throttling.md
+  owner: devops@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: DIAG-KB-006
+  system: ALL
+  title: Xử lý sự cố mất đồng bộ replica MongoDB Primary-Secondary lag > 300s
+  category: Diagnostics & Engineering
+  content: 'Xử lý MongoDB Replication Lag: Kiểm tra oplog size (rs.printReplicationInfo),
+    tăng băng thông mạng giữa các shard node và resync node secondary nếu cần.'
+  keywords:
+  - mongodb
+  - replica
+  - replication lag
+  - oplog
+  - sharded cluster
+  - primary secondary
+  - 300s
+  section_h1: Kỹ thuật L3
+  section_h2: Database
+  section_h3: MongoDB Replication Lag
+  section_hierarchy:
+    h1: Kỹ thuật L3
+    h2: Database
+    h3: MongoDB Replication Lag
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles:
+  - it_admin
+  sensitivity: CONFIDENTIAL
+  clearance_level: 2
+  source_uri: docs/diag_mongodb_replica_lag.md
+  owner: dba-team@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: DIAG-KB-007
+  system: ALL
+  title: Chẩn đoán và phân tích nguyên nhân rò rỉ bộ nhớ Memory Leak Node.js và JVM
+  category: Diagnostics & Engineering
+  content: 'Phân tích Memory Leak: Kiểm tra EventEmitter listener chưa hủy trên Node.js,
+    lấy heap snapshot bằng Chrome DevTools / V8 profiler, kiểm tra strong reference
+    trong caching map.'
+  keywords:
+  - memory leak
+  - rò rỉ bộ nhớ
+  - node.js
+  - eventemitter
+  - heap snapshot
+  - jvm heap dump
+  section_h1: Kỹ thuật L3
+  section_h2: Chẩn đoán Ứng dụng
+  section_h3: Memory Leak EventEmitter
+  section_hierarchy:
+    h1: Kỹ thuật L3
+    h2: Chẩn đoán Ứng dụng
+    h3: Memory Leak EventEmitter
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles:
+  - it_admin
+  sensitivity: CONFIDENTIAL
+  clearance_level: 2
+  source_uri: docs/diag_memory_leak.md
+  owner: l3-engineering@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: DIAG-KB-008
+  system: ALL
+  title: Khắc phục lỗi TLS Handshake Failure giữa API Gateway và máy chủ đối tác
+  category: Diagnostics & Engineering
+  content: 'Xử lý lỗi TLS Handshake: Kiểm tra chứng chỉ SSL/TLS CA certificate hết
+    hạn, kiểm tra cipher suite tương thích (TLS 1.2 vs TLS 1.3), và xác minh intermediate
+    certificate chain.'
+  keywords:
+  - tls handshake
+  - tls
+  - ssl
+  - api gateway
+  - handshake failure
+  - certificate
+  - cipher suite
+  section_h1: Kỹ thuật L3
+  section_h2: Mạng & Bảo mật
+  section_h3: TLS Handshake Failure
+  section_hierarchy:
+    h1: Kỹ thuật L3
+    h2: Mạng & Bảo mật
+    h3: TLS Handshake Failure
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles:
+  - it_admin
+  sensitivity: CONFIDENTIAL
+  clearance_level: 2
+  source_uri: docs/diag_tls_handshake.md
+  owner: network-ops@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: SLA-KB-001
+  system: ALL
+  title: Tiêu chuẩn cam kết chất lượng dịch vụ SLA Uptime 99.9% và 99.95%
+  category: Contracts & SLA
+  content: 'Điều khoản SLA Cloud: Cam kết Uptime 99.9% (tối đa downtime ~43.8 phút/tháng)
+    hoặc 99.95% (tối đa ~21.9 phút/tháng). Nếu vi phạm, nhà cung cấp phải hoàn trả
+    Service Credits theo tỷ lệ 10% - 25% phí hàng tháng.'
+  keywords:
+  - sla
+  - uptime
+  - 99.9%
+  - 99.95%
+  - service credits
+  - cam kết dịch vụ
+  - downtime
+  - hợp đồng sla
+  - sap cloud
+  section_h1: Hợp đồng & Pháp lý
+  section_h2: SLA & Cam kết Dịch vụ
+  section_h3: SLA Uptime 99.9% 99.95%
+  section_hierarchy:
+    h1: Hợp đồng & Pháp lý
+    h2: SLA & Cam kết Dịch vụ
+    h3: SLA Uptime 99.9% 99.95%
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles:
+  - executive
+  - it_admin
+  sensitivity: CONFIDENTIAL
+  clearance_level: 2
+  source_uri: docs/sla_cloud_commitments.md
+  owner: procurement-legal@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: SLA-KB-002
+  system: ALL
+  title: Điều khoản bồi thường thiệt hại sự cố dịch vụ Cloud AWS / GCP mất điện
+  category: Contracts & SLA
+  content: 'Quy định bồi thường trong hợp đồng nhà cung cấp Cloud (AWS/GCP): Trường
+    hợp datacenter gặp sự cố mất điện kéo dài, nhà cung cấp áp dụng chính sách Service
+    Credits đối trừ vào hóa đơn kỳ kế tiếp theo điều khoản bồi thường giới hạn.'
+  keywords:
+  - bồi thường
+  - aws
+  - gcp
+  - cloud
+  - sự cố mất điện
+  - datacenter
+  - hợp đồng dịch vụ
+  section_h1: Hợp đồng & Pháp lý
+  section_h2: SLA & Cam kết Dịch vụ
+  section_h3: Điều khoản bồi thường AWS
+  section_hierarchy:
+    h1: Hợp đồng & Pháp lý
+    h2: SLA & Cam kết Dịch vụ
+    h3: Điều khoản bồi thường AWS
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles:
+  - executive
+  - it_admin
+  sensitivity: CONFIDENTIAL
+  clearance_level: 2
+  source_uri: docs/sla_aws_compensation.md
+  owner: procurement-legal@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: SLA-KB-003
+  system: ALL
+  title: Quy định đơn phương chấm dứt hợp đồng dịch vụ hạ tầng mạng viễn thông
+  category: Contracts & SLA
+  content: 'Điều khoản chấm dứt hợp đồng sớm: Bên sử dụng dịch vụ có quyền đơn phương
+    chấm dứt hợp đồng mà không chịu phạt nếu nhà cung cấp vi phạm SLA nghiêm trọng
+    quá 3 lần liên tiếp trong quý mà không khắc phục sau 30 ngày thông báo.'
+  keywords:
+  - chấm dứt hợp đồng
+  - đơn phương chấm dứt
+  - phạt vi phạm
+  - hạ tầng mạng
+  - viễn thông
+  - không chịu phạt
+  section_h1: Hợp đồng & Pháp lý
+  section_h2: Chấm dứt Hợp đồng
+  section_h3: Đơn phương chấm dứt hợp đồng mạng
+  section_hierarchy:
+    h1: Hợp đồng & Pháp lý
+    h2: Chấm dứt Hợp đồng
+    h3: Đơn phương chấm dứt hợp đồng mạng
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles:
+  - executive
+  - it_admin
+  sensitivity: CONFIDENTIAL
+  clearance_level: 2
+  source_uri: docs/sla_early_termination.md
+  owner: procurement-legal@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: DPA-KB-001
+  system: ALL
+  title: Quy định chuyển giao dữ liệu cá nhân xuyên biên giới GDPR và DPA
+  category: Compliance & Privacy
+  content: 'Thỏa thuận xử lý dữ liệu (Data Processing Agreement - DPA): Quy định chuyển
+    giao dữ liệu cá nhân xuyên biên giới phải tuân thủ Standard Contractual Clauses
+    (SCC) và áp dụng mã hóa đầu cuối AES-256 trong quá trình truyền tải.'
+  keywords:
+  - dpa
+  - gdpr
+  - chuyển giao dữ liệu
+  - xuyên biên giới
+  - bảo vệ dữ liệu cá nhân
+  - scc
+  - data processing agreement
+  section_h1: Tuân thủ & Pháp lý
+  section_h2: Bảo vệ Dữ liệu Cá nhân
+  section_h3: Chuyển giao Xuyên biên giới DPA
+  section_hierarchy:
+    h1: Tuân thủ & Pháp lý
+    h2: Bảo vệ Dữ liệu Cá nhân
+    h3: Chuyển giao Xuyên biên giới DPA
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles:
+  - executive
+  - security_auditor
+  sensitivity: CONFIDENTIAL
+  clearance_level: 2
+  source_uri: docs/dpa_cross_border_transfer.md
+  owner: compliance-legal@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
+- id: DPA-KB-002
+  system: ALL
+  title: Trách nhiệm pháp lý và phạt vi phạm bảo vệ dữ liệu cá nhân theo Nghị định
+    13/2023/NĐ-CP
+  category: Compliance & Privacy
+  content: 'Tuân thủ Nghị định 13/2023/NĐ-CP về bảo vệ dữ liệu cá nhân: Nhà cung cấp
+    dịch vụ IT phải thông báo sự cố rò rỉ dữ liệu trong vòng 72 giờ cho Bộ Công an
+    (Cục An ninh mạng) và khách hàng, đồng thời chịu trách nhiệm bồi thường thiệt
+    hại theo quy định pháp luật.'
+  keywords:
+  - nghị định 13
+  - nghị định 13/2023/nđ-cp
+  - rò rỉ dữ liệu
+  - phạt vi phạm
+  - dữ liệu khách hàng
+  - 72 giờ
+  - bảo vệ dữ liệu cá nhân
+  section_h1: Tuân thủ & Pháp lý
+  section_h2: Nghị định 13
+  section_h3: Xử lý vi phạm rò rỉ dữ liệu
+  section_hierarchy:
+    h1: Tuân thủ & Pháp lý
+    h2: Nghị định 13
+    h3: Xử lý vi phạm rò rỉ dữ liệu
+  parent_doc_id: null
+  chunk_index: 0
+  allowed_roles:
+  - executive
+  - security_auditor
+  sensitivity: CONFIDENTIAL
+  clearance_level: 2
+  source_uri: docs/dpa_nd13_compliance.md
+  owner: compliance-legal@company.com
+  effective_date: '2025-01-01'
+  expiry_date: null
+  is_deleted: false
+  deleted_at: null
