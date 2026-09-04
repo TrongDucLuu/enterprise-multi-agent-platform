@@ -202,6 +202,17 @@ class BaseSemanticCache(ABC):
 
 
 from agent_core.app_utils.env import is_production_mode
+from agent_core.app_utils.embedding_utils import _get_cached_embedding, _set_cached_embedding
+
+SEMANTIC_CACHE_MAX_CANDIDATES = int(os.getenv("SEMANTIC_CACHE_MAX_CANDIDATES", "200"))
+
+GLOBAL_CACHE_METRICS: Dict[str, Any] = {
+    "cache_embedding_calls_total": 0,
+    "cache_scan_candidates_total": 0,
+    "cache_lookup_latency_ms_total": 0.0,
+    "cache_lookup_count": 0,
+    "cache_hit_count": 0,
+}
 
 
 class InMemorySemanticCache(BaseSemanticCache):
@@ -216,6 +227,7 @@ class InMemorySemanticCache(BaseSemanticCache):
         default_ttl_seconds: int = 86400,
         default_public_ttl_seconds: int = 14400,
         max_size: int = 1000,
+        max_candidates: Optional[int] = None,
         embedding_fn: Optional[Callable[[str], list[float]]] = None,
     ):
         super().__init__(similarity_threshold=similarity_threshold)
@@ -226,14 +238,33 @@ class InMemorySemanticCache(BaseSemanticCache):
             os.getenv("SEMANTIC_CACHE_PUBLIC_TTL_SECONDS", default_public_ttl_seconds)
         )
         self.max_size = max_size
+        self.max_candidates = int(
+            max_candidates
+            if max_candidates is not None
+            else os.getenv("SEMANTIC_CACHE_MAX_CANDIDATES", str(SEMANTIC_CACHE_MAX_CANDIDATES))
+        )
         self._embedding_fn = embedding_fn
         self._entries: list[SemanticCacheEntry] = []
+        self._exact_index: dict[str, SemanticCacheEntry] = {}
         self._total_lookups = 0
         self._total_hits = 0
+        self._last_scan_candidates = 0
+
+    def _get_exact_key(
+        self,
+        query: str,
+        user_id: Optional[str] = None,
+        is_public: bool = False,
+        clearance_level: int = 0,
+    ) -> str:
+        scope = "public" if is_public else f"user_{user_id or 'anon'}"
+        cleaned = re.sub(r"[^\w\s]", "", query.lower()).strip()
+        pack = os.getenv("DOMAIN_PACK", "default")
+        return f"{pack}:{scope}:{clearance_level}:{cleaned}"
 
     def _generate_embedding(self, text: str) -> Optional[list[float]]:
         """
-        Generates embedding for a query text.
+        Generates embedding for a query text with caching reuse from embedding_utils.
         
         Fail-Closed in Production:
         If running in production (ENVIRONMENT=production, K_SERVICE set), real Vertex AI
@@ -243,8 +274,15 @@ class InMemorySemanticCache(BaseSemanticCache):
         
         In local dev/test environments, falls back to ASCII character-hash vectors.
         """
+        GLOBAL_CACHE_METRICS["cache_embedding_calls_total"] += 1
+
         if self._embedding_fn:
             return self._embedding_fn(text)
+
+        cache_key = f"sem_cache_mem_emb:{text.strip()}"
+        cached = _get_cached_embedding(cache_key)
+        if cached is not None:
+            return cached
 
         use_vertex = os.getenv("USE_VERTEX_EMBEDDING", "false").lower() in ("true", "1", "yes")
         in_prod = is_production_mode()
@@ -254,7 +292,9 @@ class InMemorySemanticCache(BaseSemanticCache):
                 from vertexai.language_models import TextEmbeddingModel
                 model = TextEmbeddingModel.from_pretrained("text-embedding-005")
                 embeddings = model.get_embeddings([text])
-                return embeddings[0].values
+                res = embeddings[0].values
+                _set_cached_embedding(cache_key, res)
+                return res
             except Exception as e:
                 if in_prod:
                     logger.error("Fail-Closed: Vertex AI embedding error in production (%s). Bypassing semantic cache.", e)
@@ -277,7 +317,9 @@ class InMemorySemanticCache(BaseSemanticCache):
             vec[idx] += 2.0
 
         norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-        return [x / norm for x in vec]
+        res = [x / norm for x in vec]
+        _set_cached_embedding(cache_key, res)
+        return res
 
     def get(
         self,
@@ -287,38 +329,79 @@ class InMemorySemanticCache(BaseSemanticCache):
         tier: Optional[str] = None,
         clearance_level: Optional[int] = None,
     ) -> Optional[dict]:
+        t0 = time.perf_counter()
         if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
             return None
 
+        self._total_lookups += 1
+        caller_clearance = resolve_caller_clearance(user_id=user_id, clearance_level=clearance_level)
+        threshold = similarity_threshold or self.get_tier_threshold(tier)
+
+        # 1. Exact Match Fast Path (O(1))
+        exact_k_pub = self._get_exact_key(query, user_id=None, is_public=True, clearance_level=0)
+        exact_k_user = self._get_exact_key(query, user_id=user_id, is_public=False, clearance_level=caller_clearance) if user_id else None
+
+        exact_entry = self._exact_index.get(exact_k_pub) or (self._exact_index.get(exact_k_user) if exact_k_user else None)
+        if exact_entry and not exact_entry.is_expired() and exact_entry.clearance_level <= caller_clearance:
+            exact_entry.hit_count += 1
+            self._total_hits += 1
+            dt_ms = (time.perf_counter() - t0) * 1000.0
+            GLOBAL_CACHE_METRICS["cache_scan_candidates_total"] += 1
+            GLOBAL_CACHE_METRICS["cache_lookup_latency_ms_total"] += dt_ms
+            GLOBAL_CACHE_METRICS["cache_lookup_count"] += 1
+            GLOBAL_CACHE_METRICS["cache_hit_count"] += 1
+            self._last_scan_candidates = 1
+            return {
+                "status": "cache_hit",
+                "cached_query": exact_entry.query,
+                "response": exact_entry.response,
+                "similarity": 1.0,
+                "tier": exact_entry.tier,
+                "clearance_level": exact_entry.clearance_level,
+                "hits": exact_entry.hit_count,
+                "is_public": exact_entry.is_public,
+                "metadata": exact_entry.metadata,
+            }
+
+        # 2. Semantic Search with Candidate Set Limiting
         query_emb = self._generate_embedding(query)
         if query_emb is None:
             return None
 
-        self._total_lookups += 1
-        threshold = similarity_threshold or self.get_tier_threshold(tier)
-        caller_clearance = resolve_caller_clearance(user_id=user_id, clearance_level=clearance_level)
+        # Filter valid candidates
+        valid_candidates = [
+            e for e in self._entries
+            if not e.is_expired()
+            and (e.is_public or (user_id is not None and e.user_id == user_id))
+            and e.clearance_level <= caller_clearance
+        ]
 
-        self._entries = [e for e in self._entries if not e.is_expired()]
+        # Apply Candidate Set Limiting (LRU / recent subset)
+        if len(valid_candidates) > self.max_candidates:
+            candidates_to_scan = valid_candidates[-self.max_candidates:]
+        else:
+            candidates_to_scan = valid_candidates
+
+        self._last_scan_candidates = len(candidates_to_scan)
+        GLOBAL_CACHE_METRICS["cache_scan_candidates_total"] += len(candidates_to_scan)
 
         best_match: Optional[SemanticCacheEntry] = None
         highest_sim = -1.0
 
-        for entry in self._entries:
-            can_access = entry.is_public or (user_id is not None and entry.user_id == user_id)
-            if not can_access:
-                continue
-
-            if entry.clearance_level > caller_clearance:
-                continue
-
+        for entry in candidates_to_scan:
             sim = cosine_similarity(query_emb, entry.embedding)
             if sim > highest_sim:
                 highest_sim = sim
                 best_match = entry
 
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        GLOBAL_CACHE_METRICS["cache_lookup_latency_ms_total"] += dt_ms
+        GLOBAL_CACHE_METRICS["cache_lookup_count"] += 1
+
         if best_match and highest_sim >= threshold:
             best_match.hit_count += 1
             self._total_hits += 1
+            GLOBAL_CACHE_METRICS["cache_hit_count"] += 1
             return {
                 "status": "cache_hit",
                 "cached_query": best_match.query,
@@ -365,7 +448,9 @@ class InMemorySemanticCache(BaseSemanticCache):
 
         if len(self._entries) >= self.max_size:
             self._entries.sort(key=lambda x: x.hit_count)
-            self._entries.pop(0)
+            evicted = self._entries.pop(0)
+            evicted_k = self._get_exact_key(evicted.query, evicted.user_id, evicted.is_public, evicted.clearance_level)
+            self._exact_index.pop(evicted_k, None)
 
         entry = SemanticCacheEntry(
             query=query,
@@ -381,10 +466,13 @@ class InMemorySemanticCache(BaseSemanticCache):
             metadata=metadata or {},
         )
         self._entries.append(entry)
+        exact_k = self._get_exact_key(query, user_id=user_id, is_public=is_public, clearance_level=eff_clearance)
+        self._exact_index[exact_k] = entry
         return entry
 
     def clear(self) -> None:
         self._entries.clear()
+        self._exact_index.clear()
         self._total_lookups = 0
         self._total_hits = 0
 
@@ -410,7 +498,15 @@ class InMemorySemanticCache(BaseSemanticCache):
                 return False
             return True
 
-        self._entries = [e for e in self._entries if should_retain(e)]
+        retained = []
+        for e in self._entries:
+            if should_retain(e):
+                retained.append(e)
+            else:
+                k = self._get_exact_key(e.query, e.user_id, e.is_public, e.clearance_level)
+                self._exact_index.pop(k, None)
+
+        self._entries = retained
         invalidated_count = initial_len - len(self._entries)
         if invalidated_count > 0:
             logger.info("InMemorySemanticCache invalidated %d entries for (article_id=%s, system=%s)", invalidated_count, article_id, system)
@@ -422,6 +518,11 @@ class InMemorySemanticCache(BaseSemanticCache):
             if self._total_lookups > 0
             else 0.0
         )
+        avg_latency = (
+            round(GLOBAL_CACHE_METRICS["cache_lookup_latency_ms_total"] / GLOBAL_CACHE_METRICS["cache_lookup_count"], 3)
+            if GLOBAL_CACHE_METRICS["cache_lookup_count"] > 0
+            else 0.0
+        )
         return {
             "total_entries": len(self._entries),
             "total_lookups": self._total_lookups,
@@ -429,6 +530,9 @@ class InMemorySemanticCache(BaseSemanticCache):
             "hit_rate_percent": hit_rate,
             "similarity_threshold": self.similarity_threshold,
             "backend": "memory",
+            "max_candidates": self.max_candidates,
+            "last_scan_candidates": self._last_scan_candidates,
+            "cache_lookup_latency_ms_avg": avg_latency,
         }
 
 
@@ -500,14 +604,24 @@ class RedisSemanticCache(BaseSemanticCache):
     def public_keys_set(self) -> str:
         return f"sem_cache:v{self.kb_version}:keys:public"
 
+    @property
+    def public_zset(self) -> str:
+        return f"sem_cache:v{self.kb_version}:zkeys:public"
+
     def user_keys_set(self, user_id: str) -> str:
         return f"sem_cache:v{self.kb_version}:keys:user:{user_id}"
+
+    def user_zset(self, user_id: str) -> str:
+        return f"sem_cache:v{self.kb_version}:zkeys:user:{user_id}"
 
     def entry_key(self, entry_id: str) -> str:
         return f"sem_cache:v{self.kb_version}:entry:{entry_id}"
 
     def user_keys_pattern(self) -> str:
         return f"sem_cache:v{self.kb_version}:keys:user:*"
+
+    def user_zset_pattern(self) -> str:
+        return f"sem_cache:v{self.kb_version}:zkeys:user:*"
 
     def _allow_request(self) -> bool:
         """
@@ -614,11 +728,17 @@ class RedisSemanticCache(BaseSemanticCache):
 
     def _generate_embedding(self, text: str) -> Optional[list[float]]:
         """
-        Generates embedding vector for caching and similarity search.
+        Generates embedding vector for caching and similarity search with cache reuse.
         Fail-Closed in Production: Returns None if Vertex AI is not configured or fails.
         """
+        GLOBAL_CACHE_METRICS["cache_embedding_calls_total"] += 1
         if self._embedding_fn:
             return self._embedding_fn(text)
+
+        cache_key = f"sem_cache_redis_emb:{text.strip()}"
+        cached = _get_cached_embedding(cache_key)
+        if cached is not None:
+            return cached
 
         use_vertex = os.getenv("USE_VERTEX_EMBEDDING", "false").lower() in ("true", "1", "yes")
         in_prod = is_production_mode()
@@ -628,7 +748,9 @@ class RedisSemanticCache(BaseSemanticCache):
                 from vertexai.language_models import TextEmbeddingModel
                 model = TextEmbeddingModel.from_pretrained("text-embedding-005")
                 embeddings = model.get_embeddings([text])
-                return embeddings[0].values
+                res = embeddings[0].values
+                _set_cached_embedding(cache_key, res)
+                return res
             except Exception as e:
                 if in_prod:
                     logger.error("Fail-Closed: Vertex AI embedding error in production (%s). Bypassing semantic cache.", e)
@@ -651,7 +773,9 @@ class RedisSemanticCache(BaseSemanticCache):
             vec[idx] += 2.0
 
         norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-        return [x / norm for x in vec]
+        res = [x / norm for x in vec]
+        _set_cached_embedding(cache_key, res)
+        return res
 
     def _get_entry_id(
         self,
@@ -679,15 +803,12 @@ class RedisSemanticCache(BaseSemanticCache):
         Fetches best semantic match from Redis.
         Soft Fail-Closed: Returns None on any Redis error or circuit break.
         """
+        t0 = time.perf_counter()
         if not os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() in ("true", "1", "yes"):
             return None
 
         if not self._allow_request():
             logger.debug("RedisSemanticCache circuit breaker is OPEN. Fast bypassing get().")
-            return None
-
-        query_emb = self._generate_embedding(query)
-        if query_emb is None:
             return None
 
         self._local_lookups += 1
@@ -699,22 +820,76 @@ class RedisSemanticCache(BaseSemanticCache):
             if self._redis is None:
                 return None
 
-        # Multi-tenant Candidate-Set Scan with Vector Cosine Similarity
+        max_candidates = int(os.getenv("SEMANTIC_CACHE_MAX_CANDIDATES", str(SEMANTIC_CACHE_MAX_CANDIDATES)))
+
         try:
-            candidate_entry_ids = set()
-            public_ids = self._redis.smembers(self.public_keys_set) or set()
-            candidate_entry_ids.update(public_ids)
+            # 1. Exact Match Fast Path (O(1) Redis GET)
+            exact_eid_pub = self._get_entry_id(query, user_id=None, is_public=True, clearance_level=0)
+            exact_eid_user = self._get_entry_id(query, user_id=user_id, is_public=False, clearance_level=caller_clearance) if user_id else None
+
+            exact_keys = [self.entry_key(exact_eid_pub)]
+            if exact_eid_user:
+                exact_keys.append(self.entry_key(exact_eid_user))
+
+            raw_exact_entries = self._redis.mget(exact_keys)
+            for raw_json in raw_exact_entries:
+                if not raw_json:
+                    continue
+                try:
+                    data = json.loads(raw_json)
+                    exact_entry = SemanticCacheEntry.from_dict(data)
+                    if not exact_entry.is_expired() and exact_entry.clearance_level <= caller_clearance:
+                        exact_entry.hit_count += 1
+                        self._local_hits += 1
+                        dt_ms = (time.perf_counter() - t0) * 1000.0
+                        GLOBAL_CACHE_METRICS["cache_scan_candidates_total"] += 1
+                        GLOBAL_CACHE_METRICS["cache_lookup_latency_ms_total"] += dt_ms
+                        GLOBAL_CACHE_METRICS["cache_lookup_count"] += 1
+                        GLOBAL_CACHE_METRICS["cache_hit_count"] += 1
+                        self._record_redis_success()
+                        return {
+                            "status": "cache_hit",
+                            "cached_query": exact_entry.query,
+                            "response": exact_entry.response,
+                            "similarity": 1.0,
+                            "tier": exact_entry.tier,
+                            "clearance_level": exact_entry.clearance_level,
+                            "hits": exact_entry.hit_count,
+                            "is_public": exact_entry.is_public,
+                            "metadata": exact_entry.metadata,
+                        }
+                except Exception:
+                    pass
+
+            # 2. Semantic Search Path with Candidate Set Limiting
+            query_emb = self._generate_embedding(query)
+            if query_emb is None:
+                return None
+
+            candidate_entry_ids = []
+            
+            # Fetch from ZSETs (sorted by recent access/creation)
+            pub_z_ids = self._redis.zrevrange(self.public_zset, 0, max_candidates - 1)
+            if not pub_z_ids:
+                pub_z_ids = list(self._redis.smembers(self.public_keys_set) or [])
+            candidate_entry_ids.extend(pub_z_ids)
 
             if user_id:
-                user_ids = self._redis.smembers(self.user_keys_set(user_id)) or set()
-                candidate_entry_ids.update(user_ids)
+                user_z_ids = self._redis.zrevrange(self.user_zset(user_id), 0, max_candidates - 1)
+                if not user_z_ids:
+                    user_z_ids = list(self._redis.smembers(self.user_keys_set(user_id)) or [])
+                candidate_entry_ids.extend(user_z_ids)
 
             if not candidate_entry_ids:
                 self._record_redis_success()
                 return None
 
+            # Deduplicate and limit to max_candidates
+            unique_candidates = list(dict.fromkeys(candidate_entry_ids))[:max_candidates]
+            GLOBAL_CACHE_METRICS["cache_scan_candidates_total"] += len(unique_candidates)
+
             # Fetch candidate entries in one batch
-            entry_keys = [self.entry_key(eid) for eid in candidate_entry_ids]
+            entry_keys = [self.entry_key(eid) for eid in unique_candidates]
             raw_entries = self._redis.mget(entry_keys)
 
             best_match: Optional[SemanticCacheEntry] = None
@@ -722,7 +897,7 @@ class RedisSemanticCache(BaseSemanticCache):
             highest_sim = -1.0
             expired_ids = []
 
-            for eid, raw_json in zip(candidate_entry_ids, raw_entries):
+            for eid, raw_json in zip(unique_candidates, raw_entries):
                 if not raw_json:
                     expired_ids.append(eid)
                     continue
@@ -749,24 +924,31 @@ class RedisSemanticCache(BaseSemanticCache):
                     logger.warning("RedisSemanticCache error deserializing cache entry %s: %s. Skipping entry.", eid, entry_err)
                     expired_ids.append(eid)
 
-            # Lazy cleanup of expired keys in sets
+            # Lazy cleanup of expired keys in sets and zsets
             if expired_ids:
                 try:
                     pipe = self._redis.pipeline()
                     pipe.srem(self.public_keys_set, *expired_ids)
+                    pipe.zrem(self.public_zset, *expired_ids)
                     if user_id:
                         pipe.srem(self.user_keys_set(user_id), *expired_ids)
+                        pipe.zrem(self.user_zset(user_id), *expired_ids)
                     pipe.execute()
                 except Exception as cleanup_err:
                     logger.warning("RedisSemanticCache lazy cleanup error: %s", cleanup_err)
 
             self._record_redis_success()
 
+            dt_ms = (time.perf_counter() - t0) * 1000.0
+            GLOBAL_CACHE_METRICS["cache_lookup_latency_ms_total"] += dt_ms
+            GLOBAL_CACHE_METRICS["cache_lookup_count"] += 1
+
             if best_match and highest_sim >= threshold and best_entry_id:
                 best_match.hit_count += 1
                 self._local_hits += 1
+                GLOBAL_CACHE_METRICS["cache_hit_count"] += 1
 
-                # Update hit count asynchronously in Redis
+                # Update hit count asynchronously in Redis & touch zset
                 try:
                     pipe = self._redis.pipeline()
                     pipe.set(
@@ -774,6 +956,10 @@ class RedisSemanticCache(BaseSemanticCache):
                         json.dumps(best_match.to_dict()),
                         keepttl=True
                     )
+                    if best_match.is_public:
+                        pipe.zadd(self.public_zset, {best_entry_id: time.time()})
+                    elif user_id:
+                        pipe.zadd(self.user_zset(user_id), {best_entry_id: time.time()})
                     pipe.execute()
                 except Exception as hit_err:
                     logger.warning("RedisSemanticCache error updating hit count: %s", hit_err)
@@ -858,7 +1044,7 @@ class RedisSemanticCache(BaseSemanticCache):
         try:
             pipe = self._redis.pipeline()
 
-            # Store standard JSON entry & set indexing
+            # Store standard JSON entry & set / zset indexing
             entry_k = self.entry_key(entry_id)
             serialized = json.dumps(entry.to_dict())
             if ttl > 0:
@@ -868,8 +1054,10 @@ class RedisSemanticCache(BaseSemanticCache):
 
             if is_public:
                 pipe.sadd(self.public_keys_set, entry_id)
+                pipe.zadd(self.public_zset, {entry_id: time.time()})
             elif user_id:
                 pipe.sadd(self.user_keys_set(user_id), entry_id)
+                pipe.zadd(self.user_zset(user_id), {entry_id: time.time()})
 
             pipe.execute()
             self._record_redis_success()
@@ -888,19 +1076,23 @@ class RedisSemanticCache(BaseSemanticCache):
             public_keys = list(self._redis.smembers(self.public_keys_set) or [])
             all_entry_keys = [self.entry_key(eid) for eid in public_keys]
 
-            # Find user sets
+            # Find user sets and zsets
             user_sets = list(self._redis.keys(self.user_keys_pattern()) or [])
+            user_zsets = list(self._redis.keys(self.user_zset_pattern()) or [])
             for u_set in user_sets:
                 u_keys = list(self._redis.smembers(u_set) or [])
                 all_entry_keys.extend([self.entry_key(eid) for eid in u_keys])
 
-            if all_entry_keys or user_sets or public_keys:
+            if all_entry_keys or user_sets or user_zsets or public_keys:
                 pipe = self._redis.pipeline()
                 if all_entry_keys:
                     pipe.delete(*all_entry_keys)
                 if user_sets:
                     pipe.delete(*user_sets)
+                if user_zsets:
+                    pipe.delete(*user_zsets)
                 pipe.delete(self.public_keys_set)
+                pipe.delete(self.public_zset)
                 pipe.execute()
 
             self._local_lookups = 0
@@ -956,11 +1148,15 @@ class RedisSemanticCache(BaseSemanticCache):
                     ids_to_delete.append(eid)
 
             if ids_to_delete:
+                user_zsets = list(self._redis.keys(self.user_zset_pattern()) or [])
                 pipe = self._redis.pipeline()
                 pipe.delete(*[self.entry_key(eid) for eid in ids_to_delete])
                 pipe.srem(self.public_keys_set, *ids_to_delete)
+                pipe.zrem(self.public_zset, *ids_to_delete)
                 for u_set in user_sets:
                     pipe.srem(u_set, *ids_to_delete)
+                for u_zset in user_zsets:
+                    pipe.zrem(u_zset, *ids_to_delete)
                 pipe.execute()
                 self._record_redis_success()
                 return len(ids_to_delete)
@@ -987,6 +1183,11 @@ class RedisSemanticCache(BaseSemanticCache):
             if self._local_lookups > 0
             else 0.0
         )
+        avg_latency = (
+            round(GLOBAL_CACHE_METRICS["cache_lookup_latency_ms_total"] / GLOBAL_CACHE_METRICS["cache_lookup_count"], 3)
+            if GLOBAL_CACHE_METRICS["cache_lookup_count"] > 0
+            else 0.0
+        )
         return {
             "total_entries": total_entries,
             "total_lookups": self._local_lookups,
@@ -996,6 +1197,8 @@ class RedisSemanticCache(BaseSemanticCache):
             "backend": "redis",
             "circuit_breaker_tripped": self._circuit_breaker_tripped,
             "consecutive_failures": self._consecutive_redis_failures,
+            "cache_embedding_calls_total": GLOBAL_CACHE_METRICS["cache_embedding_calls_total"],
+            "cache_lookup_latency_ms_avg": avg_latency,
         }
 
 
