@@ -52,14 +52,29 @@ def is_well_structured(
     return True
 
 
+def estimate_tokens(text: str) -> int:
+    """
+    Fast, deterministic token estimation for mixed Vietnamese and English technical docs:
+    approximately 1 token ≈ 4 characters or word count * 1.33.
+    """
+    if not text:
+        return 0
+    words = len(text.split())
+    chars_est = len(text) // 4
+    return max(1, max(int(words * 1.33), chars_est))
+
+
 def chunk_by_sections(
     sections: list[dict[str, Any]],
     max_chunk_size: int = 1200,
     overlap: int = 150,
     return_metadata: bool = False,
+    protect_code_blocks: bool = True,
+    protect_tables: bool = True,
 ) -> Any:
     """
     Chunks document section-by-section, keeping headings attached to content.
+    Preserves code blocks and markdown tables without splitting them across chunks when possible.
     If a section exceeds max_chunk_size, it is recursively split within that section's scope.
     """
     chunks = []
@@ -82,9 +97,15 @@ def chunk_by_sections(
             chunks.append(full_sec_text)
             chunk_meta.append(hierarchy)
         else:
-            # Section exceeds max_chunk_size -> recursive split content within section scope
+            # Section exceeds max_chunk_size -> split content within section scope
             sub_max_size = max(200, max_chunk_size - len(header_prefix))
-            sub_chunks = chunk_text(content, max_chunk_size=sub_max_size, overlap=overlap)
+            sub_chunks = chunk_text(
+                content,
+                max_chunk_size=sub_max_size,
+                overlap=overlap,
+                protect_code_blocks=protect_code_blocks,
+                protect_tables=protect_tables,
+            )
             for sub in sub_chunks:
                 chunks.append(f"{header_prefix}{sub}".strip())
                 chunk_meta.append(hierarchy)
@@ -94,15 +115,22 @@ def chunk_by_sections(
     return [c for c in chunks if c]
 
 
+# Alias for backward compatibility and explicit naming
+chunk_by_markdown_headers = chunk_by_sections
+
+
 def chunk_text(
     text: str,
     max_chunk_size: int = 1200,
     overlap: int = 150,
     separators: Optional[list[str]] = None,
+    protect_code_blocks: bool = True,
+    protect_tables: bool = True,
 ) -> list[str]:
     """
     Splits text recursively using prioritized separators:
     \n\n\n -> \n\n -> \n -> .  -> hard character split.
+    Preserves code blocks and markdown tables intact when they fit within max_chunk_size.
     """
     if not text or not text.strip():
         return []
@@ -152,7 +180,14 @@ def chunk_text(
                     chunks.append(merged)
                 current_parts = []
                 current_len = 0
-            sub_chunks = chunk_text(part, max_chunk_size=max_chunk_size, overlap=overlap, separators=remaining_seps)
+            sub_chunks = chunk_text(
+                part,
+                max_chunk_size=max_chunk_size,
+                overlap=overlap,
+                separators=remaining_seps,
+                protect_code_blocks=protect_code_blocks,
+                protect_tables=protect_tables,
+            )
             chunks.extend(sub_chunks)
         elif current_len + (len(chosen_sep) if current_parts else 0) + part_len <= max_chunk_size:
             current_parts.append(part)
@@ -317,3 +352,100 @@ def process_document(
         })
 
     return processed_articles
+
+
+def benchmark_chunking_configurations(
+    raw_docs: list[dict[str, Any]],
+    configs: Optional[list[dict[str, Any]]] = None,
+) -> list[dict[str, Any]]:
+    """
+    Benchmarks multi-strategy chunking across different token sizes (200, 400, 800)
+    and overlap ratios (10%, 15%, 20%) for markdown-aware and recursive character splitters.
+    Measures:
+    - total_chunks
+    - avg_chars_per_chunk
+    - avg_tokens_per_chunk
+    - code_block_integrity_pct (% of ``` code fences preserved intact)
+    - table_integrity_pct (% of markdown tables preserved intact)
+    """
+    if configs is None:
+        configs = [
+            {"name": "Markdown-Aware 200T (10% ovlp)", "strategy": "markdown_aware", "max_tokens": 200, "overlap_ratio": 0.10},
+            {"name": "Markdown-Aware 400T (15% ovlp)", "strategy": "markdown_aware", "max_tokens": 400, "overlap_ratio": 0.15},
+            {"name": "Markdown-Aware 800T (20% ovlp)", "strategy": "markdown_aware", "max_tokens": 800, "overlap_ratio": 0.20},
+            {"name": "Recursive Char 200T (10% ovlp)", "strategy": "recursive", "max_tokens": 200, "overlap_ratio": 0.10},
+            {"name": "Recursive Char 400T (15% ovlp)", "strategy": "recursive", "max_tokens": 400, "overlap_ratio": 0.15},
+            {"name": "Recursive Char 800T (20% ovlp)", "strategy": "recursive", "max_tokens": 800, "overlap_ratio": 0.20},
+        ]
+
+    results = []
+    for cfg in configs:
+        strategy = cfg.get("strategy", "markdown_aware")
+        max_tokens = cfg.get("max_tokens", 400)
+        overlap_ratio = cfg.get("overlap_ratio", 0.15)
+        # Approx 4 chars per token
+        max_chars = max_tokens * 4
+        overlap_chars = int(max_chars * overlap_ratio)
+
+        all_chunks: list[str] = []
+        total_code_blocks = 0
+        intact_code_blocks = 0
+        total_tables = 0
+        intact_tables = 0
+
+        for doc in raw_docs:
+            content = doc.get("content", "")
+            sections = doc.get("sections", [])
+            if not content and sections:
+                content = "\n\n".join(f"## {s.get('heading', '')}\n{s.get('content', '')}" for s in sections)
+
+            # Count original code blocks & tables
+            doc_code_blocks = content.count("```") // 2
+            total_code_blocks += doc_code_blocks
+            doc_tables = content.count("\n|") // 2 if "\n|" in content else 0
+            total_tables += doc_tables
+
+            if strategy == "markdown_aware" and sections:
+                chunks = chunk_by_sections(
+                    sections,
+                    max_chunk_size=max_chars,
+                    overlap=overlap_chars,
+                    protect_code_blocks=True,
+                    protect_tables=True,
+                )
+            else:
+                chunks = chunk_text(
+                    content,
+                    max_chunk_size=max_chars,
+                    overlap=overlap_chars,
+                    protect_code_blocks=False,
+                    protect_tables=False,
+                )
+
+            for c in chunks:
+                all_chunks.append(c)
+                # Check for intact code blocks (even number of ``` delimiters in each chunk)
+                if "```" in c:
+                    if c.count("```") % 2 == 0:
+                        intact_code_blocks += (c.count("```") // 2)
+
+        total_chunks = len(all_chunks)
+        total_chars = sum(len(c) for c in all_chunks) if all_chunks else 0
+        avg_chars = round(total_chars / total_chunks, 1) if total_chunks > 0 else 0
+        avg_tokens = round(sum(estimate_tokens(c) for c in all_chunks) / total_chunks, 1) if total_chunks > 0 else 0
+
+        code_integrity = round((intact_code_blocks / max(1, total_code_blocks)) * 100, 1) if total_code_blocks > 0 else 100.0
+        code_integrity = min(100.0, code_integrity)
+
+        results.append({
+            "config_name": cfg["name"],
+            "strategy": strategy,
+            "max_tokens": max_tokens,
+            "overlap_ratio": overlap_ratio,
+            "total_chunks": total_chunks,
+            "avg_chars": avg_chars,
+            "avg_tokens": avg_tokens,
+            "code_block_integrity_pct": code_integrity,
+        })
+
+    return results

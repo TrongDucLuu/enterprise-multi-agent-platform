@@ -1,0 +1,75 @@
+- id: "TECH-MANUAL-ERP-01"
+  title: "Sổ Tay Vận Hành & Khắc Phục Sự Cố Hệ Thống SAP ERP Doanh Nghiệp"
+  system: "ERP"
+  category: "Technical Runbook"
+  allowed_roles: ["it_admin", "admin"]
+  clearance_level: 2
+  keywords: ["sap", "erp", "runbook", "khắc phục", "database", "mã lỗi"]
+  sections:
+    - heading: "1. Kiến trúc Tổng quan và Cấu hình Kết nối SAP ERP"
+      content: |
+        Hệ thống SAP ERP Core của doanh nghiệp được triển khai trên cụm máy chủ phân tán.
+        Mọi kết nối từ client SAP GUI yêu cầu xác thực qua Secure Network Communications (SNC) và cổng 3200-3300.
+
+        Cấu hình thông số kernel và gateway:
+        ```ini
+        gw/sec_info = /usr/sap/ERP/SYS/global/secinfo
+        gw/reg_info = /usr/sap/ERP/SYS/global/reginfo
+        rdisp/max_wprun_time = 600
+        ```
+    - heading: "2. Bảng Tra Cứu Mã Lỗi Thường Gặp và Phương Án Xử Lý"
+      content: |
+        Dưới đây là bảng tổng hợp các mã lỗi runtime dump và phương án xử lý tức thì:
+
+        | Mã Lỗi | Ý Nghĩa Kỹ Thuật | Nguyên Nhân Thường Gặp | Hành Động Xử Lý |
+        |---|---|---|---|
+        | `DBIF_RSQL_SQL_ERROR` | Lỗi truy vấn cơ sở dữ liệu | Khóa bảng (Deadlock) hoặc tràn bộ nhớ đệm | Kiểm tra SM50, hủy tiến trình bị treo |
+        | `TSV_TNEW_PAGE_ALLOC_FAILED` | Không thể cấp phát thêm bộ nhớ | Truy vấn báo cáo quét toàn bộ bảng không index | Tối ưu hóa bộ lọc thời gian |
+        | `RFC_COMMUNICATION_FAILURE` | Đứt gãy kết nối RFC Gateway | Tường lửa chặn cổng hoặc RFC server quá tải | Kiểm tra SM59 và ping target host |
+    - heading: "3. Quy Trình Khởi Động Lại Service và Xóa Lock Entries"
+      content: |
+        Khi xuất hiện tình trạng treo hàng đợi (Enqueue Server bottleneck), quản trị viên thực hiện:
+        1. Truy cập giao diện SM12 để kiểm tra danh sách các lock entries quá hạn.
+        2. Chạy lệnh kiểm tra tiến trình trên node ứng dụng:
+        ```bash
+        sapcontrol -nr 00 -function GetProcessList
+        sapcontrol -nr 00 -function Stop
+        sapcontrol -nr 00 -function Start
+        ```
+        3. Xác nhận trạng thái `GREEN` trên tất cả work processes qua transaction SM51.
+
+- id: "TECH-MANUAL-VPN-02"
+  title: "Hướng Dẫn Cài Đặt, Cấu Hình và Gỡ Lỗi GlobalProtect VPN Toàn Diện"
+  system: "CRM"
+  category: "Infrastructure"
+  allowed_roles: ["*"]
+  clearance_level: 1
+  keywords: ["vpn", "globalprotect", "network", "mfa", "split tunneling", "gỡ lỗi"]
+  sections:
+    - heading: "1. Yêu Cầu Hệ Thống và Tải Bộ Cài Đặt VPN"
+      content: |
+        Dịch vụ VPN cho phép nhân viên làm việc từ xa truy cập an toàn vào mạng nội bộ công ty.
+        Hệ điều hành được hỗ trợ: Windows 11 (22H2 trở lên), macOS Sonoma 14+, Ubuntu 22.04 LTS.
+
+        Cổng Portal chính thức: `https://vpn.company.internal`
+    - heading: "2. Cấu Hình Split Tunneling và Danh Sách Định Tuyến"
+      content: |
+        Để tối ưu băng thông đường truyền, chính sách định tuyến nội bộ được áp dụng:
+
+        | Dải Địa Chỉ IP | Tên Miền / Mục Đích | Chế Độ Định Tuyến |
+        |---|---|---|
+        | `10.10.0.0/16` | Dữ liệu máy chủ nội bộ & ERP | VPN Tunnel |
+        | `172.16.0.0/12` | Môi trường Staging và Development | VPN Tunnel |
+        | `0.0.0.0/0` | Internet công cộng (Google, Youtube...) | Local Direct Route |
+    - heading: "3. Các Bước Khắc Phục Lỗi Kết Nối Thất Bại (Error Codes)"
+      content: |
+        Nếu client báo lỗi `Connection Failed (Code 502)` hoặc `Gateway Not Reachable`:
+        1. Kiểm tra trạng thái card mạng ảo `PanGPS` service:
+        ```powershell
+        Get-Service -Name PanGPS | Restart-Service -Force
+        ```
+        2. Xóa cache cấu hình tạm:
+        ```bash
+        rm -rf ~/.config/PaloAltoNetworks/GlobalProtect/
+        ```
+        3. Thực hiện xác thực lại 2 yếu tố (2FA / Duo MFA) sau 60 giây.

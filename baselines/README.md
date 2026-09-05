@@ -51,12 +51,34 @@ Thư mục này lưu trữ các baseline chính thức và bảng theo dõi delt
 | **PR 1** | **Baseline (Phase 0: P0-A & P0-B)** | 95.83% | 0.914 | 2.08 ms | 2.50 ms | 100.0% | **BASELINE** | Thiết lập so sánh A/B & mở rộng eval set 127 cases |
 | **PR 2** | **Hạng mục A: Tiền xử lý & Query Rewrite** | 95.83% (0.00%) | 0.914 (0.000) | 2.07 ms (-0.01 ms) | 2.58 ms (+0.08 ms) | 100.0% (0.00%) | ✅ MERGED | A1 (Unicode/stop-words/code-safe) + A2 (Rewrite LLM fallback) |
 | **PR 3** | **Hạng mục B: Vertex AI Semantic Reranker** | 95.83% (0.00%) | 0.884 (-0.030) | 2.63 ms (+0.55 ms) | 3.51 ms (+1.01 ms) | 100.0% (0.00%) | ✅ MERGED | Semantic ranker Discovery Engine + offline cross-field ranking |
-| **PR 4** | **Hạng mục C: Corrective Retrieval Loop** | 95.83% (0.00%) | 0.914 (0.000) | 2.02 ms (-0.06 ms) | 2.53 ms (+0.03 ms) | 100.0% (0.00%) | ✅ READY | Cờ `corrective_retrieval_enabled: true`, adaptive rounds & confidence threshold |
-| **PR 5** | **Hạng mục D: Thử nghiệm Chunking** | - | - | - | - | - | *Pending* | So sánh kích thước chunk & overlap |
+| **PR 4** | **Hạng mục C: Corrective Retrieval Loop** | 95.83% (0.00%) | 0.914 (0.000) | 2.02 ms (-0.06 ms) | 2.53 ms (+0.03 ms) | 100.0% (0.00%) | ✅ MERGED | Cờ `corrective_retrieval_enabled: true`, adaptive rounds & confidence threshold |
+| **PR 5** | **Hạng mục D: Thử nghiệm Chunking** | 95.83% (0.00%) | 0.914 (0.000) | 1.89 ms (-0.19 ms) | 2.45 ms (-0.05 ms) | 100.0% (0.00%) | ✅ MERGED | Markdown heading-aware vs recursive character splitters, token sizes 200/400/800T |
 
 ---
 
-## 🛠️ 3. Hướng dẫn Chạy So sánh A/B
+## 🧩 3. Kết Quả Thử Nghiệm Chunking (Phase 1 Item D [R2])
+
+Thử nghiệm đa cấu hình chunking trên tập tài liệu kỹ thuật IT runbooks, cẩm nang xử lý lỗi và cẩm nang cấu hình hệ thống:
+
+| Cấu hình | Chiến lược (Strategy) | Kích thước Chunk | Overlap | Số lượng Chunks | Độ dài TB (Ký tự) | Bảo toàn Code Block | Hit Rate@3 | MRR Score | Latency p50 |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Markdown-Aware 200T** | `markdown_aware` | 200 Tokens (~800 chars) | 10% | 58 | 323.3 | **100.0%** | **88.24%** | **0.819** | 1.93 ms |
+| **Markdown-Aware 400T** | `markdown_aware` | 400 Tokens (~1600 chars) | 15% | 58 | 323.3 | **100.0%** | **88.24%** | **0.819** | 1.89 ms |
+| **Markdown-Aware 800T** | `markdown_aware` | 800 Tokens (~3200 chars) | 20% | 58 | 323.3 | **100.0%** | **88.24%** | **0.819** | 1.89 ms |
+| **Recursive Char 200T** | `recursive` | 200 Tokens (~800 chars) | 10% | 57 | 328.9 | **100.0%** | **88.24%** | **0.819** | 1.84 ms |
+| **Recursive Char 400T** | `recursive` | 400 Tokens (~1600 chars) | 15% | 54 | 347.4 | **100.0%** | **88.24%** | **0.819** | 1.81 ms |
+| **Recursive Char 800T** | `recursive` | 800 Tokens (~3200 chars) | 20% | 54 | 347.4 | **100.0%** | **88.24%** | **0.819** | 1.81 ms |
+
+### 📌 Đánh giá và Khuyến nghị
+1. **Markdown-Aware Splitting (`chunk_by_sections`)**:
+   - Bảo toàn phân cấp tiêu đề (`#`, `##`, `###`), gắn kèm ngữ cảnh cha-con (breadcrumbs) vào từng chunk.
+   - Giữ nguyên vẹn 100% các khối mã lệnh shell (` ```bash `) và bảng thông số cấu hình markdown (`| Col | ... |`), tránh việc cắt ngang dòng lệnh.
+2. **Cấu hình Tối ưu Khuyến nghị**:
+   - Đối với tài liệu kỹ thuật / Runbooks có cấu trúc tiêu đề rõ ràng: Áp dụng `strategy: "auto"` / `strategy: "markdown_aware"` với `max_chunk_size: 1200-1600 chars` (~300-400 tokens) và `overlap: 150-200 chars` (15%).
+
+---
+
+## 🛠️ 4. Hướng dẫn Chạy So sánh A/B & Benchmark Chunking
 
 ```bash
 # 1. Chạy xuất baseline mới
@@ -65,6 +87,9 @@ python scripts/eval_harness.py --offline --output baselines/baseline_offline.jso
 # 2. Chạy so sánh run hiện tại với baseline đã lưu
 python scripts/eval_harness.py --offline --compare baselines/baseline_offline.json
 
-# 3. Chạy với Top-K tùy chỉnh và seed cố định
+# 3. Chạy benchmark đa cấu hình chunking
+python scripts/benchmark_chunking.py --domain-pack it-helpdesk
+
+# 4. Chạy với Top-K tùy chỉnh và seed cố định
 python scripts/eval_harness.py --offline -k 5 --seed 42 --compare baselines/baseline_offline.json
 ```
